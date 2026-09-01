@@ -23,6 +23,7 @@
 		1C216F43960167F459A0FE0F /* test_ru_short.wav in Resources */ = {isa = PBXBuildFile; fileRef = C3A6716162CA4A62387EF538 /* test_ru_short.wav */; };
 		1CD80CC03751A1CE815D15EC /* ModelIntegrityVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC05F139938E74BE3AFDBA0 /* ModelIntegrityVerifier.swift */; };
 		1D87946E01D154AE1DBF17EE /* GigaAMSherpaEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3EB50BFD3C6E648316A06C0 /* GigaAMSherpaEngine.swift */; };
+		1DB27EE155C55C5A6F436CFE /* sherpa-onnx.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E7561ABF8E21B3B9409E2894 /* sherpa-onnx.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		21098B078186C008005AFCFC /* ModelInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40A35860AB0853946440884B /* ModelInstaller.swift */; };
 		27D0BBAE8D45E2354EFD17E6 /* RecordsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA3DA89AA6082828680F146 /* RecordsScreen.swift */; };
 		28341664491B8886807AA056 /* GigaAMRNNTDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5726220BD8CCABF8824CE40D /* GigaAMRNNTDecoder.swift */; };
@@ -129,6 +130,20 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		9D824AF05EEB667E41D88D78 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				1DB27EE155C55C5A6F436CFE /* sherpa-onnx.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		01AC125078C1D354998F8665 /* ExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportTests.swift; sourceTree = "<group>"; };
 		03A762EB7C3909086B89FBF6 /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
@@ -210,7 +225,7 @@
 		D6FDD0D1C5822F38038EE8F7 /* test_ru_short.logmel.f32 */ = {isa = PBXFileReference; path = test_ru_short.logmel.f32; sourceTree = "<group>"; };
 		D8BA8266C84B9EA0AAAC270B /* SignpostLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignpostLogger.swift; sourceTree = "<group>"; };
 		E5DCB72E3EDADFB7BD79A4D0 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
-		E7561ABF8E21B3B9409E2894 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "ThirdParty/sherpa-onnx/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
+		E7561ABF8E21B3B9409E2894 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "ThirdParty/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		EC051CE0A9731355B6F81AA9 /* FormatHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormatHelpers.swift; sourceTree = "<group>"; };
 		F0DF071DD85B5B47EC0D1753 /* test_ru_long.logmel.f32 */ = {isa = PBXFileReference; path = test_ru_long.logmel.f32; sourceTree = "<group>"; };
 		F255E114B9E969B05F13CCE4 /* CERTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CERTests.swift; sourceTree = "<group>"; };
@@ -582,6 +597,7 @@
 				0E8E7305666FEE150DE355F2 /* Sources */,
 				B734E7F985A98013A308CE24 /* Resources */,
 				DC37815B7ECB7112EF4540D1 /* Frameworks */,
+				9D824AF05EEB667E41D88D78 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -877,7 +893,7 @@
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"\"ThirdParty/sherpa-onnx\"",
+					"\"ThirdParty\"",
 				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LiveTranslateIOS/Info.plist;
@@ -933,7 +949,7 @@
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"\"ThirdParty/sherpa-onnx\"",
+					"\"ThirdParty\"",
 				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LiveTranslateIOS/Info.plist;

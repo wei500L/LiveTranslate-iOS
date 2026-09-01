@@ -24,8 +24,11 @@ targets:
       - path: LiveTranslateIOS
       - path: Resources
     dependencies:
-      - framework: ThirdParty/sherpa-onnx/sherpa-onnx.xcframework
-        embed: false
+      # Official v1.13.7 release asset: dynamic framework with onnxruntime
+      # statically linked inside (self-contained; the plain "static"
+      # xcframework leaves Ort* symbols undefined with no companion lib).
+      - framework: ThirdParty/sherpa-onnx.xcframework
+        embed: true
     info:
       path: LiveTranslateIOS/Info.plist
       properties:
