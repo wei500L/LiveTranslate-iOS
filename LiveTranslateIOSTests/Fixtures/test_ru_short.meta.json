@@ -1,0 +1,56 @@
+{
+  "name": "test_ru_short",
+  "wav": "test_ru_short.wav",
+  "wav_sha256": "4b82ee1e85432ccde6fb2e13b1c710c6ef90ce5a225bde3d8349201a9ca3c0b7",
+  "n_samples": 46068,
+  "frames": 286,
+  "computed_frames": 288,
+  "truncated_to_30s": false,
+  "mel_params": {
+    "sample_rate": 16000,
+    "n_fft": 320,
+    "win_length": 320,
+    "hop_length": 160,
+    "n_mels": 64,
+    "mel_scale": "htk",
+    "norm": null,
+    "center": false,
+    "power": 2.0,
+    "window": "hann (periodic)",
+    "log_clamp": [
+      1e-09,
+      1000000000.0
+    ]
+  },
+  "features_file": "test_ru_short.logmel.f32",
+  "features_sha256": "19949858c9653fb2e07f396e7d6e6ebfb6817defbea67b231842020f031e5895",
+  "features_dtype": "float32",
+  "features_layout": "[n_mels, computed_frames] row-major; columns >= computed_frames are the constant log(1e-9)",
+  "padding_value": -20.72326583694641,
+  "pytorch": {
+    "token_ids": [
+      893,
+      1,
+      219,
+      4,
+      181,
+      3,
+      490,
+      11,
+      12,
+      78,
+      520,
+      6,
+      6,
+      247,
+      63,
+      49,
+      282,
+      1
+    ],
+    "text": "Здравствуйте. Меня зовут профессор Иванов.",
+    "transcribe_text": "Здравствуйте. Меня зовут профессор Иванов.",
+    "encoded_len": 72,
+    "loop_matches_transcribe": true
+  }
+}
