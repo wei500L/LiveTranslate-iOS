@@ -24,11 +24,11 @@ struct ModelManagementScreen: View {
                 )
             }
         }
-        .navigationTitle(String(localized: "Model Management"))
+        .navigationTitle(String(localized: "语言资源"))
         .navigationBarTitleDisplayMode(.inline)
         .task { await environment.modelManager.refreshStates() }
         .confirmationDialog(
-            confirmDelete.map { String(format: String(localized: "Delete %@? This removes the model files from this device."), $0.displayName) } ?? "",
+            confirmDelete.map { String(format: String(localized: "Delete %@? This removes the model files from this device."), $0.userTitle) } ?? "",
             isPresented: Binding(
                 get: { confirmDelete != nil },
                 set: { if !$0 { confirmDelete = nil } }
@@ -83,8 +83,8 @@ private struct BackendCard: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(kind.displayName).font(.headline)
-                Text(kind.positioning).font(.caption).foregroundStyle(.secondary)
+                Text(kind.userTitle).font(.headline)
+                Text(kind.userSubtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if isPreferred {
@@ -100,7 +100,7 @@ private struct BackendCard: View {
                 label: String(localized: "Status"),
                 value: state.isInstalled
                     ? (state.coreMLCompiled == false && kind == .coreMLFP16
-                       ? String(localized: "Downloaded — not compiled yet")
+                       ? String(localized: "已下载 · 语言资源准备中")
                        : String(localized: "Installed"))
                     : String(localized: "Not installed")
             )
@@ -122,7 +122,7 @@ private struct BackendCard: View {
             )
             if kind == .coreMLFP16 {
                 LabeledRow(
-                    label: String(localized: "Core ML compiled"),
+                    label: String(localized: "资源已就绪"),
                     value: state.coreMLCompiled == true ? "✓" : "—"
                 )
             }
@@ -164,7 +164,7 @@ private struct BackendCard: View {
                     .buttonStyle(.bordered)
                     .disabled(sessionActive)
                 if !isPreferred {
-                    Button(String(localized: "Use this backend"), action: onSetPreferred)
+                    Button(String(localized: "使用此模式"), action: onSetPreferred)
                         .buttonStyle(.borderedProminent)
                         .disabled(sessionActive)
                 }
@@ -172,7 +172,7 @@ private struct BackendCard: View {
         }
         .font(.footnote)
         if sessionActive {
-            Text(String(localized: "Stop the running session to delete or switch backends."))
+            Text(String(localized: "课堂进行中不能删除或切换识别模式。"))
                 .font(.caption2)
                 .foregroundStyle(.orange)
         }

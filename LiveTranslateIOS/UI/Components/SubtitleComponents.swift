@@ -1,75 +1,74 @@
 import SwiftUI
 
-/// Compact status chip used across the Live screen and model management.
+/// Compact status chip used across live, records, model management and
+/// settings. Restyled to the design-system tokens but kept under its
+/// original name/signature so existing screens keep compiling.
 struct StatusChip: View {
     let text: String
     let tint: Color
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(tint.opacity(0.15), in: Capsule())
+            .font(LTTypography.statusChip)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.16), in: Capsule())
+            .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5))
             .foregroundStyle(tint)
             .lineLimit(1)
     }
 }
 
-extension PipelinePhase {
-    var chipColor: Color {
-        switch self {
-        case .idle, .ready: return .secondary
-        case .modelNotInstalled: return .orange
-        case .downloading, .verifying, .compilingCoreML, .loadingModel, .warmingUp:
-            return .blue
-        case .listening, .speechDetected: return .green
-        case .transcribing, .translating: return .indigo
-        case .paused: return .yellow
-        case .micInterrupted, .networkOffline, .backendError, .diskSpaceLow:
-            return .red
-        case .finished: return .mint
-        }
-    }
+/// Read-only label/value row used in forms and detail sections.
+struct LabeledRow: View {
+    let label: String
+    let value: String
 
-    var localizedLabel: String {
-        switch self {
-        case .idle: return String(localized: "Idle")
-        case .modelNotInstalled: return String(localized: "Model not installed")
-        case .downloading: return String(localized: "Downloading")
-        case .verifying: return String(localized: "Verifying")
-        case .compilingCoreML: return String(localized: "Compiling Core ML")
-        case .loadingModel: return String(localized: "Loading model")
-        case .warmingUp: return String(localized: "Warming up")
-        case .ready: return String(localized: "Ready")
-        case .listening: return String(localized: "Listening")
-        case .speechDetected: return String(localized: "Speech detected")
-        case .transcribing: return String(localized: "Transcribing")
-        case .translating: return String(localized: "Translating")
-        case .paused: return String(localized: "Paused")
-        case .micInterrupted: return String(localized: "Microphone interrupted")
-        case .networkOffline: return String(localized: "Offline — ASR continues")
-        case .backendError: return String(localized: "Backend error")
-        case .diskSpaceLow: return String(localized: "Not enough disk space")
-        case .finished: return String(localized: "Finished")
+    var body: some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .multilineTextAlignment(.trailing)
         }
+        .font(.subheadline)
     }
 }
 
-/// Rolling waveform of recent input levels. Drawn from a bounded ring of RMS
-/// values pushed by the capture service; rendering cost is deliberately
-/// trivial so it never competes with ASR.
+/// URL wrapper so `.sheet(item:)` can present the share sheet.
+/// File-scope (not nested) so BenchmarkScreen can use it too.
+struct SharedFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Rolling waveform of recent input levels. Drawn from a bounded ring of
+/// RMS values pushed by the capture service (~10 Hz); rendering cost is
+/// deliberately trivial (single Canvas, no timeline animation) so it never
+/// competes with ASR. Redraws only when real audio data arrives — silent
+/// when the session is paused or backgrounded.
 struct WaveformView: View {
     /// Newest last, values in [0, 1].
     let levels: [Float]
+    var tint: Color = LTColors.accentCyan
+    /// Number of bars drawn; the trailing `levels` window fills it.
+    var barCount: Int = 48
 
     var body: some View {
         Canvas { context, size in
-            guard !levels.isEmpty else { return }
-            let barWidth = max(1.5, size.width / 64 - 2)
-            let step = size.width / 64
-            let visible = levels.suffix(64)
-            let startIdx = 64 - visible.count
+            guard !levels.isEmpty else {
+                // Flat idle line so the slot keeps its geometry when quiet.
+                let idle = CGRect(x: 0, y: size.height / 2 - 0.75, width: size.width, height: 1.5)
+                context.fill(Path(roundedRect: idle, cornerRadius: 0.75),
+                             with: .color(LTColors.textTertiary.opacity(0.4)))
+                return
+            }
+            let step = size.width / CGFloat(barCount)
+            let barWidth = max(1.5, step - 2)
+            let visible = levels.suffix(barCount)
+            let startIdx = barCount - visible.count
             for (i, level) in visible.enumerated() {
                 let h = max(2, CGFloat(level) * size.height)
                 let rect = CGRect(
@@ -78,95 +77,77 @@ struct WaveformView: View {
                     width: barWidth,
                     height: h
                 )
-                context.fill(Path(roundedRect: rect, cornerRadius: barWidth / 2),
-                             with: .color(.accentColor.opacity(0.8)))
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: barWidth / 2),
+                    with: .color(tint.opacity(0.85))
+                )
             }
         }
         .accessibilityLabel(Text("Input level"))
     }
 }
 
-/// One bilingual subtitle card: Russian on top, Chinese below, translation
-/// state on the trailing edge. Copy actions on long-press context menu.
-struct SubtitleCard: View {
-    let entry: SubtitleEntryViewModel
-    var onRetryTranslation: (() -> Void)?
+// MARK: - Pipeline phase presentation
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(timestamp)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                translationBadge
-            }
-            Text(entry.originalText)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-            if let translated = entry.translatedText, !translated.isEmpty {
-                Text(translated)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .contextMenu {
-            Button(String(localized: "Copy Russian")) {
-                UIPasteboard.general.string = entry.originalText
-            }
-            if let translated = entry.translatedText {
-                Button(String(localized: "Copy Chinese")) {
-                    UIPasteboard.general.string = translated
-                }
-                Button(String(localized: "Copy both")) {
-                    UIPasteboard.general.string = "\(entry.originalText)\n\(translated)"
-                }
-            }
-            if entry.translationStatus == .failed, onRetryTranslation != nil {
-                Button(String(localized: "Retry translation")) { onRetryTranslation?() }
-            }
+extension PipelinePhase {
+    /// User-facing labels — plain language, no engine/quantization jargon.
+    var localizedLabel: String {
+        switch self {
+        case .idle: return String(localized: "待开始")
+        case .modelNotInstalled: return String(localized: "语言资源未准备好")
+        case .downloading: return String(localized: "正在下载语言资源")
+        case .verifying: return String(localized: "正在校验语言资源")
+        case .compilingCoreML: return String(localized: "正在准备语言资源")
+        case .loadingModel: return String(localized: "正在准备语言资源")
+        case .warmingUp: return String(localized: "正在准备语言资源")
+        case .ready: return String(localized: "已就绪")
+        case .listening: return String(localized: "正在监听俄语")
+        case .speechDetected: return String(localized: "检测到语音")
+        case .transcribing: return String(localized: "正在识别")
+        case .translating: return String(localized: "正在翻译")
+        case .paused: return String(localized: "已暂停")
+        case .micInterrupted: return String(localized: "麦克风中断")
+        case .networkOffline: return String(localized: "翻译服务不可用 · 转写继续")
+        case .backendError: return String(localized: "转写引擎出错")
+        case .diskSpaceLow: return String(localized: "磁盘空间不足")
+        case .finished: return String(localized: "课堂已结束")
         }
     }
 
-    private var timestamp: String {
-        let t = entry.startOffset
-        let m = Int(t) / 60
-        let s = Int(t) % 60
-        return String(format: "%02d:%02d", m, s)
+    var chipColor: Color {
+        switch self {
+        case .idle, .ready: return LTColors.textSecondary
+        case .modelNotInstalled: return LTColors.warning
+        case .downloading, .verifying, .compilingCoreML, .loadingModel, .warmingUp:
+            return LTColors.accentBlue
+        case .listening, .speechDetected: return LTColors.accentGreen
+        case .transcribing, .translating: return LTColors.accentCyan
+        case .paused: return LTColors.warning
+        case .micInterrupted, .networkOffline, .backendError, .diskSpaceLow:
+            return LTColors.destructive
+        case .finished: return LTColors.accentGreen
+        }
     }
 
-    @ViewBuilder
-    private var translationBadge: some View {
-        switch entry.translationStatus {
-        case .pending:
-            Image(systemName: "hourglass")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        case .completed:
-            EmptyView()
-        case .failed:
-            Button(String(localized: "Retry"), action: { onRetryTranslation?() })
-                .font(.caption2)
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-        case .notConfigured:
-            StatusChip(text: String(localized: "No translation API"), tint: .orange)
+    /// True while a session is being set up (engine loading/warm-up).
+    var isPreparing: Bool {
+        switch self {
+        case .loadingModel, .warmingUp, .downloading, .verifying, .compilingCoreML:
+            return true
+        default:
+            return false
         }
     }
 }
 
-/// Value type the subtitle list binds to (populated by the coordinator).
-struct SubtitleEntryViewModel: Identifiable, Equatable, Sendable {
-    let sequenceID: Int
-    let startOffset: TimeInterval
-    var originalText: String
-    var translatedText: String?
-    var translationStatus: TranslationStatus
-
-    var id: Int { sequenceID }
+extension TranslationStatus {
+    var localizedLabel: String {
+        switch self {
+        case .pending: return String(localized: "正在翻译")
+        case .completed: return String(localized: "翻译完成")
+        case .failed: return String(localized: "翻译失败")
+        case .notConfigured: return String(localized: "翻译服务未配置")
+        case .skipped: return String(localized: "实时翻译已关闭")
+        }
+    }
 }

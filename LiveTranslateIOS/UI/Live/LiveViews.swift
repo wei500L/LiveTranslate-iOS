@@ -1,0 +1,490 @@
+import SwiftUI
+
+// MARK: - Transcript feed (lyric-style)
+
+/// The bilingual feed: current Chinese translation in focus, Russian
+/// beneath it, completed history dimming progressively. Auto-follows the
+/// focus until the user scrolls away; a 回到当前内容 pill restores it.
+struct TranscriptFeed: View {
+    let viewModel: LiveViewModel
+    let reduceMotion: Bool
+
+    var body: some View {
+        // The outer GeometryReader supplies the viewport height so the
+        // bottom marker's offset can be judged as "at (or near) the feed
+        // end" — this is what auto-follow keys off.
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: LTSpacing.l) {
+                        ForEach(viewModel.entries, id: \.sequenceID) { entry in
+                            LiveLyricRow(
+                                entry: entry,
+                                viewModel: viewModel,
+                                reduceMotion: reduceMotion
+                            )
+                            .id(entry.sequenceID)
+                        }
+                        if viewModel.isCollectingSpeech {
+                            collectingIndicator
+                        }
+                        // Bottom marker: reports its Y in the scroll content
+                        // space; near the viewport bottom == still following.
+                        GeometryReader { marker in
+                            Color.clear.preference(
+                                key: TranscriptBottomKey.self,
+                                value: marker.frame(in: .named(TranscriptFeed.scrollSpace)).minY
+                            )
+                        }
+                        .frame(height: 1)
+                        .id(TranscriptFeed.bottomID)
+                    }
+                    .padding(.horizontal, LTSpacing.screenPadding)
+                    .padding(.top, LTSpacing.s)
+                    .padding(.bottom, 60)
+                }
+                .coordinateSpace(name: TranscriptFeed.scrollSpace)
+                .onPreferenceChange(TranscriptBottomKey.self) { markerMinY in
+                    // The marker sits at ≈viewportHeight when fully scrolled
+                    // down, and grows beyond it as the user scrolls up, so
+                    // (viewportHeight - markerY) is ≈0 at the feed end and
+                    // negative when reading history.
+                    viewModel.updateScrollPosition(minY: viewport.size.height - markerMinY)
+                }
+                .overlay(alignment: .bottom) {
+                    if !viewModel.isFollowing && !viewModel.entries.isEmpty {
+                        Button {
+                            viewModel.resumeFollowing()
+                            scrollToCurrent(proxy)
+                        } label: {
+                            Label("回到当前内容", systemImage: "arrow.down.to.line")
+                                .font(.footnote.weight(.medium))
+                                .padding(.horizontal, LTSpacing.m)
+                                .padding(.vertical, LTSpacing.xs + 2)
+                                .background(Capsule().fill(.ultraThinMaterial))
+                                .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
+                                .shadow(color: LTShadow.floating, radius: 8, y: 3)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.bottom, LTSpacing.s)
+                        .accessibilityLabel(Text("回到当前内容"))
+                    }
+                }
+                .onChange(of: viewModel.currentSequenceID) { _, _ in
+                    if viewModel.isFollowing {
+                        scrollToCurrent(proxy)
+                    }
+                }
+                .onChange(of: viewModel.entries.count) { _, _ in
+                    if viewModel.isFollowing {
+                        scrollToCurrent(proxy)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Smooth scroll to the focused entry; positional movement only (no
+    /// per-row animation), so streaming text updates never jump.
+    private func scrollToCurrent(_ proxy: ScrollViewProxy) {
+        guard let current = viewModel.currentSequenceID else { return }
+        if reduceMotion {
+            proxy.scrollTo(current, anchor: .center)
+        } else {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                proxy.scrollTo(current, anchor: .center)
+            }
+        }
+    }
+
+    private var collectingIndicator: some View {
+        HStack(spacing: LTSpacing.s) {
+            LTActivityDot(active: true, tint: LTColors.accentCyan)
+            Text("正在收集语音…")
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textSecondary)
+        }
+        .padding(.vertical, LTSpacing.xs)
+        .id(TranscriptFeed.collectingID)
+    }
+
+    fileprivate static let bottomID = "transcript-bottom"
+    fileprivate static let collectingID = "transcript-collecting"
+    fileprivate static let scrollSpace = "transcript-scroll"
+}
+
+private struct TranscriptBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+// MARK: - Lyric row
+
+/// One bilingual entry. Chinese is the first visual hierarchy, Russian the
+/// second; the focused entry is the brightest and largest.
+struct LiveLyricRow: View {
+    let entry: LiveTranscriptItem
+    let viewModel: LiveViewModel
+    let reduceMotion: Bool
+
+    private var isCurrent: Bool { viewModel.isCurrent(entry) }
+
+    private var opacity: Double {
+        if isCurrent { return 1 }
+        guard let distance = viewModel.focusDistance(of: entry) else { return 0.5 }
+        return viewModel.historyOpacity(distance)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: LTSpacing.m) {
+            timeline
+
+            VStack(alignment: .leading, spacing: LTSpacing.xs) {
+                if let translated = entry.translatedText, !translated.isEmpty {
+                    Text(translated)
+                        .font(isCurrent ? LTTypography.liveCurrentTranslation : LTTypography.liveTranslation)
+                        .foregroundStyle(isCurrent ? LTColors.textPrimary : LTColors.textPrimary.opacity(0.9))
+                        .textSelection(.enabled)
+                        .animation(reduceMotion ? nil : LTMotion.textReveal, value: entry.translatedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if viewModel.entryPhase(entry) != .skipped {
+                    // No placeholder while translation is intentionally off —
+                    // the Russian original above is the whole entry.
+                    translationPendingView
+                }
+
+                Text(entry.originalText)
+                    .font(LTTypography.liveOriginal)
+                    .foregroundStyle(LTColors.textSecondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(isCurrent ? 1 : 0.9)
+
+                switch viewModel.entryPhase(entry) {
+                case .failed:
+                    translationFailedView
+                case .offline:
+                    translationOfflineView
+                case .notConfigured:
+                    Text("翻译服务未配置 · 俄语原文已保存")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.warning.opacity(0.85))
+                case .translating, .translated, .skipped:
+                    EmptyView()
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .opacity(opacity)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: isCurrent)
+        .contextMenu {
+            Button("复制中文") {
+                if let translated = entry.translatedText {
+                    UIPasteboard.general.string = translated
+                }
+            }
+            Button("复制俄语") {
+                UIPasteboard.general.string = entry.originalText
+            }
+            Button("复制双语") {
+                let translated = entry.translatedText ?? ""
+                UIPasteboard.general.string = "\(entry.originalText)\n\(translated)"
+            }
+            Button(viewModel.isBookmarked(entry) ? "取消书签" : "标记书签") {
+                _ = viewModel.toggleBookmark(entry)
+            }
+            if case .failed = viewModel.entryPhase(entry) {
+                Button("重试翻译") {
+                    viewModel.retryTranslation(entry.sequenceID)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Left timeline: timestamp + node. The node is the one place the
+    /// reference's glow is allowed on a per-entry basis — current only.
+    private var timeline: some View {
+        VStack(spacing: 0) {
+            Text(TranscriptFeed.timestamp(for: entry.startOffset))
+                .font(LTTypography.timestamp)
+                .foregroundStyle(isCurrent ? LTColors.accentCyan : LTColors.textTertiary)
+                .padding(.bottom, 4)
+            Circle()
+                .fill(isCurrent ? LTColors.accentCyan : LTColors.textTertiary.opacity(0.7))
+                .frame(width: isCurrent ? 8 : 5, height: isCurrent ? 8 : 5)
+                .shadow(color: isCurrent ? LTColors.accentCyan.opacity(0.7) : .clear, radius: 4)
+            Rectangle()
+                .fill(LTColors.separator)
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+                .padding(.top, 4)
+        }
+        .frame(width: 40)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var translationPendingView: some View {
+        HStack(spacing: LTSpacing.xs) {
+            Image(systemName: "hourglass")
+                .font(.caption2)
+                .foregroundStyle(LTColors.textTertiary)
+            Text("正在翻译")
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textTertiary)
+        }
+        .accessibilityLabel(Text("翻译进行中"))
+    }
+
+    /// Translation failed: the Russian original stays fully visible above;
+    /// only a short hint + retry appear here.
+    @ViewBuilder
+    private var translationFailedView: some View {
+        HStack(spacing: LTSpacing.s) {
+            Text("翻译失败 · 俄语原文已保存")
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.warning)
+            Button("重试翻译") {
+                viewModel.retryTranslation(entry.sequenceID)
+                LTHaptics.tap()
+            }
+            .font(LTTypography.caption.weight(.semibold))
+            .foregroundStyle(LTColors.accentBlue)
+        }
+    }
+
+    /// Translation failed because the network is down — not an error the
+    /// user can fix by tapping: the coordinator re-enqueues automatically
+    /// once connectivity returns, so no retry button here.
+    private var translationOfflineView: some View {
+        Text("网络不可用 · 俄语原文已保存，恢复网络后自动重试")
+            .font(LTTypography.caption)
+            .foregroundStyle(LTColors.warning.opacity(0.85))
+    }
+}
+
+// MARK: - Notes tab
+
+/// 课堂笔记: the saved bilingual content of this classroom, in order. There
+/// is no separate note/AI-summary capability, so this is the real stored
+/// transcript — presented read-only with copy support (no fabricated
+/// summaries).
+struct LiveNotesTab: View {
+    let viewModel: LiveViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            noteHeader
+            if viewModel.entries.isEmpty {
+                LTEmptyState(
+                    symbol: "note.text",
+                    title: "还没有内容",
+                    message: "课堂上识别到的内容会自动出现在这里"
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: LTSpacing.m) {
+                        ForEach(viewModel.entries, id: \.sequenceID) { entry in
+                            noteRow(entry)
+                        }
+                    }
+                    .padding(LTSpacing.screenPadding)
+                }
+            }
+        }
+    }
+
+    private var noteHeader: some View {
+        Text("这里是本堂课已保存的双语内容 · 课后可在课堂记录中查看与导出")
+            .font(LTTypography.caption)
+            .foregroundStyle(LTColors.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, LTSpacing.screenPadding)
+            .padding(.top, LTSpacing.s)
+    }
+
+    private func noteRow(_ entry: LiveTranscriptItem) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(TranscriptFeed.timestamp(for: entry.startOffset))
+                .font(LTTypography.timestamp)
+                .foregroundStyle(LTColors.textTertiary)
+            if let translated = entry.translatedText, !translated.isEmpty {
+                Text(translated)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .textSelection(.enabled)
+            }
+            Text(entry.originalText)
+                .font(.footnote)
+                .foregroundStyle(LTColors.textSecondary)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, LTSpacing.m)
+        .padding(.vertical, LTSpacing.s)
+        .background(
+            RoundedRectangle(cornerRadius: LTRadius.small)
+                .fill(LTColors.surfacePrimary.opacity(0.6))
+        )
+    }
+}
+
+// MARK: - Bookmarks tab (this session)
+
+struct LiveBookmarksTab: View {
+    let viewModel: LiveViewModel
+
+    var body: some View {
+        if viewModel.sessionBookmarks.isEmpty {
+            VStack {
+                LTEmptyState(
+                    symbol: "bookmark",
+                    title: "还没有书签",
+                    message: "听课过程中点击下方书签按钮，标记当前重点内容"
+                )
+                Spacer()
+            }
+            .padding(.top, LTSpacing.xl)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: LTSpacing.s) {
+                    ForEach(viewModel.sessionBookmarks) { resolved in
+                        bookmarkRow(resolved)
+                    }
+                }
+                .padding(LTSpacing.screenPadding)
+            }
+        }
+    }
+
+    private func bookmarkRow(_ resolved: LiveViewModel.ResolvedBookmark) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "bookmark.fill")
+                    .font(.caption2)
+                    .foregroundStyle(LTColors.accentGreen)
+                Text(TranscriptFeed.timestamp(for: resolved.entry?.startOffset ?? 0))
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+                Spacer()
+                Button {
+                    remove(resolved.bookmark)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                        .frame(
+                            width: LTSpacing.minTouchTarget,
+                            height: LTSpacing.minTouchTarget
+                        )
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(Text("删除书签"))
+            }
+            if let entry = resolved.entry {
+                if let translated = entry.translatedText, !translated.isEmpty {
+                    Text(translated)
+                        .font(.subheadline)
+                        .foregroundStyle(LTColors.textPrimary)
+                        .textSelection(.enabled)
+                }
+                Text(entry.originalText)
+                    .font(.footnote)
+                    .foregroundStyle(LTColors.textSecondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            } else {
+                Text("这条内容已不可用")
+                    .font(.footnote)
+                    .foregroundStyle(LTColors.textTertiary)
+            }
+        }
+        .ltCard(padding: LTSpacing.m)
+    }
+
+    private func remove(_ bookmark: BookmarkStore.EntryBookmark) {
+        viewModel.removeBookmark(bookmark)
+    }
+}
+
+// MARK: - Search tab (this session)
+
+struct LiveSearchTab: View {
+    @Bindable var viewModel: LiveViewModel
+
+    var body: some View {
+        VStack(spacing: LTSpacing.s) {
+            TextField("搜索本堂课的中文或俄语内容", text: $viewModel.searchQuery)
+                .font(.subheadline)
+                .padding(LTSpacing.m)
+                .background(
+                    RoundedRectangle(cornerRadius: LTRadius.small)
+                        .fill(LTColors.surfacePrimary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: LTRadius.small)
+                        .strokeBorder(LTColors.border, lineWidth: 0.5)
+                )
+                .padding(.horizontal, LTSpacing.screenPadding)
+                .padding(.top, LTSpacing.s)
+
+            if viewModel.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+                Spacer()
+            } else if viewModel.searchResults.isEmpty {
+                LTEmptyState(
+                    symbol: "magnifyingglass",
+                    title: "没有匹配的内容",
+                    message: "换个关键词试试"
+                )
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: LTSpacing.s) {
+                        Text("共 \(viewModel.searchResults.count) 条结果")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textTertiary)
+                        ForEach(viewModel.searchResults, id: \.sequenceID) { entry in
+                            searchRow(entry)
+                        }
+                    }
+                    .padding(.horizontal, LTSpacing.screenPadding)
+                    .padding(.bottom, LTSpacing.l)
+                }
+            }
+        }
+    }
+
+    private func searchRow(_ entry: LiveTranscriptItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(TranscriptFeed.timestamp(for: entry.startOffset))
+                .font(LTTypography.timestamp)
+                .foregroundStyle(LTColors.textTertiary)
+            if let translated = entry.translatedText, !translated.isEmpty {
+                Text(translated)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .textSelection(.enabled)
+            }
+            Text(entry.originalText)
+                .font(.footnote)
+                .foregroundStyle(LTColors.textSecondary)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(LTSpacing.m)
+        .background(RoundedRectangle(cornerRadius: LTRadius.small).fill(LTColors.surfacePrimary.opacity(0.6)))
+    }
+}
+
+// MARK: - Shared
+
+extension TranscriptFeed {
+    /// mm:ss within the classroom.
+    static func timestamp(for offset: TimeInterval) -> String {
+        let total = Int(offset.rounded())
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+}

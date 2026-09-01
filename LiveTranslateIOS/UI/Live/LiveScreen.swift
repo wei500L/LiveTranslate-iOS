@@ -1,277 +1,390 @@
 import SwiftUI
 
-/// Live translation tab: status header, waveform, bilingual subtitle feed,
-/// and session controls.
+/// Full-screen live classroom (reference image 3): lyric-style bilingual
+/// feed where the *current Chinese translation* is the focus, the waveform
+/// mirrors real microphone levels, and all controls drive the real
+/// pipeline coordinator. The global tab bar is hidden while this screen is
+/// presented.
 struct LiveScreen: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var viewModel = LiveViewModel()
+    @State private var showEndConfirmation = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if viewModel.needsOnboarding {
-                    OnboardingView(
-                        coreMLBytes: viewModel.coreMLDownloadBytes,
-                        sherpaBytes: viewModel.sherpaDownloadBytes,
-                        onInstall: { kind in
-                            Task { await viewModel.install(kind) }
-                        },
-                        onLater: { viewModel.dismissOnboarding() }
-                    )
-                } else {
-                    liveContent
-                }
+        ZStack {
+            LTBackground()
+            VStack(spacing: 0) {
+                topBar
+                waveformStrip
+                errorBanner
+                translationConfigBanner
+                content
+                tabBar
+                controlsBar
             }
-            .navigationTitle(String(localized: "Live"))
-            .navigationBarTitleDisplayMode(.inline)
         }
-        .task {
-            viewModel.attach(environment)
-            await viewModel.bootstrap()
+        .preferredColorScheme(.dark)
+        .interactiveDismissDisabled(viewModel.isRunning)
+        .task { viewModel.attach(environment) }
+        .confirmationDialog(
+            "结束这堂课？",
+            isPresented: $showEndConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("结束课堂", role: .destructive) {
+                Task { await endSession() }
+            }
+            Button("继续听课", role: .cancel) {}
+        } message: {
+            Text("剩余语音会完成识别与翻译后保存，可稍后在课堂记录中查看。")
         }
     }
 
-    private var liveContent: some View {
-        VStack(spacing: 0) {
-            statusHeader
-            errorBanner
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(viewModel.entries) { entry in
-                            SubtitleCard(
-                                entry: entry,
-                                onRetryTranslation: {
-                                    Task { await viewModel.retryFailedTranslations() }
-                                }
-                            )
-                            .id(entry.sequenceID)
-                        }
-                        Color.clear.frame(height: 1).id(BottomAnchor.id)
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                }
-                .onChange(of: viewModel.entries.count) { _, _ in
-                    // Follow new entries only while the user is at (or near)
-                    // the bottom — never yank them back while reading history.
-                    guard viewModel.isNearBottom else { return }
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(BottomAnchor.id, anchor: .bottom)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: BottomPreferenceKey.self,
-                            value: geo.frame(in: .named("scroll")).minY
-                        )
-                    }
-                    .frame(height: 0)
-                    .onPreferenceChange(BottomPreferenceKey.self) { minY in
-                        viewModel.updateScrollPosition(minY: minY)
-                    }
-                }
-            }
-            controls
-        }
-        .refreshable { await viewModel.refreshInstallState() } // deliberate no-op pull; keeps state fresh
-    }
+    // MARK: - Top bar
 
-    // MARK: - Header
-
-    private var statusHeader: some View {
-        VStack(spacing: 6) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("GigaAM-v3 e2e_rnnt")
-                        .font(.subheadline.weight(.semibold))
-                    Text(viewModel.backendDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                StatusChip(
-                    text: viewModel.state.phase.localizedLabel,
-                    tint: viewModel.state.phase.chipColor
-                )
+    private var topBar: some View {
+        HStack(spacing: LTSpacing.s) {
+            Button {
+                // Collapse: a running session keeps running behind the home
+                // tab (which shows an ongoing banner); after the classroom
+                // ends this simply returns home.
+                environment.flow.collapseLive()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LTColors.textSecondary)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(LTColors.surfacePrimary))
+                    .overlay(Circle().strokeBorder(LTColors.border, lineWidth: 0.5))
+                    .frame(width: LTSpacing.minTouchTarget, height: LTSpacing.minTouchTarget)
+                    .contentShape(Rectangle())
             }
-            WaveformView(levels: viewModel.audioLevels)
-                .frame(height: 28)
-            HStack(spacing: 12) {
-                Label(Format.clock(viewModel.state.elapsed), systemImage: "clock")
-                    .monospacedDigit()
-                Label(viewModel.micRoute, systemImage: "mic")
+            .accessibilityLabel(Text(viewModel.isRunning ? "收起课堂，课堂继续进行" : "返回"))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(viewModel.sessionTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(LTColors.textPrimary)
                     .lineLimit(1)
-                Spacer()
-                if let latency = viewModel.state.lastASRLatency {
-                    Text("ASR \(Format.seconds(latency))")
-                }
-                if let latency = viewModel.state.lastTranslationLatency {
-                    Text("译 \(Format.seconds(latency))")
-                }
-                if let rtf = viewModel.state.lastRTF {
-                    Text("RTF \(String(format: "%.2f", rtf))")
+                HStack(spacing: LTSpacing.xs) {
+                    LTActivityDot(active: viewModel.isRunning && !viewModel.isPaused)
+                    Text(Format.clock(viewModel.state.elapsed))
+                        .font(LTTypography.timestamp.monospacedDigit())
+                        .foregroundStyle(LTColors.textSecondary)
                 }
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            Spacer()
+            StatusChip(
+                text: viewModel.state.phase.localizedLabel,
+                tint: viewModel.state.phase.chipColor
+            )
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .background(.bar)
+        .padding(.horizontal, LTSpacing.screenPadding)
+        .padding(.top, LTSpacing.s)
+        .padding(.bottom, LTSpacing.xs)
+    }
+
+    /// Real microphone level history pushed by the capture service (~10 Hz
+    /// while live). No timeline animation: it only redraws when new audio
+    /// data arrives, so a paused or interrupted mic freezes the bars.
+    private var waveformStrip: some View {
+        WaveformView(levels: viewModel.audioLevels)
+            .frame(height: 26)
+            .padding(.horizontal, LTSpacing.screenPadding)
+            .padding(.bottom, LTSpacing.xs)
+            .opacity(viewModel.isPaused ? 0.35 : 1)
+            .animation(LTMotion.quick, value: viewModel.isPaused)
     }
 
     @ViewBuilder
     private var errorBanner: some View {
         if let message = viewModel.errorBannerText {
-            HStack(spacing: 12) {
+            HStack(spacing: LTSpacing.s) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(LTColors.warning)
                 Text(message)
                     .font(.footnote)
+                    .foregroundStyle(LTColors.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if viewModel.showsSwitchToOtherBackend {
-                    Button(String(localized: "Switch to other installed backend")) {
+                    Button("切换到另一后端") {
                         Task { await viewModel.switchToOtherInstalledBackend() }
                     }
                     .font(.footnote.bold())
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .buttonStyle(LTSecondaryButtonStyle(tint: LTColors.accentBlue))
                 }
             }
-            .padding(10)
-            .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal)
-            .padding(.top, 4)
+            .padding(LTSpacing.s)
+            .background(LTColors.destructive.opacity(0.12), in: RoundedRectangle(cornerRadius: LTRadius.small))
+            .overlay(
+                RoundedRectangle(cornerRadius: LTRadius.small)
+                    .strokeBorder(LTColors.destructive.opacity(0.3), lineWidth: 0.5)
+            )
+            .padding(.horizontal, LTSpacing.screenPadding)
+            .padding(.bottom, LTSpacing.xs)
         }
     }
 
-    // MARK: - Controls
+    // MARK: - Content
 
-    private var controls: some View {
-        HStack(spacing: 16) {
-            switch viewModel.controlMode {
-            case .start:
+    /// Shown only when the user *wants* translation but no service is
+    /// configured. (Translation deliberately turned off shows nothing —
+    /// that is an intent, not a problem to fix.)
+    @ViewBuilder
+    private var translationConfigBanner: some View {
+        if viewModel.isTranslationWanted && !viewModel.isTranslationConfigured {
+            HStack(spacing: LTSpacing.s) {
+                Image(systemName: "gearshape.badge.questionmark")
+                    .foregroundStyle(LTColors.warning)
+                Text("翻译服务未配置 · 俄语原文仍会保存")
+                    .font(.footnote)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("前往设置") {
+                    // Collapses the classroom (it keeps running) and lands
+                    // on the 我的 tab, where translation settings live.
+                    environment.flow.collapseLive(to: .profile)
+                }
+                .font(.footnote.bold())
+                .buttonStyle(LTSecondaryButtonStyle(tint: LTColors.accentBlue))
+            }
+            .padding(LTSpacing.s)
+            .background(LTColors.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: LTRadius.small))
+            .overlay(
+                RoundedRectangle(cornerRadius: LTRadius.small)
+                    .strokeBorder(LTColors.warning.opacity(0.28), lineWidth: 0.5)
+            )
+            .padding(.horizontal, LTSpacing.screenPadding)
+            .padding(.bottom, LTSpacing.xs)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch viewModel.selectedTab {
+        case .transcript: TranscriptFeed(viewModel: viewModel, reduceMotion: reduceMotion)
+        case .notes: LiveNotesTab(viewModel: viewModel)
+        case .bookmarks: LiveBookmarksTab(viewModel: viewModel)
+        case .search: LiveSearchTab(viewModel: viewModel)
+        }
+    }
+
+    // MARK: - In-class toolbar
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(LiveViewModel.LiveTab.allCases) { tab in
                 Button {
-                    Task { await viewModel.start() }
+                    withAnimation(LTMotion.resolved(reduceMotion)) {
+                        viewModel.selectedTab = tab
+                    }
+                    LTHaptics.tap()
                 } label: {
-                    Label(String(localized: "Start"), systemImage: "play.fill")
+                    Text(tab.title)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(
+                            viewModel.selectedTab == tab ? LTColors.accentGreen : LTColors.textSecondary
+                        )
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, LTSpacing.xs + 2)
+                        .background {
+                            if viewModel.selectedTab == tab {
+                                Capsule().fill(LTColors.accentGreen.opacity(0.15))
+                            }
+                        }
+                        .contentShape(Capsule())
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!viewModel.canStart)
-            case .running:
-                Button {
-                    viewModel.pause()
-                } label: {
-                    Label(String(localized: "Pause"), systemImage: "pause.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                Button(role: .destructive) {
-                    Task { await viewModel.stop() }
-                } label: {
-                    Label(String(localized: "End"), systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            case .paused:
-                Button {
-                    Task { await viewModel.resume() }
-                } label: {
-                    Label(String(localized: "Resume"), systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                Button(role: .destructive) {
-                    Task { await viewModel.stop() }
-                } label: {
-                    Label(String(localized: "End"), systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(viewModel.selectedTab == tab ? [.isSelected] : [])
             }
         }
-        .controlSize(.large)
-        .padding()
-        .background(.bar)
+        .padding(LTSpacing.xxs + 1)
+        .background(Capsule().fill(LTColors.surfacePrimary.opacity(0.9)))
+        .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
+        .padding(.horizontal, LTSpacing.screenPadding)
+        .padding(.top, LTSpacing.xs)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("课堂工具栏"))
     }
-}
 
-/// Anchor identity for auto-scroll.
-private enum BottomAnchor {
-    static let id = "subtitle-list-bottom"
-}
+    // MARK: - Session controls
 
-private struct BottomPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// First-launch model selection shown when no backend is installed.
-struct OnboardingView: View {
-    let coreMLBytes: Int
-    let sherpaBytes: Int
-    let onInstall: (ASRBackendKind) -> Void
-    let onLater: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.tint)
-                    .padding(.top, 24)
-                Text("GigaAM-v3 e2e_rnnt")
-                    .font(.title2.bold())
-                Text(String(localized: "One Russian speech recognition model, two local inference backends. Download at least one to begin. Recognition works fully offline."))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                backendCard(
-                    kind: .coreMLFP16,
-                    bytes: coreMLBytes,
-                    fallback: "≈ 446 MB",
-                    note: String(localized: "Precision first · recommended for iPhone 17 Pro Max")
-                )
-                backendCard(
-                    kind: .sherpaONNXInt8,
-                    bytes: sherpaBytes,
-                    fallback: "≈ 216 MB",
-                    note: String(localized: "Size first · CPU inference")
-                )
-
-                Button(String(localized: "Download both")) {
-                    onInstall(.coreMLFP16)
-                    onInstall(.sherpaONNXInt8)
+    private var controlsBar: some View {
+        HStack(spacing: LTSpacing.l) {
+            // 书签: mark the current entry as a key point.
+            Button {
+                if viewModel.bookmarkCurrent() {
+                    LTHaptics.success()
+                } else {
+                    LTHaptics.warning()
                 }
-                .buttonStyle(.bordered)
-
-                Button(String(localized: "Decide later")) { onLater() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 24)
+            } label: {
+                Image(systemName: "bookmark")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(LTColors.textSecondary)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(LTColors.surfacePrimary))
+                    .overlay(Circle().strokeBorder(LTColors.border, lineWidth: 0.5))
             }
-            .padding(.horizontal)
+            .accessibilityLabel(Text("标记当前内容为书签"))
+
+            controlSpacer
+
+            switch viewModel.state.phase {
+            case .finished:
+                finishedControls
+            case .idle:
+                idleControls
+            case .backendError:
+                // start() admits the backendError phase, so a real retry
+                // with the same backend is possible here.
+                errorControls
+            case .modelNotInstalled:
+                // start() does not admit this phase — retrying would be a
+                // silent no-op. The way out is the banner's 切换到另一后端
+                // (when the other runtime is installed) or going back and
+                // installing the resources.
+                idleControls
+            default:
+                if viewModel.isPaused {
+                    pausedControls
+                } else {
+                    runningControls
+                }
+            }
+
+            controlSpacer
+
+            // End classroom (destructive, with confirmation).
+            Button {
+                showEndConfirmation = true
+                LTHaptics.warning()
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(LTColors.destructive)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(LTColors.destructive.opacity(0.14)))
+                    .overlay(Circle().strokeBorder(LTColors.destructive.opacity(0.35), lineWidth: 0.5))
+            }
+            .disabled(!viewModel.isRunning)
+            .opacity(viewModel.isRunning ? 1 : 0.35)
+            .accessibilityLabel(Text("结束课堂"))
         }
+        .padding(.horizontal, LTSpacing.screenPadding)
+        .padding(.vertical, LTSpacing.s)
+        .background(.ultraThinMaterial)
+        .environment(\.colorScheme, .dark)
     }
 
-    private func backendCard(kind: ASRBackendKind, bytes: Int, fallback: String, note: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(kind.displayName).font(.headline)
-            Text("\(String(localized: "Download")) \(bytes > 0 ? Format.bytes(bytes) : fallback)")
-                .font(.subheadline)
-            Text(note).font(.caption).foregroundStyle(.secondary)
-            Button(String(localized: "Download")) { onInstall(kind) }
-                .buttonStyle(.borderedProminent)
+    private var controlSpacer: some View {
+        Spacer().frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var runningControls: some View {
+        Button {
+            viewModel.pause()
+            LTHaptics.tap()
+        } label: {
+            HStack(spacing: LTSpacing.xs) {
+                Image(systemName: "pause.fill")
+                Text("暂停")
+            }
+            .font(LTTypography.button)
+            .foregroundStyle(LTColors.textPrimary)
+            .padding(.horizontal, LTSpacing.xl)
+            .padding(.vertical, LTSpacing.xs + 4)
+            .background(Capsule().fill(LTColors.surfaceElevated))
+            .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityLabel(Text("暂停课堂"))
+    }
+
+    @ViewBuilder
+    private var pausedControls: some View {
+        Button {
+            viewModel.resume()
+            LTHaptics.tap()
+        } label: {
+            HStack(spacing: LTSpacing.xs) {
+                Image(systemName: "play.fill")
+                Text("继续")
+            }
+            .font(LTTypography.button)
+            .foregroundStyle(Color.black.opacity(0.85))
+            .padding(.horizontal, LTSpacing.xl)
+            .padding(.vertical, LTSpacing.xs + 4)
+            .background(Capsule().fill(LTColors.accentGreen))
+            .shadow(color: LTColors.accentGreen.opacity(0.35), radius: 8, y: 2)
+        }
+        .accessibilityLabel(Text("继续课堂"))
+    }
+
+    /// Shown once the classroom has ended: a summary + return home.
+    @ViewBuilder
+    private var finishedControls: some View {
+        Button {
+            environment.flow.collapseLive()
+        } label: {
+            HStack(spacing: LTSpacing.xs) {
+                Image(systemName: "checkmark.circle.fill")
+                Text("课堂已结束 · 返回首页")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.black.opacity(0.85))
+            .padding(.horizontal, LTSpacing.l)
+            .padding(.vertical, LTSpacing.xs + 4)
+            .background(Capsule().fill(LTColors.accentGreen))
+        }
+        .accessibilityLabel(Text("课堂已结束，返回首页"))
+    }
+
+    /// Edge state: the classroom view opened with no session (e.g. an
+    /// aborted start). Nothing to control — just go home.
+    @ViewBuilder
+    private var idleControls: some View {
+        Button {
+            environment.flow.collapseLive()
+        } label: {
+            HStack(spacing: LTSpacing.xs) {
+                Image(systemName: "arrow.down.circle")
+                Text("尚未开始 · 返回")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(LTColors.textPrimary)
+            .padding(.horizontal, LTSpacing.l)
+            .padding(.vertical, LTSpacing.xs + 4)
+            .background(Capsule().fill(LTColors.surfaceElevated))
+            .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
+        }
+        .accessibilityLabel(Text("课堂尚未开始，返回"))
+    }
+
+    /// The engine failed while listening: an explicit retry bound to the
+    /// real coordinator start (never a silent backend switch).
+    @ViewBuilder
+    private var errorControls: some View {
+        Button {
+            Task { await viewModel.restartSession() }
+        } label: {
+            HStack(spacing: LTSpacing.xs) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                Text("重试启动")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.black.opacity(0.85))
+            .padding(.horizontal, LTSpacing.l)
+            .padding(.vertical, LTSpacing.xs + 4)
+            .background(Capsule().fill(LTColors.warning.opacity(0.85)))
+        }
+        .accessibilityLabel(Text("重试启动课堂"))
+    }
+
+    // MARK: - Actions
+
+    private func endSession() async {
+        await viewModel.stop()
+        LTHaptics.success()
     }
 }

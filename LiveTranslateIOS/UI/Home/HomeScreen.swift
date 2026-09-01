@@ -1,0 +1,399 @@
+import SwiftUI
+
+/// Home tab (reference image 1): brand header, greeting, start-classroom
+/// card, real readiness state, recent classrooms and study statistics.
+struct HomeScreen: View {
+    @Environment(AppEnvironment.self) private var environment
+    @State private var viewModel = HomeViewModel()
+    @State private var showNewSessionSheet = false
+    @State private var showModelManagement = false
+
+    var body: some View {
+        NavigationStack {
+            LTPage {
+                ScrollView {
+                    VStack(spacing: LTSpacing.l) {
+                        header
+                        if viewModel.hasOngoingSession && !environment.flow.isLivePresented {
+                            ongoingBanner
+                        }
+                        startCard
+                        statusSection
+                        recentSection
+                        statsSection
+                    }
+                    .padding(.horizontal, LTSpacing.screenPadding)
+                    .padding(.top, LTSpacing.s)
+                    .padding(.bottom, LTSpacing.xl)
+                }
+            }
+            .sheet(isPresented: $showNewSessionSheet) {
+                NewSessionSheet()
+                    .environment(environment)
+            }
+            .navigationDestination(isPresented: $showModelManagement) {
+                ModelManagementScreen()
+            }
+        }
+        .task {
+            viewModel.attach(environment)
+            await viewModel.reload()
+        }
+        .onAppear {
+            // Tab switches destroy this view; refresh readiness + recents
+            // (e.g. right after a classroom ended).
+            Task { await viewModel.reload() }
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: LTSpacing.xs) {
+                        Text("LiveTranslate")
+                            .font(LTTypography.pageTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                        // Real state, not decoration: the chip only shows
+                        // while a recognition runtime is actually installed.
+                        if viewModel.isLoaded && viewModel.anyBackendInstalled {
+                            StatusChip(text: "本地模式", tint: LTColors.accentGreen)
+                        }
+                    }
+                    Text(viewModel.greetingSubtitle)
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                Spacer()
+                NavigationLink {
+                    SettingsScreen(embedsInStack: false)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(LTColors.textSecondary)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(LTColors.surfacePrimary))
+                        .overlay(Circle().strokeBorder(LTColors.border, lineWidth: 0.5))
+                        .frame(width: LTSpacing.minTouchTarget, height: LTSpacing.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(Text("设置"))
+            }
+            Text(viewModel.greeting)
+                .font(.system(.largeTitle, design: .default).weight(.bold))
+                .foregroundStyle(LTColors.textPrimary)
+        }
+    }
+
+    // MARK: - Ongoing banner
+
+    @ViewBuilder
+    private var ongoingBanner: some View {
+        if viewModel.hasOngoingSession && !environment.flow.isLivePresented {
+            Button {
+                environment.flow.openLive()
+            } label: {
+                HStack(spacing: LTSpacing.s) {
+                    LTActivityDot(active: true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("课堂进行中")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(LTColors.textPrimary)
+                        Text(
+                            "\(environment.coordinator.state.phase.localizedLabel) · 已进行 \(Format.clock(environment.coordinator.state.elapsed))"
+                        )
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(LTColors.accentGreen)
+                }
+                .ltCard()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("课堂进行中，点击回到课堂"))
+        }
+    }
+
+    // MARK: - Start card
+
+    private var startCard: some View {
+        Button {
+            if viewModel.hasOngoingSession {
+                environment.flow.openLive()
+            } else {
+                showNewSessionSheet = true
+            }
+        } label: {
+            HStack(spacing: LTSpacing.m) {
+                micIcon
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(viewModel.hasOngoingSession ? "回到课堂" : "开始新课堂")
+                        .font(LTTypography.cardTitle)
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text("实时翻译 · 语音转写 · 双语对照")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(LTColors.accentGreen.opacity(0.9))
+            }
+            .ltCard(padding: LTSpacing.l)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("开始新课堂"))
+    }
+
+    /// Mic glyph in a green-tinted circle. A single static glow shadow —
+    /// no animation loop, so it never competes with GPU work.
+    private var micIcon: some View {
+        Image(systemName: "mic.fill")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(LTColors.accentGreen)
+            .frame(width: 52, height: 52)
+            .background(
+                Circle().fill(
+                    LinearGradient(
+                        colors: [LTColors.accentGreen.opacity(0.28), LTColors.accentGreen.opacity(0.12)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                )
+            )
+            .overlay(Circle().strokeBorder(LTColors.accentGreen.opacity(0.35), lineWidth: 0.5))
+            .shadow(color: LTColors.accentGreen.opacity(0.30), radius: 9)
+    }
+
+    // MARK: - Status
+
+    private var statusSection: some View {
+        let items = viewModel.readinessItems
+        return VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "当前状态")
+            VStack(spacing: 0) {
+                HStack {
+                    if viewModel.isLoaded && viewModel.isFullyReady
+                        && environment.coordinator.isNetworkAvailable {
+                        Label("全部就绪", systemImage: "checkmark.seal.fill")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(LTColors.accentGreen)
+                    } else {
+                        Label("尚未全部就绪", systemImage: "exclamationmark.circle")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(LTColors.warning)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, LTSpacing.m)
+                .padding(.top, LTSpacing.m)
+                .padding(.bottom, LTSpacing.xs)
+
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    readinessRow(item)
+                    if index < items.count - 1 {
+                        Divider()
+                            .overlay(LTColors.separator)
+                            .padding(.leading, LTSpacing.l)
+                    }
+                }
+                .padding(.bottom, LTSpacing.s)
+            }
+            .ltCard(padding: 0)
+        }
+    }
+
+    private func readinessRow(_ item: HomeViewModel.ReadinessItem) -> some View {
+        Button {
+            switch item.action {
+            case .modelManagement:
+                showModelManagement = true
+            case .systemSettings:
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            case nil:
+                break
+            }
+        } label: {
+            HStack(spacing: LTSpacing.s) {
+                statusDot(item.state)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .font(.subheadline)
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text(item.detail)
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                Spacer()
+                if item.action != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+            .padding(.horizontal, LTSpacing.m)
+            .padding(.vertical, LTSpacing.xs + 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(item.action == nil)
+        .accessibilityHint(item.action == nil ? Text("") : Text("双击前往处理"))
+    }
+
+    private func statusDot(_ state: HomeViewModel.ReadinessItem.State) -> some View {
+        let tint: Color = switch state {
+        case .ok: LTColors.accentGreen
+        case .warning: LTColors.warning
+        case .unavailable: LTColors.destructive
+        }
+        return Image(systemName: state == .ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+            .font(.system(size: 16))
+            .foregroundStyle(tint)
+    }
+
+    // MARK: - Recent
+
+    @ViewBuilder
+    private var recentSection: some View {
+        if !viewModel.recentSessions.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                LTSectionHeader(title: "最近课堂")
+                VStack(spacing: LTSpacing.s) {
+                    ForEach(viewModel.recentSessions) { summary in
+                        NavigationLink {
+                            SessionDetailView(sessionID: summary.id)
+                        } label: {
+                            recentRow(summary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func recentRow(_ summary: HomeViewModel.SessionSummary) -> some View {
+        HStack(spacing: LTSpacing.m) {
+            LTIconBadge(
+                symbol: LTIconography.symbol(for: summary.title),
+                tint: LTIconography.tint(for: summary.title),
+                size: 38
+            )
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: LTSpacing.xs) {
+                    Text(summary.title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(LTColors.textPrimary)
+                        .lineLimit(1)
+                    if summary.abnormalTermination {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(LTColors.warning)
+                            .accessibilityLabel(Text("异常终止"))
+                    }
+                }
+                HStack(spacing: LTSpacing.xs) {
+                    Text(Format.date(summary.startTime))
+                    Text(Format.clock(summary.duration))
+                    Text("\(summary.entryCount) 段")
+                }
+                .font(LTTypography.timestamp)
+                .foregroundStyle(LTColors.textTertiary)
+            }
+            Spacer()
+            if summary.hasFailedTranslations {
+                Text("部分翻译失败")
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.warning)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(LTColors.textTertiary)
+        }
+        .ltCard()
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Stats
+
+    @ViewBuilder
+    private var statsSection: some View {
+        if viewModel.isLoaded {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                LTSectionHeader(title: "今日学习")
+                if viewModel.weekSessionCount == 0 && viewModel.todayTotalSeconds < 1 {
+                    LTEmptyState(
+                        symbol: "chart.bar",
+                        title: "还没有学习记录",
+                        message: "完成第一堂课后，这里会展示今日时长与近七天的分布"
+                    )
+                } else {
+                    VStack(spacing: LTSpacing.m) {
+                        HStack(spacing: LTSpacing.l) {
+                            statTile(
+                                value: Format.clock(viewModel.todayTotalSeconds),
+                                caption: "今日累计时长"
+                            )
+                            statTile(
+                                value: "\(viewModel.weekSessionCount)",
+                                caption: "本周课堂"
+                            )
+                            Spacer(minLength: 0)
+                        }
+                        weekBars
+                    }
+                    .ltCard()
+                }
+            }
+        }
+    }
+
+    private func statTile(value: String, caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.title3.weight(.bold).monospacedDigit())
+                .foregroundStyle(LTColors.textPrimary)
+            Text(caption)
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textTertiary)
+        }
+    }
+
+    /// Simple 7-day distribution (oldest → today) from real session
+    /// durations. No data renders as minimal baseline bars.
+    private var weekBars: some View {
+        let labels = viewModel.dailyLabels
+        return HStack(alignment: .bottom, spacing: 10) {
+            ForEach(0..<7, id: \.self) { index in
+                VStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(
+                            index == 6
+                                ? LTColors.accentGreen.opacity(0.9)
+                                : LTColors.accentCyan.opacity(0.35)
+                        )
+                        .frame(width: 22, height: barHeight(index))
+                    Text(labels[index])
+                        .font(.system(size: 9))
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("\(labels[index]) \(Int(viewModel.dailyMinutes[index].rounded())) 分钟"))
+            }
+        }
+        .frame(height: 64)
+    }
+
+    private func barHeight(_ index: Int) -> CGFloat {
+        let minutes = index < viewModel.dailyMinutes.count ? viewModel.dailyMinutes[index] : 0
+        let fraction = max(0.08, minutes / viewModel.maxDailyMinutes)
+        return 40 * fraction
+    }
+}

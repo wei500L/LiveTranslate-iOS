@@ -31,6 +31,10 @@ final class AppEnvironment {
     let modelManager: ModelManager
     let benchmarkRunner: ASRBenchmarkRunner
     let coordinator: LiveTranslationCoordinator
+    /// UI navigation state (selected tab, live-classroom presentation).
+    let flow = AppFlow()
+    /// UI-layer bookmarks & session favorites (UserDefaults-backed, IDs only).
+    let bookmarks: BookmarkStore
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -45,7 +49,10 @@ final class AppEnvironment {
     init() {
         let box = TranslationServiceBox()
         self.translationServiceBox = box
-        self.settings = SettingsStore.shared
+        // Local so the coordinator's provider closure can capture the store
+        // without capturing `self` mid-initialization.
+        let settings = SettingsStore.shared
+        self.settings = settings
         do {
             let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
             let config = ModelConfiguration(
@@ -68,15 +75,24 @@ final class AppEnvironment {
         self.repository = TranscriptRepository(container: modelContainer)
         self.modelManager = ModelManager()
         self.benchmarkRunner = ASRBenchmarkRunner(engineManager: engineManager)
+        // ID-only bookmark store; needs the repository to resolve IDs and
+        // to migrate the legacy (v1 snapshot) records.
+        self.bookmarks = BookmarkStore(repository: repository)
         let service = AppEnvironment.makeTranslationService(
             settings: settings, keychain: keychain
         )
         self.translationService = service
+        box.set(service)
         // The coordinator resolves the translator through the box on every
         // use, so `refreshTranslationService()` takes effect without any
-        // explicit coordinator update. The closure captures the local `box`
-        // — capturing `self` here would be use-before-initialization.
-        box.set(service)
+        // explicit coordinator update. The provider deliberately does NOT
+        // consult the live-translation toggle: the coordinator reads that
+        // user-intent flag itself (together with
+        // `settings.isTranslationConfigured`) so "user turned translation
+        // off" stays distinguishable from "service not configured" — the
+        // former never enqueues a request at all. The provider is @MainActor
+        // and only resolved on the main actor, so reading the toggle is
+        // concurrency-safe.
         self.coordinator = LiveTranslationCoordinator(
             engineManager: engineManager,
             repository: repository,
@@ -160,22 +176,27 @@ final class TranslationServiceBox: @unchecked Sendable {
     }
 }
 
-/// Root three-tab layout: Live translation, classroom records, settings.
-struct RootTabView: View {
-    @Environment(AppEnvironment.self) private var environment
+/// UI navigation state owned by the composition root: the selected global
+/// tab and whether the live classroom is presented full-screen. Screens
+/// drive it through `AppEnvironment.flow`.
+@MainActor
+@Observable
+final class AppFlow {
+    var selectedTab: LTTab = .home
+    /// True while the live classroom is the front-most presentation.
+    var isLivePresented = false
 
-    var body: some View {
-        TabView {
-            LiveScreen()
-                .tabItem { Label("Live", systemImage: "waveform") }
-            RecordsScreen()
-                .tabItem { Label("Records", systemImage: "list.bullet.rectangle") }
-            SettingsScreen()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-        }
-        .task {
-            environment.reconcileAbnormalTerminations()
-            environment.modelManager.refreshStates()
-        }
+    /// Present the live classroom (full-screen).
+    func openLive() {
+        isLivePresented = true
+    }
+
+    /// Collapse the classroom back to a tab without stopping the session —
+    /// the home screen shows an ongoing-classroom banner. `tab` lets an
+    /// in-classroom hint (e.g. "前往设置" when translation is not configured)
+    /// land on the tab it points at.
+    func collapseLive(to tab: LTTab = .home) {
+        isLivePresented = false
+        selectedTab = tab
     }
 }

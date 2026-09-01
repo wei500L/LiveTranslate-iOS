@@ -15,7 +15,7 @@ struct BenchmarkScreen: View {
     var body: some View {
         List {
             Section {
-                Text("Runs the same GigaAM-v3 e2e_rnnt model through both backends, one after the other (never both in memory). Without reference text the report describes output differences only.")
+                Text("在两种识别模式下先后运行同一个本地模型（不会同时占用内存）。未提供参考文本时，报告仅描述输出差异。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -69,7 +69,7 @@ struct BenchmarkScreen: View {
                     if environment.benchmarkRunner.isRunning {
                         HStack {
                             ProgressView().padding(.trailing, 6)
-                            Text(String(localized: "Running — Core ML first, then INT8…"))
+                            Text(String(localized: "正在运行对比测试…"))
                         }
                     } else {
                         Text(String(localized: "Run comparison"))
@@ -94,7 +94,7 @@ struct BenchmarkScreen: View {
                 }
             }
         }
-        .navigationTitle(String(localized: "Backend Comparison"))
+        .navigationTitle(String(localized: "识别性能测试"))
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.audio, .wav]) { result in
             switch result {

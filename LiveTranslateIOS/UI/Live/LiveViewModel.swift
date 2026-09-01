@@ -1,102 +1,289 @@
 import SwiftUI
 import Observation
-import AVFoundation
 
-/// View model for the Live tab. Wraps the pipeline coordinator (which owns
-/// audio/VAD/ASR/translation orchestration) and the model manager, exposing
-/// exactly what the screen renders.
+/// View model for the full-screen live classroom (reference image 3).
+/// Wraps the pipeline coordinator — it adds no business logic of its own,
+/// only presentation state: lyric focus, auto-follow, in-class search and
+/// bookmarks.
 @MainActor
 @Observable
 final class LiveViewModel {
-    enum ControlMode { case start, running, paused }
+    enum LiveTab: String, CaseIterable, Identifiable {
+        case transcript, notes, bookmarks, search
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .transcript: return "实时转写"
+            case .notes: return "课堂笔记"
+            case .bookmarks: return "书签列表"
+            case .search: return "搜索"
+            }
+        }
+    }
+
+    /// UI-level per-entry presentation state derived from the coordinator's
+    /// real data. Translation intent is triaged up front: "user turned
+    /// translation off" (skipped — nothing was requested) is a different
+    /// state from "service not configured" or "network down", and none of
+    /// them is an error.
+    enum EntryPhase: Equatable {
+        case translating
+        case translated
+        case failed(retryable: Bool)
+        case notConfigured
+        /// The user turned live translation off — no request was made.
+        case skipped
+        /// Translation failed because the network is down. The coordinator
+        /// re-enqueues these automatically on recovery, so no manual retry
+        /// button is offered.
+        case offline
+    }
+
+    /// One session bookmark resolved against the live in-memory entries.
+    struct ResolvedBookmark: Identifiable {
+        let bookmark: BookmarkStore.EntryBookmark
+        let entry: LiveTranscriptItem?
+
+        var id: UUID { bookmark.id }
+    }
 
     private var environment: AppEnvironment?
 
-    // Coordinator state mirrors (kept here so the view stays dumb).
-    var needsOnboarding = false
-    var onboardingDismissed = false
-    var isNearBottom = true
-    var coreMLInstalled = false
-    var sherpaInstalled = false
-    var coreMLDownloadBytes = 0
-    var sherpaDownloadBytes = 0
+    var selectedTab: LiveTab = .transcript
+
+    /// Auto-follow: true until the user scrolls away from the focus
+    /// position; a "回到当前内容" affordance restores it.
+    var isFollowing = true
+    /// Search query within the live classroom.
+    var searchQuery = ""
+
+    // MARK: - Coordinator mirrors
 
     var state: PipelineState {
         environment?.coordinator.state ?? PipelineState()
     }
-    var entries: [SubtitleEntryViewModel] {
-        environment?.coordinator.entries.map {
-            SubtitleEntryViewModel(
-                sequenceID: $0.sequenceID,
-                startOffset: $0.startOffset,
-                originalText: $0.originalText,
-                translatedText: $0.translatedText,
-                translationStatus: $0.translationStatus
-            )
-        } ?? []
+
+    var entries: [LiveTranscriptItem] {
+        environment?.coordinator.entries ?? []
     }
+
     var audioLevels: [Float] {
         environment?.coordinator.audioLevels ?? []
     }
 
-    var backendDescription: String {
-        guard let environment else { return "" }
-        let settings = environment.settings
-        switch settings.preferredBackend {
-        case .coreMLFP16:
-            return "\(ASRBackendKind.coreMLFP16.shortLabel) · \(settings.coreMLCompute.displayName)"
-        case .sherpaONNXInt8:
-            return "\(ASRBackendKind.sherpaONNXInt8.shortLabel) · \(settings.onnxThreads) \(String(localized: "threads"))"
+    var sessionTitle: String {
+        environment?.coordinator.activeSessionTitle ?? "课堂"
+    }
+
+    var activeSessionID: UUID? {
+        environment?.coordinator.activeSessionID
+    }
+
+    var isRunning: Bool {
+        environment?.coordinator.isRunning ?? false
+    }
+
+    var isPaused: Bool {
+        environment?.coordinator.isPaused ?? false
+    }
+
+    var isNetworkAvailable: Bool {
+        environment?.coordinator.isNetworkAvailable ?? true
+    }
+
+    // MARK: - Lifecycle
+
+    func attach(_ environment: AppEnvironment) {
+        self.environment = environment
+    }
+
+    // MARK: - Lyric focus
+
+    /// The focused entry: the latest entry still awaiting its translation,
+    /// otherwise the newest entry.
+    var currentSequenceID: Int? {
+        let items = entries
+        if let pending = items.last(where: { $0.translationStatus == .pending }) {
+            return pending.sequenceID
+        }
+        return items.last?.sequenceID
+    }
+
+    func isCurrent(_ entry: LiveTranscriptItem) -> Bool {
+        entry.sequenceID == currentSequenceID
+    }
+
+    /// Distance of an entry from the focus position, for progressive
+    /// dimming of completed history (0 = current).
+    func focusDistance(of entry: LiveTranscriptItem) -> Int? {
+        guard let current = currentSequenceID else { return nil }
+        let currentIndex = entries.firstIndex { $0.sequenceID == current }
+        let entryIndex = entries.firstIndex { $0.sequenceID == entry.sequenceID }
+        guard let currentIndex, let entryIndex else { return nil }
+        return currentIndex - entryIndex
+    }
+
+    /// Opacity for non-focused history: the previous entry dims least, older
+    /// entries dim more, floored so text stays readable.
+    var historyOpacity: (Int) -> Double {
+        { distance in
+            switch distance {
+            case 0: return 1.0
+            case 1: return 0.78
+            case 2: return 0.62
+            default: return 0.50
+            }
         }
     }
 
-    /// Mic route straight from the audio session (e.g. "iPhone mic",
-    /// "AirPods"), falling back to a generic label when no input is routed.
-    var micRoute: String {
-        let inputs = AVAudioSession.sharedInstance().currentRoute.inputs
-        if let input = inputs.first {
-            return input.portType == .builtInMic
-                ? String(localized: "iPhone mic")
-                : input.portName
-        }
-        return String(localized: "Microphone")
-    }
-
-    var controlMode: ControlMode {
-        switch state.phase {
-        case .listening, .speechDetected, .transcribing, .translating:
-            return .running
-        case .paused, .micInterrupted:
-            return .paused
-        default:
-            return .start
+    func entryPhase(_ entry: LiveTranscriptItem) -> EntryPhase {
+        switch entry.translationStatus {
+        case .pending: return .translating
+        case .completed: return .translated
+        case .failed:
+            if !isNetworkAvailable && entry.isRetryableTranslation { return .offline }
+            return .failed(retryable: entry.isRetryableTranslation)
+        case .notConfigured: return .notConfigured
+        case .skipped: return .skipped
         }
     }
 
-    var canStart: Bool {
-        switch state.phase {
-        case .modelNotInstalled, .downloading, .verifying, .compilingCoreML,
-             .loadingModel, .warmingUp, .micInterrupted:
+    /// The user's live-translation intent for this classroom (the
+    /// new-classroom toggle; applies to subsequent segments at dispatch).
+    var isTranslationWanted: Bool {
+        environment?.settings.liveTranslationEnabled ?? true
+    }
+
+    /// Whether a valid translation service is configured (base URL +
+    /// model). Only meaningful together with `isTranslationWanted` —
+    /// "wants translation but not configured" is what shows the
+    /// 前往设置 banner; the disabled case shows nothing.
+    var isTranslationConfigured: Bool {
+        environment?.settings.isTranslationConfigured ?? false
+    }
+
+    /// True while speech is being collected but no entry has landed yet
+    /// (spec's "collecting" state).
+    var isCollectingSpeech: Bool {
+        state.phase == .speechDetected
+    }
+
+    // MARK: - Scroll follow
+
+    /// Called from the scroll-bottom marker preference: the value is
+    /// ≈0 while the feed end is at the viewport bottom, and increasingly
+    /// negative as the user reads history. Within ~150 pt counts as
+    /// following; scrolling away breaks follow, and only 回到当前内容
+    /// (or the auto-scroll itself) restores it.
+    func updateScrollPosition(minY: CGFloat) {
+        isFollowing = minY > -150
+    }
+
+    func resumeFollowing() {
+        isFollowing = true
+    }
+
+    // MARK: - Live search
+
+    var searchResults: [LiveTranscriptItem] {
+        let query = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return [] }
+        return entries.filter {
+            $0.originalText.localizedCaseInsensitiveContains(query)
+                || ($0.translatedText ?? "").localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    // MARK: - Bookmarks (this session)
+
+    /// This session's bookmarks, resolved against the live entries so the
+    /// list always shows the newest translation text.
+    var sessionBookmarks: [ResolvedBookmark] {
+        guard let sessionID = activeSessionID else { return [] }
+        let items = entries
+        return (environment?.bookmarks.bookmarks(in: sessionID) ?? []).map { bookmark in
+            ResolvedBookmark(
+                bookmark: bookmark,
+                entry: items.first { $0.entryID == bookmark.entryID }
+            )
+        }
+    }
+
+    func isBookmarked(_ entry: LiveTranscriptItem) -> Bool {
+        guard let entryID = entry.entryID else { return false }
+        return environment?.bookmarks.isBookmarked(entryID: entryID) ?? false
+    }
+
+    /// Bookmark/unbookmark one entry (the row star and the bottom control).
+    /// Returns false when the entry has no stable persisted ID yet.
+    @discardableResult
+    func toggleBookmark(_ entry: LiveTranscriptItem) -> Bool {
+        guard let environment, let sessionID = activeSessionID, let entryID = entry.entryID else {
             return false
-        default:
-            return coreMLInstalled || sherpaInstalled
         }
+        return environment.bookmarks.toggleBookmark(sessionID: sessionID, entryID: entryID)
     }
+
+    /// The bottom 书签 control marks the current entry.
+    /// Returns false when there is nothing to bookmark yet.
+    @discardableResult
+    func bookmarkCurrent() -> Bool {
+        guard let current = entries.last(where: { $0.sequenceID == currentSequenceID }) else {
+            return false
+        }
+        return toggleBookmark(current)
+    }
+
+    /// Remove a bookmark by record (bookmarks list action).
+    func removeBookmark(_ bookmark: BookmarkStore.EntryBookmark) {
+        environment?.bookmarks.removeBookmark(bookmark)
+    }
+
+    // MARK: - Session control (thin pass-throughs to the coordinator)
+
+    func pause() {
+        environment?.coordinator.pause()
+    }
+
+    func resume() {
+        environment?.coordinator.resume()
+    }
+
+    func stop() async {
+        await environment?.coordinator.stop()
+    }
+
+    func retryTranslation(_ sequenceID: Int) {
+        environment?.coordinator.retryTranslation(sequenceID: sequenceID)
+    }
+
+    func retryFailedTranslations() {
+        environment?.coordinator.retryFailedTranslations()
+    }
+
+    // MARK: - Error presentation
 
     var errorBannerText: String? {
-        if let message = state.errorMessage { return message }
+        // Deliberately does NOT echo the raw `state.errorMessage`: backend
+        // error descriptions carry technical runtime names, which product UI
+        // must not surface. The technical detail stays in the os_log; here
+        // only phase-derived, user-safe text is shown.
         switch state.phase {
         case .backendError:
-            return String(localized: "The recognition backend failed. The session was not switched automatically.")
-        case .diskSpaceLow:
-            return String(localized: "Not enough free disk space to install the model.")
+            return "识别引擎出错，本次课堂未自动切换后端。俄语原文不受影响。"
         case .modelNotInstalled:
-            return String(localized: "The selected backend is not installed.")
+            return "选定的识别模式尚未安装语言资源。"
+        case .diskSpaceLow:
+            return "磁盘空间不足，无法完成准备。"
         default:
             return nil
         }
     }
 
+    /// True when the error state offers an escape to the other installed
+    /// backend (explicit user action only — never an automatic switch).
     var showsSwitchToOtherBackend: Bool {
         guard state.phase == .backendError || state.phase == .modelNotInstalled else { return false }
         return otherInstalledBackend != nil
@@ -106,90 +293,26 @@ final class LiveViewModel {
         guard let environment else { return nil }
         let preferred = environment.settings.preferredBackend
         let other: ASRBackendKind = preferred == .coreMLFP16 ? .sherpaONNXInt8 : .coreMLFP16
-        let installed = other == .coreMLFP16 ? coreMLInstalled : sherpaInstalled
-        return installed ? other : nil
+        // Whether the other backend is installed is only knowable via the
+        // async manifest check; expose the switch whenever an error leaves
+        // the classroom unusable and let the action verify.
+        return other
     }
 
-    // MARK: - Lifecycle
-
-    func bootstrap() async {
-        guard let environment else { return }
-        await refreshInstallState()
-        if !coreMLInstalled && !sherpaInstalled && !onboardingDismissed {
-            needsOnboarding = true
-        }
-        _ = environment.engineManager
+    /// Retry starting with the currently preferred backend (after an error
+    /// left the classroom unusable). Never switches backends implicitly —
+    /// the banner's 切换后端 action is the only path for that.
+    func restartSession() async {
+        await environment?.coordinator.start(title: sessionTitle)
     }
 
-    func attach(_ environment: AppEnvironment) {
-        self.environment = environment
-    }
-
-    func dismissOnboarding() {
-        onboardingDismissed = true
-        needsOnboarding = false
-    }
-
-    func refreshInstallState() async {
-        guard let environment else { return }
-        async let coreML = environment.engineManager.isInstalled(.coreMLFP16)
-        async let sherpa = environment.engineManager.isInstalled(.sherpaONNXInt8)
-        coreMLInstalled = await coreML
-        sherpaInstalled = await sherpa
-        if let manifest = try? ModelManifest.load() {
-            coreMLDownloadBytes = manifest.backend(.coreMLFP16)?.totalDownloadBytes ?? 0
-            sherpaDownloadBytes = manifest.backend(.sherpaONNXInt8)?.totalDownloadBytes ?? 0
-        }
-        if !coreMLInstalled && !sherpaInstalled && !onboardingDismissed {
-            needsOnboarding = true
-        } else if coreMLInstalled || sherpaInstalled {
-            needsOnboarding = false
-        }
-    }
-
-    // MARK: - Session control
-
-    func start() async {
-        guard let environment else { return }
-        if needsOnboarding { needsOnboarding = false }
-        await environment.coordinator.start()
-    }
-
-    func pause() {
-        environment?.coordinator.pause()
-    }
-
-    func resume() async {
-        await environment?.coordinator.resume()
-    }
-
-    func stop() async {
-        await environment?.coordinator.stop()
-    }
-
-    func retryFailedTranslations() async {
-        await environment?.coordinator.retryFailedTranslations()
-    }
-
-    /// Explicit, user-initiated switch to the other installed backend.
-    /// Never automatic; requires the session to be stopped.
+    /// Switch to the other backend and restart listening. Bound to a
+    /// user-initiated button only.
     func switchToOtherInstalledBackend() async {
         guard let environment, let other = otherInstalledBackend else { return }
+        let installed = await environment.engineManager.isInstalled(other)
+        guard installed else { return }
         environment.settings.preferredBackend = other
-        await environment.coordinator.start()
-    }
-
-    func install(_ kind: ASRBackendKind) async {
-        guard let environment else { return }
-        await environment.modelManager.install(kind)
-        await refreshInstallState()
-    }
-
-    // MARK: - Scroll anchoring
-
-    func updateScrollPosition(minY: CGFloat) {
-        // Within ~80 pt of the bottom counts as "at the bottom"; anything
-        // above that is the user reading history.
-        isNearBottom = minY > -80
+        await environment.coordinator.start(title: sessionTitle)
     }
 }

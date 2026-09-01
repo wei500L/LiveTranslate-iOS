@@ -39,6 +39,10 @@ final class LiveTranslationCoordinator {
         var asrLatency: TimeInterval = 0
         /// Translation failed with a retryable error — eligible for retry.
         var isRetryableTranslation = false
+        /// Stable persisted `TranscriptEntry.id` (set once the Russian
+        /// original is saved); nil only if that save itself failed. The UI
+        /// uses it as the bookmark identity.
+        var entryID: UUID?
     }
 
     private(set) var state = PipelineState()
@@ -54,7 +58,10 @@ final class LiveTranslationCoordinator {
 
     private let engineManager: ASREngineManager
     private let repository: (any ClassroomRepositoryProtocol)?
-    private let translationServiceProvider: () -> (any TranslationService)?
+    /// MainActor-isolated provider (the coordinator only resolves it on the
+    /// main actor), so it may read MainActor state such as the
+    /// live-translation toggle.
+    private let translationServiceProvider: @MainActor () -> (any TranslationService)?
     private let settings: SettingsStore
 
     // MARK: - Run state
@@ -92,7 +99,7 @@ final class LiveTranslationCoordinator {
         engineManager: ASREngineManager,
         repository: (any ClassroomRepositoryProtocol)? = nil,
         settings: SettingsStore,
-        translationServiceProvider: @escaping () -> (any TranslationService)?
+        translationServiceProvider: @escaping @MainActor () -> (any TranslationService)?
     ) {
         self.engineManager = engineManager
         self.repository = repository
@@ -115,7 +122,15 @@ final class LiveTranslationCoordinator {
 
     // MARK: - Session control
 
-    func start() async {
+    /// Read-only session identity for the UI (bookmarking during a live
+    /// classroom needs the persisted session's stable ID and title).
+    var activeSessionID: UUID? { session?.id }
+    var activeSessionTitle: String? { session?.title }
+
+    /// Start a classroom session. The optional `title` comes from the
+    /// new-classroom form; when nil the previous behavior (date-derived
+    /// default title) applies unchanged.
+    func start(title: String? = nil) async {
         guard state.phase == .idle || state.phase == .finished || state.phase == .backendError else {
             return
         }
@@ -200,7 +215,8 @@ final class LiveTranslationCoordinator {
                 compute = "int8-\(settings.onnxThreads)threads"
             }
             let draft = SessionDraft(
-                title: Self.defaultTitle(for: sessionStart),
+                title: title.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    ?? Self.defaultTitle(for: sessionStart),
                 backend: settings.preferredBackend,
                 modelVersion: "gigaam-v3-e2e-rnnt",
                 computePreference: compute,
@@ -432,19 +448,28 @@ final class LiveTranslationCoordinator {
             return
         }
 
-        let entry = LiveTranscriptItem(
+        // Translation intent at dispatch time, kept distinct from service
+        // availability: "user turned translation off" (`.skipped` — no
+        // request is made at all) versus "user wants translation but no
+        // service is configured" (`.notConfigured`). The toggle is applied
+        // per utterance, so re-enabling affects subsequent segments only.
+        let translationWanted = settings.liveTranslationEnabled
+        let initialStatus: TranslationStatus = translationWanted
+            ? (settings.isTranslationConfigured ? .pending : .notConfigured)
+            : .skipped
+
+        var entry = LiveTranscriptItem(
             sequenceID: sequenceID,
             timestamp: Self.timestamp(for: result.segmentStart),
             startOffset: result.segmentStart,
             originalText: text,
             translatedText: nil,
-            translationStatus: translationProvider() == nil ? .notConfigured : .pending
+            translationStatus: initialStatus
         )
-        entries.append(entry)
-        lastEmittedSegment = (result.segmentEnd, text)
 
         // Persist the Russian original immediately — before any translation
-        // is attempted, so a translation failure can never lose it.
+        // is attempted, so a translation failure can never lose it. This
+        // happens regardless of the translation toggle.
         if let session, let repository {
             let draft = EntryDraft(
                 sequenceID: sequenceID,
@@ -460,15 +485,25 @@ final class LiveTranslationCoordinator {
                 session.entryCount += 1
             }
         }
+        entry.entryID = entryIDBySequence[sequenceID]
+        entries.append(entry)
+        lastEmittedSegment = (result.segmentEnd, text)
 
         state.lastASRLatency = latency
         state.lastRTF = result.realTimeFactor
         state.phase = isNetworkAvailable ? .transcribing : .networkOffline
 
         orderedTranslations.register(sequenceID)
-        translationContinuation?.yield(
-            PendingTranslation(sequenceID: sequenceID, attempt: 0)
-        )
+        if translationWanted {
+            translationContinuation?.yield(
+                PendingTranslation(sequenceID: sequenceID, attempt: 0)
+            )
+        } else {
+            // No translation requested: release the ordered slot right away
+            // (so later utterances never wait on it) and persist the skipped
+            // status — a user-intent state, never an error.
+            depositSkipped(sequenceID: sequenceID)
+        }
     }
 
     // MARK: - Translation workers
@@ -528,6 +563,28 @@ final class LiveTranslationCoordinator {
         )
     }
 
+    /// Release a translation-skipped entry (user turned live translation
+    /// off): the UI entry keeps `.skipped`, persistence records `.skipped`
+    /// (never `.failed`), and the ordered buffer slot frees immediately so
+    /// subsequent translations don't wait behind it.
+    private func depositSkipped(sequenceID: Int) {
+        if let index = entries.firstIndex(where: { $0.sequenceID == sequenceID }) {
+            entries[index].translationStatus = .skipped
+            entries[index].isRetryableTranslation = false
+        }
+        for (id, released) in orderedTranslations.complete(sequenceID, Self.emptyOutcome(sequenceID: sequenceID)) {
+            persistOutcome(released, sequenceID: id)
+        }
+        if orderedTranslations.depth == 0 {
+            switch state.phase {
+            case .transcribing, .translating, .speechDetected:
+                state.phase = isNetworkAvailable ? .listening : .networkOffline
+            default:
+                break
+            }
+        }
+    }
+
     /// Fill the UI entry immediately; release through the ordered buffer so
     /// persistence and context history follow utterance order.
     private func depositOutcome(_ outcome: TranslationOutcome) {
@@ -569,9 +626,15 @@ final class LiveTranslationCoordinator {
                     latency: outcome.latency, status: .completed
                 )
             } else {
+                // A user-skipped entry persists as `.skipped` — an intent,
+                // not an error; it is excluded from failure counts and from
+                // the automatic retry set. Everything else without text is
+                // a real failure.
+                let skipped = entries.first { $0.sequenceID == sequenceID }?
+                    .translationStatus == .skipped
                 try? repository.updateTranslation(
                     entryID: entryID, text: "",
-                    latency: outcome.latency, status: .failed
+                    latency: outcome.latency, status: skipped ? .skipped : .failed
                 )
             }
         }

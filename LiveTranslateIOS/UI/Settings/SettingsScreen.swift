@@ -1,9 +1,12 @@
 import SwiftUI
 
-/// Settings tab: backend selection, VAD, translation API, data, privacy,
-/// licenses, benchmark entry.
+/// Settings tab (我的): backend selection, VAD, translation API, data,
+/// privacy, licenses, benchmark entry. When pushed from the home screen,
+/// pass `embedsInStack: false` so it doesn't nest its own NavigationStack.
 struct SettingsScreen: View {
     @Environment(AppEnvironment.self) private var environment
+
+    var embedsInStack = true
 
     @State private var apiKeyInput = ""
     @State private var connectionTestResult: String?
@@ -14,26 +17,11 @@ struct SettingsScreen: View {
     @State private var showLicenses = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                recognitionSection
-                vadSection
-                translationSection
-                dataSection
-                aboutSection
-            }
-            .navigationTitle(String(localized: "Settings"))
-            .sheet(isPresented: $showPrivacy) { PrivacySheet() }
-            .sheet(isPresented: $showLicenses) { LicensesSheet() }
-            .confirmationDialog(
-                String(localized: "Delete all classroom records?"),
-                isPresented: $showDeleteAllConfirm,
-                titleVisibility: .visible
-            ) {
-                Button(String(localized: "Delete all"), role: .destructive) {
-                    try? environment.repository.deleteAllSessions()
-                    storageBytes = environment.repository.storageBytes()
-                }
+        Group {
+            if embedsInStack {
+                NavigationStack { settingsContent }
+            } else {
+                settingsContent
             }
         }
         .task {
@@ -52,31 +40,85 @@ struct SettingsScreen: View {
         .onChange(of: environment.settings.customSystemPrompt) { _, _ in environment.refreshTranslationService() }
     }
 
+    private var settingsContent: some View {
+        Form {
+            profileSection
+            recognitionSection
+            vadSection
+            translationSection
+            dataSection
+            aboutSection
+        }
+        .navigationTitle(String(localized: "我的"))
+        .scrollContentBackground(.hidden)
+        .background(LTBackground())
+        .sheet(isPresented: $showPrivacy) { PrivacySheet() }
+        .sheet(isPresented: $showLicenses) { LicensesSheet() }
+        .confirmationDialog(
+            String(localized: "Delete all classroom records?"),
+            isPresented: $showDeleteAllConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "Delete all"), role: .destructive) {
+                try? environment.repository.deleteAllSessions()
+                storageBytes = environment.repository.storageBytes()
+            }
+        }
+    }
+
+    // MARK: - Profile
+
+    /// Simple identity header for the 我的 tab: app name + real local-mode
+    /// state (installed backends), no fabricated account.
+    private var profileSection: some View {
+        Section {
+            HStack(spacing: 14) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(LTColors.accentGreen)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("LiveTranslate")
+                        .font(.headline)
+                    Text("课堂俄语转写 · 本地识别 · 中文翻译")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                StatusChip(
+                    text: environment.engineManager.loaded != nil
+                        ? "本地转写可用" : "本地模式",
+                    tint: LTColors.accentGreen
+                )
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
     // MARK: - Recognition
 
     private var recognitionSection: some View {
         Section {
-            LabeledRow(label: String(localized: "Model"), value: "GigaAM-v3 e2e_rnnt")
+            LabeledRow(label: String(localized: "本地语音识别"), value: String(localized: "俄语 · 全程在本机运行"))
 
-            Picker(String(localized: "Inference backend"), selection: backendBinding) {
+            Picker(String(localized: "识别模式"), selection: backendBinding) {
                 ForEach(ASRBackendKind.allCases) { kind in
-                    Text(kind.shortLabel).tag(kind)
+                    Text(kind.userTitle).tag(kind)
                 }
             }
             .pickerStyle(.inline)
             .disabled(environment.engineManager.sessionActive)
 
-            Text(environment.settings.preferredBackend.positioning)
+            Text(environment.settings.preferredBackend.userSubtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if environment.engineManager.sessionActive {
-                Text(String(localized: "Backend switching is disabled while a session is running."))
+                Text(String(localized: "课堂进行中暂不能切换识别模式。"))
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
 
-            Picker(String(localized: "Core ML compute"), selection: computeBinding) {
+            Picker(String(localized: "准确度优先的计算方式"), selection: computeBinding) {
                 ForEach(CoreMLComputePreference.allCases) { pref in
                     Text(pref.displayName).tag(pref)
                 }
@@ -84,24 +126,24 @@ struct SettingsScreen: View {
             .disabled(environment.settings.preferredBackend != .coreMLFP16)
 
             if environment.settings.coreMLCompute == .neuralEngineExperimental {
-                Text(String(localized: "Experimental: may change boundary tokens; first compile is slower. Switching reloads the model."))
+                Text(String(localized: "实验特性：结果可能有细微差异，首次准备更慢。切换后会重新准备资源。"))
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
 
-            Picker(String(localized: "INT8 threads"), selection: threadsBinding) {
+            Picker(String(localized: "速度优先的线程数"), selection: threadsBinding) {
                 Text("2").tag(2)
                 Text("4").tag(4)
             }
             .disabled(environment.settings.preferredBackend != .sherpaONNXInt8)
 
-            NavigationLink(String(localized: "Model Management…")) {
+            NavigationLink(String(localized: "语言资源管理…")) {
                 ModelManagementScreen()
             }
         } header: {
             Text(String(localized: "Speech recognition"))
         } footer: {
-            Text("Both backends run the same GigaAM-v3 e2e_rnnt model on device.")
+            Text(String(localized: "两种识别模式使用同一个本地模型，仅运行方式不同。"))
         }
     }
 
@@ -334,7 +376,7 @@ struct SettingsScreen: View {
 
     private var aboutSection: some View {
         Section {
-            NavigationLink(String(localized: "Backend comparison test")) {
+            NavigationLink(String(localized: "识别性能测试")) {
                 BenchmarkScreen()
             }
             Button(String(localized: "Privacy details")) { showPrivacy = true }
@@ -342,7 +384,7 @@ struct SettingsScreen: View {
         } header: {
             Text(String(localized: "About"))
         } footer: {
-            Text("LiveTranslate · GigaAM-v3 runs entirely on this device.")
+            Text("LiveTranslate · 语音识别完全在本机完成。")
         }
     }
 }
@@ -355,7 +397,7 @@ struct PrivacySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    privacyPoint(String(localized: "Microphone audio is recognized on this iPhone by GigaAM-v3. Audio never leaves the device."))
+                    privacyPoint(String(localized: "Microphone audio is recognized on this iPhone by the local recognition model. Audio never leaves the device."))
                     privacyPoint(String(localized: "Raw audio is not saved by default; when enabled in Settings it stays in the app sandbox."))
                     privacyPoint(String(localized: "Only the recognized Russian text is sent to your configured translation API."))
                     privacyPoint(String(localized: "The API key is stored only in the iOS Keychain and never exported."))

@@ -29,6 +29,24 @@ final class SettingsStore {
         static let thinkingStyle = "translation.thinkingStyle"
         static let systemPrompt = "translation.customSystemPrompt"
         static let concurrency = "translation.concurrency"
+        static let liveTranslationEnabled = "ui.liveTranslationEnabled"
+    }
+
+    /// Live-classroom translation toggle (new-classroom form). When off,
+    /// Russian is still recognized and saved, but translations are not
+    /// requested for that classroom. Applies per utterance at dispatch
+    /// time, so switching mid-classroom affects subsequent segments.
+    var liveTranslationEnabled: Bool {
+        didSet { defaults.set(liveTranslationEnabled, forKey: Keys.liveTranslationEnabled) }
+    }
+
+    /// Synchronous mirror of `TranslatorConfig.isConfigured` (base URL +
+    /// model set; local servers need no key) for MainActor checks that
+    /// cannot await the service. Keeps "user wants translation but has not
+    /// configured a service" a distinct, cheaply knowable state.
+    var isTranslationConfigured: Bool {
+        !apiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !translationModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var preferredBackend: ASRBackendKind {
@@ -132,6 +150,8 @@ final class SettingsStore {
         customSystemPrompt = defaults.string(forKey: Keys.systemPrompt) ?? ""
         let conc = defaults.object(forKey: Keys.concurrency) as? Int
         translationConcurrency = conc ?? 2
+        let liveTranslation = defaults.object(forKey: Keys.liveTranslationEnabled) as? Bool
+        liveTranslationEnabled = liveTranslation ?? true
     }
 }
 

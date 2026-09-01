@@ -125,6 +125,10 @@ enum TranslationStatus: String, Codable, Sendable {
     case completed
     case failed
     case notConfigured
+    /// The user turned live translation off — no request was ever made for
+    /// this entry. A presentation-level user-intent state: it must never be
+    /// surfaced, persisted or retried as an error.
+    case skipped
 }
 
 extension TranscriptEntry {
