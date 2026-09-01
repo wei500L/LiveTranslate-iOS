@@ -20,9 +20,21 @@ struct LiveTranslateIOSApp: App {
 @MainActor
 @Observable
 final class AppEnvironment {
+    /// Keychain account for the translation API key.
+    static let apiKeychainKey = "translation.apiKey"
+
     let modelContainer: ModelContainer
     let settings: SettingsStore
     let engineManager: ASREngineManager
+    let keychain: KeychainStore
+    let repository: any ClassroomRepositoryProtocol
+    let modelManager: ModelManager
+    let benchmarkRunner: ASRBenchmarkRunner
+    let coordinator: LiveTranslationCoordinator
+
+    /// Rebuilt whenever translation settings change (Settings screen calls
+    /// `refreshTranslationService()` on commit and after key changes).
+    private(set) var translationService: any TranslationService
 
     init() {
         self.settings = SettingsStore.shared
@@ -43,7 +55,20 @@ final class AppEnvironment {
                 for: Schema([ClassroomSession.self, TranscriptEntry.self])
             )
         }
+        self.keychain = KeychainStore()
         self.engineManager = ASREngineManager(settings: settings)
+        self.repository = TranscriptRepository(modelContainer: modelContainer)
+        self.modelManager = ModelManager()
+        self.benchmarkRunner = ASRBenchmarkRunner()
+        self.translationService = AppEnvironment.makeTranslationService(
+            settings: settings, keychain: keychain
+        )
+        self.coordinator = LiveTranslationCoordinator(
+            engineManager: engineManager,
+            repository: repository,
+            settings: settings,
+            translationService: translationService
+        )
     }
 
     static func databaseURL() -> URL {
@@ -51,6 +76,35 @@ final class AppEnvironment {
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first!
         return support.appendingPathComponent("LiveTranslate.sqlite")
+    }
+
+    /// Build a translator from current settings; the API key comes from the
+    /// Keychain only.
+    static func makeTranslationService(
+        settings: SettingsStore, keychain: KeychainStore
+    ) -> any TranslationService {
+        let apiKey = (try? keychain.get(forKey: apiKeychainKey)) ?? ""
+        return OpenAICompatibleTranslator(
+            apiBase: settings.apiBase,
+            apiKey: apiKey,
+            model: settings.translationModel,
+            streaming: settings.streaming,
+            contextTurns: settings.contextTurns,
+            temperature: settings.temperature,
+            maxTokens: settings.maxTokens,
+            timeout: settings.timeout,
+            thinkingStyle: ThinkingStyle(rawValue: settings.thinkingStyle) ?? .auto,
+            customSystemPrompt: settings.customSystemPrompt.isEmpty ? nil : settings.customSystemPrompt
+        )
+    }
+
+    /// Call after translation settings or the stored API key change so new
+    /// requests use the fresh configuration.
+    func refreshTranslationService() {
+        translationService = AppEnvironment.makeTranslationService(
+            settings: settings, keychain: keychain
+        )
+        coordinator.updateTranslationService(translationService)
     }
 
     /// Mark sessions that never got a clean `endTime` as abnormally
@@ -82,6 +136,10 @@ struct RootTabView: View {
                 .tabItem { Label("Records", systemImage: "list.bullet.rectangle") }
             SettingsScreen()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+        }
+        .task {
+            environment.reconcileAbnormalTerminations()
+            await environment.modelManager.refreshStates()
         }
     }
 }
