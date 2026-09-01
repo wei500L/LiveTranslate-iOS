@@ -1,0 +1,34 @@
+# Model artifacts — never commit
+LocalModels/
+DownloadedModels/
+ThirdParty/sherpa-onnx/
+downloads/
+*.onnx
+*.mlpackage/
+*.mlmodelc/
+*.mlpackage.zip
+*.zip.partial
+*.tar.bz2
+
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+
+# Swift Package Manager
+.build/
+Package.resolved
+
+# Secrets & local config
+*.env
+*.p8
+*.mobileprovision
+
+# Python
+__pycache__/
+*.pyc
+.venv/

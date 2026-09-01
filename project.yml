@@ -1,0 +1,112 @@
+name: LiveTranslateIOS
+options:
+  bundleIdPrefix: com.livetranslate
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    CODE_SIGN_STYLE: Automatic
+    # Simulator builds need no signing identity; device builds are done by
+    # the user with their own team selected in Xcode.
+    CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: "YES"
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  LiveTranslateIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: LiveTranslateIOS
+      - path: Resources
+    dependencies:
+      - framework: ThirdParty/sherpa-onnx/sherpa-onnx.xcframework
+        embed: false
+    info:
+      path: LiveTranslateIOS/Info.plist
+      properties:
+        CFBundleDisplayName: LiveTranslate
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiredDeviceCapabilities: [arm64]
+        NSMicrophoneUsageDescription: >-
+          LiveTranslate uses the microphone to recognize Russian speech on
+          device with GigaAM-v3 and show a Chinese translation. Audio is
+          processed locally and is not saved unless you enable it in Settings.
+        UIBackgroundModes:
+          - audio
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          # Scoped exception: plain-HTTP is allowed ONLY for local network
+          # hosts (Ollama / LM Studio / vLLM on the LAN). Arbitrary loads
+          # remain blocked; public endpoints must use HTTPS.
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: false
+        ENABLE_PREVIEWS: "YES"
+
+  LiveTranslateIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: LiveTranslateIOSTests
+    dependencies:
+      - target: LiveTranslateIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  LiveTranslateIOSIntegrationTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: LiveTranslateIOSIntegrationTests
+    dependencies:
+      - target: LiveTranslateIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios.integrationtests
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  LiveTranslateIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LiveTranslateIOSUITests
+    dependencies:
+      - target: LiveTranslateIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
+
+schemes:
+  LiveTranslateIOS:
+    build:
+      targets:
+        LiveTranslateIOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - LiveTranslateIOSTests
+  LiveTranslateIOSIntegration:
+    build:
+      targets:
+        LiveTranslateIOS: all
+    test:
+      config: Debug
+      targets:
+        - LiveTranslateIOSIntegrationTests

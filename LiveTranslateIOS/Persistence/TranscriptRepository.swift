@@ -1,0 +1,39 @@
+import Foundation
+import SwiftData
+
+/// Repository over the SwiftData store. All UI reads/writes classroom
+/// data through this so persistence stays testable and the UI stays thin.
+@MainActor
+protocol ClassroomRepositoryProtocol: AnyObject {
+    func createSession(_ draft: SessionDraft) throws -> ClassroomSession
+    func finishSession(_ session: ClassroomSession, abnormal: Bool) throws
+    func addEntry(_ draft: EntryDraft, to session: ClassroomSession) throws -> TranscriptEntry
+    func updateTranslation(entryID: UUID, text: String, latency: TimeInterval?, status: TranslationStatus) throws
+    func sessions(matching query: String) throws -> [ClassroomSession]
+    func entries(for session: ClassroomSession) throws -> [TranscriptEntry]
+    func entriesNeedingRetry(for session: ClassroomSession) throws -> [TranscriptEntry]
+    func deleteSession(_ session: ClassroomSession) throws
+    func deleteAllSessions() throws
+    func storageBytes() -> Int
+    func markAbnormalTerminations() throws
+}
+
+struct SessionDraft: Sendable {
+    var title: String
+    var backend: ASRBackendKind
+    var modelVersion: String
+    var computePreference: String
+    var translationModel: String
+    var sourceLanguage: String = "ru"
+    var targetLanguage: String = "zh-CN"
+}
+
+struct EntryDraft: Sendable {
+    var sequenceID: Int
+    var startOffset: TimeInterval
+    var endOffset: TimeInterval
+    var originalText: String
+    var asrBackend: ASRBackendKind
+    var asrLatency: TimeInterval
+    var asrRTF: Double
+}
