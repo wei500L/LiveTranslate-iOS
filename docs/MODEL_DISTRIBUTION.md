@@ -50,7 +50,7 @@ Compiled/v{N}/*.mlmodelc/             (首次使用时编译生成)
 
 ## 共享运行时
 
-- **sherpa-onnx v1.13.7** iOS static XCFramework：SHA256 `a808329c49da521b3af707da2e1a9d5b0a4595b2549ffdc771f2f560f012fd3d`，`scripts/fetch_third_party.sh` 下载并校验（Core ML 后端也用它运行 Silero VAD）。
+- **sherpa-onnx v1.13.7** iOS `ios-shared-onnxruntime-static` XCFramework（动态 framework，ONNX Runtime 静态链接在内，自包含；普通 `ios-static` 资产缺少 Ort 符号无法链接）：SHA256 `72db1b34ff75c6b4f3f40a73d46c4241e1c2b23599638975c66ad6dec10bb298`，`scripts/fetch_third_party.sh` 下载并校验（Core ML 后端也用它运行 Silero VAD）。框架不入 Git。
 - **Silero VAD**：`silero_vad.onnx`（≈ 628 KB），安装到 `Models/vad/`。
 
 ## 下载与校验流程（App 内）

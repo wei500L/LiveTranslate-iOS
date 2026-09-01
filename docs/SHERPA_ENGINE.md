@@ -23,7 +23,7 @@ provider        = cpu
 
 ## 运行时
 
-- sherpa-onnx v1.13.7 iOS **静态** XCFramework（`SherpaOnnxC` 模块，含 ONNX Runtime；SHA256 见 `scripts/fetch_third_party.sh`）。
+- sherpa-onnx v1.13.7 iOS `ios-shared-onnxruntime-static` XCFramework（`SherpaOnnxC` 模块：动态 framework、ONNX Runtime 静态链接在内、自包含；SHA256 见 `scripts/fetch_third_party.sh`，框架不入 Git）。
 - recognizer **只创建一个**，存活于整个引擎生命周期；每次推理创建/销毁 OfflineStream（`AcceptWaveformOffline` → `DecodeOfflineStream` → 取 `result.text`）。
 - 推理经 actor 隔离串行执行。
 - 输出即 GigaAM `e2e_rnnt` 原生带标点文本，**无任何后处理**（除 trim）。

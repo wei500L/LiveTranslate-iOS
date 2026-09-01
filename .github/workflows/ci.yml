@@ -15,11 +15,14 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     env:
-      # Pinned sherpa-onnx iOS static xcframework (v1.13.7). The framework
-      # is git-ignored; CI fetches and hash-checks it before generating the
+      # Pinned sherpa-onnx v1.13.7 iOS XCFramework. Asset choice matters:
+      # "ios-shared-onnxruntime-static" is a dynamic framework with
+      # onnxruntime statically linked inside (self-contained); the plain
+      # "ios-static" asset leaves Ort* symbols undefined. The framework is
+      # git-ignored; CI fetches and hash-checks it before generating the
       # Xcode project. No ASR model files are ever downloaded in CI.
-      SHERPA_XCFW_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.7-ios-static.xcframework.zip
-      SHERPA_XCFW_SHA256: a808329c49da521b3af707da2e1a9d5b0a4595b2549ffdc771f2f560f012fd3d
+      SHERPA_XCFW_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.7-ios-shared-onnxruntime-static.xcframework.zip
+      SHERPA_XCFW_SHA256: 72db1b34ff75c6b4f3f40a73d46c4241e1c2b23599638975c66ad6dec10bb298
 
     steps:
       - uses: actions/checkout@v4

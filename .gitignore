@@ -33,3 +33,6 @@ __pycache__/
 *.pyc
 .venv/
 .claude/
+
+# Third-party binary frameworks — fetched hash-pinned by scripts/fetch_third_party.sh
+ThirdParty/sherpa-onnx.xcframework/

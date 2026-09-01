@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Downloads the pinned sherpa-onnx static XCFramework for iOS and unpacks it
-# into ThirdParty/. The artifact is pinned to release v1.13.7 and verified by
+# Downloads the pinned sherpa-onnx iOS XCFramework and unpacks it into
+# ThirdParty/. The artifact is pinned to release v1.13.7 and verified by
 # SHA256 — the framework is far too large for the Git repository.
+#
+# Asset choice: "ios-shared-onnxruntime-static" — a dynamic framework with
+# onnxruntime statically linked inside (self-contained). The plain
+# "ios-static" asset leaves Ort* symbols undefined with no companion
+# onnxruntime library for iOS and does not link.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.7-ios-static.xcframework.zip"
-SHA256="a808329c49da521b3af707da2e1a9d5b0a4595b2549ffdc771f2f560f012fd3d"
+URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.7-ios-shared-onnxruntime-static.xcframework.zip"
+SHA256="72db1b34ff75c6b4f3f40a73d46c4241e1c2b23599638975c66ad6dec10bb298"
 DEST="ThirdParty/sherpa-onnx.xcframework"
-TMP="downloads/sherpa-onnx-v1.13.7-ios-static.xcframework.zip"
+TMP="downloads/sherpa-onnx-v1.13.7-ios-shared-onnxruntime-static.xcframework.zip"
 
 mkdir -p downloads ThirdParty
 
@@ -18,7 +23,7 @@ if [ -d "$DEST" ] && [ -d "$DEST/ios-arm64" ]; then
   exit 0
 fi
 
-echo "Downloading sherpa-onnx v1.13.7 iOS static xcframework (~17 MB)..."
+echo "Downloading sherpa-onnx v1.13.7 iOS shared-onnxruntime-static xcframework (~84 MB)..."
 curl -fSL --retry 3 -C - "$URL" -o "$TMP"
 
 actual=$(shasum -a 256 "$TMP" | awk '{print $1}')
