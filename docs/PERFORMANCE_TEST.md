@@ -22,13 +22,21 @@ Core ML Neural Engine 模式**单独**报告，不与默认 CPU+GPU 混合。
 
 > ⚠️ **等待真机验证**（无 iPhone 17 Pro Max 可用时，此处如实标注，不伪造数据）。
 
-已完成的机器内验证（macOS 构建服务器 / 模拟器）：见下表，真机数据待补。
+已在构建机上**实际执行**的验证（2026-09-01，macOS arm64 原生运行，Xcode 许可证未解锁故绕过
+xcodebuild，直接调用工具链 swiftc + XCTest 运行器；不含 RTF/内存验收数值——这些只在真机上有效）：
 
-| 项目 | 状态 |
-|---|---|
-| iOS 模拟器构建 | 待构建（Xcode 许可证解锁后执行） |
-| 单元测试（无模型） | 待运行 |
-| Core ML 黄金特征对比 | 待运行（fixture 生成中） |
-| Core ML 真机识别 | 待真机 |
-| INT8 真机识别 | 待真机 |
-| iPhone 17 Pro Max 60 分钟 | 待真机 |
+| 项目 | 状态 | 结果 |
+|---|---|---|
+| Swift 6 严格并发全量类型检查（App + 3 个测试 target，iPhoneOS SDK） | ✅ 已执行 | 0 error |
+| App 整模块对象码编译（arm64-apple-ios17.0，53 个 .o，链接 sherpa-onnx xcframework） | ✅ 已执行 | exit 0 |
+| 单元测试（无模型下载，含 SSE/CER/词表解码/SwiftData 仓库/导出/清单/分段器/VAD/重采样） | ✅ 已执行 | **146/146 通过，0 跳过** |
+| Core ML Log-Mel 黄金特征对比（真实 Core ML 推理 vs torchaudio 参考特征，3 组俄语 fixture：2.9 s / 19.6 s / 30 s 截断） | ✅ 已执行 | max err ≤ 2e-3、mean err ≤ 1e-5、>1e-4 比例 ≤ 2%、补零列恰为 log(1e-9)，全部通过 |
+| iOS 模拟器构建（xcodebuild） | ⏸ 待许可证解锁后执行 | — |
+| Core ML 真机识别 / RTF | ⏸ 待真机 | — |
+| INT8 真机识别 / RTF | ⏸ 待真机 | — |
+| iPhone 17 Pro Max 60 分钟稳定性 | ⏸ 待真机 | — |
+
+运行方式备注：单元测试通过 SPM 原生 harness（`/tmp` 下与仓库同步的副本，排除 iOS 专属层）
+以 `/Applications/Xcode.app/.../usr/bin/xctest` 直接执行；黄金特征测试在真实 Core ML 上运行。
+模型集成测试（真实下载的 446 MB / 216 MB 权重）位于独立 test plan，待 xcodebuild 解锁后在
+模拟器/真机执行。

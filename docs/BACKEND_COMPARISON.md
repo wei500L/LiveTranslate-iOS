@@ -23,3 +23,15 @@
 > ⚠️ 状态：等待真机验证。以下结果在开发过程中如实更新；未运行的测试不会被报告为通过。
 
 （本节将在 iPhone 17 Pro Max 真机测试后填写。）
+
+## 已实际执行的验证（2026-09-01，构建机）
+
+在 `xcodebuild` 被 Xcode 许可证阻塞期间，以下与后端对比直接相关的验证**已实际运行并通过**
+（macOS arm64 原生、真实 Core ML）：
+
+- **Log-Mel 前处理一致性**：Core ML FP16 后端的 Swift Log-Mel 提取器与 torchaudio 参考特征
+  在 3 组俄语 fixture（2.9 s / 19.6 s / 30 s 截断）上满足 `max err ≤ 2e-3`、`mean err ≤ 1e-5`、
+  超差比例 ≤ 2%，补零列恰为 `log(1e-9)`（见 `CoreMLLogMelGoldenTests`）。
+- **一致性测试的存在性**：`testBackendAgreementWithCoreML`（互为参考的 CER 阈值 0.4）位于独立
+  集成 test plan，与 sherpa-onnx INT8 真实权重的加载/识别/CER ≤ 0.3 测试一起，等待
+  xcodebuild 解锁后在模拟器/真机执行——**尚未运行，故不报告为通过**。
