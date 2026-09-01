@@ -116,3 +116,10 @@ schemes:
       config: Debug
       targets:
         - LiveTranslateIOSIntegrationTests
+      # Model-dependent tests copy from the git-ignored LocalModels/ tree;
+      # xcodebuild expands ${...} from its own invocation environment, so
+      # run: LIVETRANSLATE_MODELS_DIR=$PWD/LocalModels xcodebuild test ...
+      environmentVariables:
+        - variable: LIVETRANSLATE_MODELS_DIR
+          value: ${LIVETRANSLATE_MODELS_DIR}
+          isEnabled: true

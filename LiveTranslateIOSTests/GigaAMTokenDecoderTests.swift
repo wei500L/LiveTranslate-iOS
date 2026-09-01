@@ -24,6 +24,19 @@ final class GigaAMTokenDecoderTests: XCTestCase {
         }
     }
 
+    /// The pinned Core ML export (`smkrv/gigaam-v3-e2e-rnnt-coreml`) ships
+    /// exactly the 1024 real pieces with the blank (id 1024) implicit — the
+    /// decoder must accept that shape, and the implicit blank must decode
+    /// to nothing instead of leaking a missing piece.
+    func testPinnedExportVocabularyWithImplicitBlank() throws {
+        var pieces = [String](repeating: "<filler>", count: GigaAMTokenDecoder.blankID)
+        pieces[0] = "▁привет"
+        pieces[1023] = "!"
+        let decoder = try GigaAMTokenDecoder(pieces: pieces)
+        XCTAssertEqual(decoder.decode(ids: [0, 1023]), "привет!")
+        XCTAssertEqual(decoder.decode(ids: [1024]), "")
+    }
+
     func testPlainPieceJoin() throws {
         let decoder = try makeVocabulary([0: "Прив", 1: "ет", 2: ".", 3: "!"])
         XCTAssertEqual(decoder.decode(ids: [0, 1, 2, 3]), "Привет.!")

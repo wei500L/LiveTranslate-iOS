@@ -162,7 +162,7 @@ final class ASREngineManager {
         case .sherpaONNXInt8:
             return SherpaModelConfiguration.isInstalled()
         case .coreMLFP16:
-            return await CoreMLModelLoader.hasCompiledModel()
+            return await CoreMLModelLoader.isInstalled()
         }
     }
 }

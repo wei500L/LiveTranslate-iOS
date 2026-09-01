@@ -20,23 +20,33 @@ Core ML Neural Engine 模式**单独**报告，不与默认 CPU+GPU 混合。
 
 ## 当前状态
 
-> ⚠️ **等待真机验证**（无 iPhone 17 Pro Max 可用时，此处如实标注，不伪造数据）。
+> ⚠️ **RTF / 内存 / 稳定性验收数值等待真机验证**（无 iPhone 17 Pro Max 可用时，此处如实标注，
+> 不伪造数据）。模拟器 RTF 不作为验收依据，仅用于功能验证。
 
-已在构建机上**实际执行**的验证（2026-09-01，macOS arm64 原生运行，Xcode 许可证未解锁故绕过
-xcodebuild，直接调用工具链 swiftc + XCTest 运行器；不含 RTF/内存验收数值——这些只在真机上有效）：
+已在构建机上**实际执行**的验证（2026-09-01）：
 
 | 项目 | 状态 | 结果 |
 |---|---|---|
 | Swift 6 严格并发全量类型检查（App + 3 个测试 target，iPhoneOS SDK） | ✅ 已执行 | 0 error |
 | App 整模块对象码编译（arm64-apple-ios17.0，53 个 .o，链接 sherpa-onnx xcframework） | ✅ 已执行 | exit 0 |
-| 单元测试（无模型下载，含 SSE/CER/词表解码/SwiftData 仓库/导出/清单/分段器/VAD/重采样） | ✅ 已执行 | **146/146 通过，0 跳过** |
+| macOS 原生单元测试（SPM harness，含 SSE/CER/词表解码/导出/清单/分段器/VAD/重采样/安装中断） | ✅ 已执行 | **149/149 通过，0 跳过** |
 | Core ML Log-Mel 黄金特征对比（真实 Core ML 推理 vs torchaudio 参考特征，3 组俄语 fixture：2.9 s / 19.6 s / 30 s 截断） | ✅ 已执行 | max err ≤ 2e-3、mean err ≤ 1e-5、>1e-4 比例 ≤ 2%、补零列恰为 log(1e-9)，全部通过 |
-| iOS 模拟器构建（xcodebuild） | ⏸ 待许可证解锁后执行 | — |
+| iOS 模拟器构建（xcodebuild，iPhone 17 Pro Max / iOS 26.5） | ✅ 已执行 | BUILD SUCCEEDED |
+| 模拟器单元测试（LiveTranslateIOSTests，含新增 pinned-export 1024 词表测试） | ✅ 已执行 | **147/147 通过** |
+| 模拟器模型集成测试（真实下载的 446 MB Core ML + 216 MB INT8 权重：加载/预热/真实俄语识别/双后端切换与互斥/损坏检测/下载暂停-Range 续传/SHA256 门禁） | ✅ 已执行 | **17/17 通过** |
+| 双后端一致性（同一 checkpoint 的两种导出，同一俄语片段） | ✅ 已执行 | Core ML「Здравствуйте. Меня зовут Профессор Иванов.」 / INT8「Здравствуйте. Меня зовут профессор Иванов.」，CER（大小写归一后）= 0.0 |
 | Core ML 真机识别 / RTF | ⏸ 待真机 | — |
 | INT8 真机识别 / RTF | ⏸ 待真机 | — |
 | iPhone 17 Pro Max 60 分钟稳定性 | ⏸ 待真机 | — |
 
-运行方式备注：单元测试通过 SPM 原生 harness（`/tmp` 下与仓库同步的副本，排除 iOS 专属层）
-以 `/Applications/Xcode.app/.../usr/bin/xctest` 直接执行；黄金特征测试在真实 Core ML 上运行。
-模型集成测试（真实下载的 446 MB / 216 MB 权重）位于独立 test plan，待 xcodebuild 解锁后在
-模拟器/真机执行。
+模拟器识别参考值（**非验收数值**，且模拟器 Core ML 以 cpuOnly 运行，见下）：Core ML load=0.22 s、
+2.88 s 音频推理 1.57 s（RTF 0.546）；sherpa-onnx INT8 load=0.26 s、2.88 s 音频推理 0.07 s（RTF 0.023）。
+
+### 模拟器 Core ML 计算单元说明
+
+iOS 模拟器无法在 GPU 上执行本模型：E5RT 报 MPSGraph backend validation 失败，且推理输出全为
+`<unk>` 垃圾。因此 `CoreMLModelLoader` 在 `targetEnvironment(simulator)` 下固定 `.cpuOnly`
+（同一套已校验权重在 CPU 上执行真实数学），真机构建保持文档化策略：accuracy → CPU+GPU，
+neuralEngineExperimental → CPU+NE。引擎按会话记录**实际**计算单元，模拟器测试报告如实显示
+cpuOnly。模型下载实测：`URLSession.AsyncBytes` 按字节消费在本机环回测得 ~52 MB/s，网络带宽
+才是实际瓶颈；安装器断点续传（HTTP Range）与 SHA256 门禁由集成测试覆盖。

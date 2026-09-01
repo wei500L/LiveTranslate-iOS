@@ -63,12 +63,20 @@ struct CoreMLModelLoader {
 
     // MARK: - Public entry points
 
-    /// Whether a complete compiled cache for the manifest's cache version
-    /// exists. Cheap file-existence check used by the engine manager.
-    static func hasCompiledModel() async -> Bool {
+    /// Whether the backend is installed: all three source `.mlpackage`
+    /// bundles are present. "Installed" means the downloaded source —
+    /// the compiled cache is produced on first load (`loadModels` compiles
+    /// on demand and SHA256-verifies the sources), so requiring it here
+    /// would report a freshly installed backend as missing.
+    static func isInstalled() async -> Bool {
         let result = await Task.detached(priority: .utility) {
-            compiledURLs(cacheVersion: currentCacheVersion()).compactMap { $0 }.count
-                == packageNames.count
+            let root = (try? ModelPaths.backendRoot(.coreMLFP16))?
+                .appendingPathComponent("Source")
+            guard let root else { return false }
+            return packageNames.allSatisfy {
+                FileManager.default.fileExists(
+                    atPath: root.appendingPathComponent("\($0).mlpackage").path)
+            }
         }.value
         return result
     }
@@ -116,6 +124,16 @@ struct CoreMLModelLoader {
         }
 
         let configuration = MLModelConfiguration()
+        #if targetEnvironment(simulator)
+        // The iOS simulator cannot execute these models on the GPU: E5RT
+        // fails MPSGraph backend validation ("incompatible OS") and every
+        // inference returns garbage (an <unk> storm). Simulator builds run
+        // the same verified weights on the CPU so tests exercise the real
+        // math; device builds keep the documented compute policy below.
+        // The engine records the *actual* units used, so simulator test
+        // reports honestly show cpuOnly.
+        configuration.computeUnits = .cpuOnly
+        #else
         switch computePreference {
         case .accuracy:
             // Token-exact vs the PyTorch reference — the documented default.
@@ -123,6 +141,7 @@ struct CoreMLModelLoader {
         case .neuralEngineExperimental:
             configuration.computeUnits = .cpuAndNeuralEngine
         }
+        #endif
 
         let compiled = packageNames.map { name in
             compiledRoot(cacheVersion: cacheVersion)

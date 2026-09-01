@@ -20,18 +20,29 @@
 
 ## 实测结果
 
-> ⚠️ 状态：等待真机验证。以下结果在开发过程中如实更新；未运行的测试不会被报告为通过。
+> ⚠️ 状态：真机（iPhone 17 Pro Max）RTF/内存对比等待真机验证。以下为已实际运行的模拟器结果，
+> 如实更新；未运行的测试不会被报告为通过。
 
-（本节将在 iPhone 17 Pro Max 真机测试后填写。）
+### 模拟器真实模型一致性（2026-09-01，iOS 26.5 模拟器，17/17 集成测试通过）
+
+同一 2.88 s 俄语片段（内置 fixture，PyTorch 参考文本
+「Здравствуйте. Меня зовут профессор Иванов.」）：
+
+| 后端 | 识别输出 | 与参考文本 | 与对方 |
+|---|---|---|---|
+| GigaAM-v3 e2e_rnnt · Core ML FP16（模拟器 cpuOnly） | Здравствуйте. Меня зовут Профессор Иванов. | CER ≤ 0.3 断言通过（大小写 П/п 一字符差） | 规范化 CER = **0.0** |
+| GigaAM-v3 e2e_rnnt · sherpa-onnx INT8 | Здравствуйте. Меня зовут профессор Иванов. | 与参考文本完全一致 | 规范化 CER = **0.0** |
+
+两种导出在同一输入上输出一致（大小写归一后零差异），符合「同一 checkpoint、两个推理后端」
+的定位。模拟器 RTF（Core ML 0.546 / INT8 0.023）不作为验收数值；模拟器 Core ML 因 MPSGraph
+不可用固定 cpuOnly 运行（见 `docs/PERFORMANCE_TEST.md`）。
 
 ## 已实际执行的验证（2026-09-01，构建机）
 
-在 `xcodebuild` 被 Xcode 许可证阻塞期间，以下与后端对比直接相关的验证**已实际运行并通过**
-（macOS arm64 原生、真实 Core ML）：
-
 - **Log-Mel 前处理一致性**：Core ML FP16 后端的 Swift Log-Mel 提取器与 torchaudio 参考特征
   在 3 组俄语 fixture（2.9 s / 19.6 s / 30 s 截断）上满足 `max err ≤ 2e-3`、`mean err ≤ 1e-5`、
-  超差比例 ≤ 2%，补零列恰为 `log(1e-9)`（见 `CoreMLLogMelGoldenTests`）。
-- **一致性测试的存在性**：`testBackendAgreementWithCoreML`（互为参考的 CER 阈值 0.4）位于独立
-  集成 test plan，与 sherpa-onnx INT8 真实权重的加载/识别/CER ≤ 0.3 测试一起，等待
-  xcodebuild 解锁后在模拟器/真机执行——**尚未运行，故不报告为通过**。
+  超差比例 ≤ 2%，补零列恰为 `log(1e-9)`（见 `CoreMLLogMelGoldenTests`；macOS 原生与 iOS
+  模拟器均已运行通过）。
+- **双后端一致性**：`testBackendAgreementWithCoreML` 已在模拟器上以真实 446 MB / 216 MB
+  权重运行通过（上表），同批 17 项模型集成测试（加载/预热/识别/后端切换互斥/损坏检测/
+  暂停续传/SHA256 门禁）全部通过。

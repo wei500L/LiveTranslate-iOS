@@ -54,6 +54,9 @@ final class ModelInstaller {
 
     /// Download bytes accumulated per disk write.
     nonisolated private static let writeChunkBytes = 262_144
+    /// Progress is driven by *received* bytes, not write batches — a pause
+    /// must be visible in `progress` long before the first 256 KiB lands.
+    nonisolated private static let progressIntervalBytes = 65_536
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -186,25 +189,43 @@ final class ModelInstaller {
             if offset > 0 { try fileHandle.seek(toOffset: UInt64(offset)) }
 
             // AsyncBytes yields one byte at a time; batch into 256 KiB
-            // writes so disk I/O and the progress hop stay reasonable.
+            // writes so disk I/O stays reasonable, while progress tracks
+            // *received* bytes so it advances before the first batch.
             var iterator = bytes.makeAsyncIterator()
             var buffer = [UInt8]()
             buffer.reserveCapacity(Self.writeChunkBytes)
-            while true {
-                if Task.isCancelled { throw CancellationError() }
-                guard let byte = try await iterator.next() else { break }
-                buffer.append(byte)
-                if buffer.count >= Self.writeChunkBytes {
+            var received = offset
+            var nextProgressAt = offset + Self.progressIntervalBytes
+            do {
+                while true {
+                    if Task.isCancelled { throw CancellationError() }
+                    guard let byte = try await iterator.next() else { break }
+                    buffer.append(byte)
+                    received += 1
+                    if buffer.count >= Self.writeChunkBytes {
+                        try fileHandle.write(contentsOf: buffer)
+                        offset += buffer.count
+                        buffer.removeAll(keepingCapacity: true)
+                    }
+                    if received >= nextProgressAt {
+                        await self.reportProgress(base: baseCompleted, fileBytes: received, onProgress: onProgress)
+                        nextProgressAt = received + Self.progressIntervalBytes
+                    }
+                }
+                if !buffer.isEmpty {
                     try fileHandle.write(contentsOf: buffer)
                     offset += buffer.count
-                    await self.reportProgress(base: baseCompleted, fileBytes: offset, onProgress: onProgress)
-                    buffer.removeAll(keepingCapacity: true)
                 }
-            }
-            if !buffer.isEmpty {
-                try fileHandle.write(contentsOf: buffer)
-                offset += buffer.count
                 await self.reportProgress(base: baseCompleted, fileBytes: offset, onProgress: onProgress)
+            } catch {
+                // Pause or network failure: bank everything received so far
+                // — a later resume continues from here instead of
+                // re-downloading bytes already delivered.
+                if !buffer.isEmpty {
+                    try? fileHandle.write(contentsOf: buffer)
+                    offset += buffer.count
+                }
+                throw error
             }
         }
         activeTask = downloadTask

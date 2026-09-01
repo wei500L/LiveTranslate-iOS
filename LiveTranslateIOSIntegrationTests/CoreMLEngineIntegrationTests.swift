@@ -72,9 +72,10 @@ final class CoreMLEngineIntegrationTests: XCTestCase {
         await engine.unload()
     }
 
-    /// 35 s audio is longer than the 30 s window; the engine must still
-    /// return a result (pipeline-level windowing is the coordinator's job,
-    /// but the engine must not crash or truncate catastrophically).
+    /// 35 s audio is longer than the 30 s encoder window. The engine must
+    /// reject it loudly — windowing is the VAD/coordinator layer's job, and
+    /// silently truncating or dropping the tail would lose speech. This
+    /// mirrors the reference export's fixed [1, 64, 2999] encoder input.
     func testLongerThanWindowAudio() async throws {
         try await IntegrationModels.requireInstalled(.coreMLFP16)
         let fixture = try IntegrationFixtures.load(named: "test_ru_35s")
@@ -82,11 +83,16 @@ final class CoreMLEngineIntegrationTests: XCTestCase {
         let engine = GigaAMCoreMLEngine(computePreference: .accuracy)
         try await engine.prepare()
         try await engine.warmup()
-        let result = try await engine.transcribe(
-            samples: fixture.samples, sampleRate: 16_000,
-            segmentStart: 0, segmentEnd: fixture.duration
-        )
-        print("[CoreML] 35s input → \"\(result.text)\"")
+        do {
+            _ = try await engine.transcribe(
+                samples: fixture.samples, sampleRate: 16_000,
+                segmentStart: 0, segmentEnd: fixture.duration
+            )
+            XCTFail("a >30 s segment must be rejected, not silently truncated")
+        } catch ASREngineError.incompatibleInput(let message) {
+            XCTAssertTrue(message.contains("30 s"),
+                          "rejection must name the window contract: \(message)")
+        }
         await engine.unload()
     }
 }

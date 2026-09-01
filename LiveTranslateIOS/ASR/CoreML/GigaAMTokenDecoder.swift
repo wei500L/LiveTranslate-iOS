@@ -1,8 +1,10 @@
 import Foundation
 
 /// Decodes GigaAM token IDs into text using `tokens.json` (the SentencePiece
-/// vocabulary exported as a JSON string array, 1025 entries; index 1024 is
-/// the blank and never appears in a hypothesis).
+/// vocabulary exported as a JSON string array). The pinned Core ML export
+/// (`smkrv/gigaam-v3-e2e-rnnt-coreml`) contains exactly the 1024 real
+/// pieces; the blank (id 1024, the 1025th model output) is implicit and
+/// never appears in a hypothesis.
 ///
 /// Behavior mirrors the reference inference (`example_infer.py`) and the
 /// SentencePiece `decode` the PyTorch model applies:
@@ -28,13 +30,16 @@ final class GigaAMTokenDecoder {
             case .invalidTokensJSON(let detail):
                 return "tokens.json could not be parsed: \(detail)"
             case .unexpectedVocabularySize(let count):
-                return "tokens.json has \(count) entries, expected \(GigaAMTokenDecoder.vocabularySize)"
+                return "tokens.json has \(count) entries, expected \(GigaAMTokenDecoder.blankID) " +
+                    "(blank \(GigaAMTokenDecoder.blankID) is implicit) or \(GigaAMTokenDecoder.vocabularySize)"
             }
         }
     }
 
     init(pieces: [String]) throws {
-        guard pieces.count == Self.vocabularySize else {
+        // 1024: the pinned export (blank implicit). 1025: an export that
+        // includes an explicit blank slot. Anything else is the wrong model.
+        guard pieces.count == Self.blankID || pieces.count == Self.vocabularySize else {
             throw TokenDecoderError.unexpectedVocabularySize(pieces.count)
         }
         self.pieces = pieces

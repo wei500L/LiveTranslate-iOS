@@ -53,6 +53,10 @@ final class SlowHTTPServer: @unchecked Sendable {
     // MARK: - Internals
 
     private func handle(_ connection: NWConnection) {
+        // A listener-provided connection must be started on a queue before
+        // any receive callback fires — without this the request is never
+        // read and the client just times out.
+        connection.start(queue: queue)
         receiveHeaders(connection, buffer: Data())
     }
 
