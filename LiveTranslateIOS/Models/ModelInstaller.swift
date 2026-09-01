@@ -22,7 +22,6 @@ final class ModelInstaller {
     enum InstallerError: LocalizedError, Equatable {
         case diskSpaceLow(neededBytes: Int, availableBytes: Int)
         case unsafePath(String)
-        case cancelled
 
         var errorDescription: String? {
             switch self {
@@ -31,8 +30,6 @@ final class ModelInstaller {
                               Double(needed) / 1_000_000_000, Double(available) / 1_000_000_000)
             case .unsafePath(let path):
                 return "Refusing to install a file with an unsafe path: \(path)"
-            case .cancelled:
-                return String(localized: "Download paused.")
             }
         }
     }
@@ -194,7 +191,7 @@ final class ModelInstaller {
             var buffer = [UInt8]()
             buffer.reserveCapacity(Self.writeChunkBytes)
             while true {
-                if Task.isCancelled { throw InstallerError.cancelled }
+                if Task.isCancelled { throw CancellationError() }
                 guard let byte = try await iterator.next() else { break }
                 buffer.append(byte)
                 if buffer.count >= Self.writeChunkBytes {
@@ -215,8 +212,13 @@ final class ModelInstaller {
 
         do {
             try await downloadTask.value
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            // URLSession reports task cancellation as URLError.cancelled.
+            throw CancellationError()
         } catch is CancellationError {
-            throw InstallerError.cancelled
+            // A pause (or task cancellation) — propagate as CancellationError
+            // so the manager records the paused state, not an error.
+            throw CancellationError()
         }
 
         // Size + hash gate before the file is allowed into the tree.

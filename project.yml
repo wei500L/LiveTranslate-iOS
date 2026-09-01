@@ -72,6 +72,9 @@ targets:
     platform: iOS
     sources:
       - path: LiveTranslateIOSIntegrationTests
+      # Same golden fixtures as the unit-test target (Russian speech +
+      # PyTorch reference transcripts).
+      - path: LiveTranslateIOSTests/Fixtures
     dependencies:
       - target: LiveTranslateIOS
     settings:
