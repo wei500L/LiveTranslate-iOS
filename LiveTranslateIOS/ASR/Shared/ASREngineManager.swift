@@ -47,9 +47,6 @@ final class ASREngineManager {
     private(set) var lastError: String?
     /// True while a live classroom session is running on the loaded engine.
     private(set) var sessionActive = false
-    /// Concurrency gate for load/unload operations.
-    private var loadGate = AsyncSemaphore()
-
     private let settings: SettingsStore
     private let coreMLFactory: @Sendable (CoreMLComputePreference) -> any ASREngine
     private let sherpaFactory: @Sendable (Int) -> any ASREngine
@@ -92,8 +89,9 @@ final class ASREngineManager {
 
         isLoading = true
         lastError = nil
-        await loadGate.wait()
-        defer { loadGate.signal(); isLoading = false }
+        defer { isLoading = false }
+        // Mutual exclusion is guaranteed by the isLoading guard above: every
+        // caller is on the MainActor, so the check-and-set is atomic.
 
         // Rule: never two resident backends. Unload the old one fully.
         if let current = loaded {
@@ -169,20 +167,3 @@ final class ASREngineManager {
     }
 }
 
-/// Minimal async semaphore for the load gate (counting not needed; used as
-/// a mutual-exclusion marker so repeated calls queue politely).
-actor AsyncSemaphore {
-    private var locked = false
-
-    func wait() async {
-        while locked {
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        locked = true
-    }
-
-    func signal() {
-        locked = false
-    }
-}

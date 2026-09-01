@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build, unit tests, hygiene
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # Pinned sherpa-onnx iOS static xcframework (v1.13.7). The framework
+      # is git-ignored; CI fetches and hash-checks it before generating the
+      # Xcode project. No ASR model files are ever downloaded in CI.
+      SHERPA_XCFW_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.7-ios-static.xcframework.zip
+      SHERPA_XCFW_SHA256: a808329c49da521b3af707da2e1a9d5b0a4595b2549ffdc771f2f560f012fd3d
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Fetch sherpa-onnx xcframework (hash-pinned)
+        run: |
+          set -euo pipefail
+          curl -fSL "$SHERPA_XCFW_URL" -o /tmp/sherpa-onnx.xcframework.zip
+          echo "$SHERPA_XCFW_SHA256  /tmp/sherpa-onnx.xcframework.zip" | shasum -a 256 --check
+          unzip -q /tmp/sherpa-onnx.xcframework.zip -d ThirdParty
+          test -d ThirdParty/sherpa-onnx.xcframework
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (generic iOS Simulator)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project LiveTranslateIOS.xcodeproj \
+            -scheme LiveTranslateIOS \
+            -destination 'generic/platform=iOS Simulator' \
+            build | xcbeautify --quiet
+
+      - name: Unit tests (iOS Simulator)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project LiveTranslateIOS.xcodeproj \
+            -scheme LiveTranslateIOS \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            test | xcbeautify --quiet
+
+      - name: No model files committed
+        run: |
+          # No ONNX / Core ML artifacts may ride along in git.
+          bad=$(git ls-files | grep -Ei '\.(onnx|mlpackage|mlmodelc)$|weight\.bin$' || true)
+          if [ -n "$bad" ]; then
+            echo "Model artifacts found in git:"; echo "$bad"; exit 1
+          fi
+          # Nothing oversized either.
+          git ls-files -z | xargs -0 -I{} stat -f "%z {}" | awk '$1 > 3000000 {print "Large file:", $0; bad=1} END {exit bad+0}'
+
+      - name: No API keys in source
+        run: |
+          # Look for obvious credential literals. Allowlist matches that
+          # are keys by name (settings identifiers), not values.
+          if grep -rnE '(sk-[A-Za-z0-9]{20,}|api[_-]?key\s*[:=]\s*"[^"$\{]{8,}")' \
+              --include='*.swift' --include='*.yml' --include='*.py' --include='*.sh' . \
+              | grep -v 'apiKey' | grep -v 'api_key'; then
+            echo "Possible hard-coded credential found."; exit 1
+          fi
+
+      - name: Manifest format check
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          with open("Resources/ModelManifest.json") as fh:
+              m = json.load(fh)
+          assert m["schemaVersion"] == 2, "schemaVersion"
+          assert m["model"]["id"] == "gigaam-v3-e2e-rnnt"
+          assert set(m["backends"]) == {"coreml-fp16", "sherpa-onnx-int8"}
+          for key, backend in m["backends"].items():
+              assert len(backend["revision"]) == 40, f"{key} revision not a commit SHA"
+              assert backend["revision"] not in ("main", "master")
+              assert backend["files"], f"{key} has no files"
+              total = sum(f["bytes"] for f in backend["files"])
+              assert backend["totalDownloadBytes"] == total, f"{key} size sum mismatch"
+              for f in backend["files"]:
+                  assert len(f["sha256"]) == 64 and all(c in "0123456789abcdef" for c in f["sha256"])
+                  assert f["url"].startswith("https://")
+                  assert f"/resolve/{backend['revision']}/" in f["url"], f"{f['path']} not pinned"
+          assert m["runtime"]["sileroVAD"]["sha256"]
+          print("Manifest OK:", len(m["backends"]["coreml-fp16"]["files"]), "coreml files,",
+                len(m["backends"]["sherpa-onnx-int8"]["files"]), "sherpa files")
+          EOF
+
+      - name: No runtime dependency on the legacy desktop project
+        run: |
+          # Source files must not reference the old project's path — the iOS
+          # app is fully independent of it.
+          if grep -rn '/Users/oo/project/LiveTranslate' --include='*.swift' .; then
+            echo "Swift source references the legacy project path."; exit 1
+          fi

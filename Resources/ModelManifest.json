@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 2,
+  "model": {
+    "id": "gigaam-v3-e2e-rnnt",
+    "name": "GigaAM-v3 e2e_rnnt",
+    "revision": "e2e_rnnt",
+    "language": "ru",
+    "license": "MIT",
+    "upstreamRepo": "ai-sage/GigaAM-v3"
+  },
+  "backends": {
+    "coreml-fp16": {
+      "id": "coreml-fp16",
+      "kind": "coreMLFP16",
+      "repo": "smkrv/gigaam-v3-e2e-rnnt-coreml",
+      "revision": "846833ef075fde2a8e50521d093ddb9ed7b7fd45",
+      "files": [
+        {
+          "path": "Source/GigaAMv3Encoder.mlpackage/Manifest.json",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3Encoder.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "6589ff6d3d3f814561449073ee12160bafb9f467c89159dc6a7240ef68235b04"
+        },
+        {
+          "path": "Source/GigaAMv3Encoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3Encoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 419364,
+          "sha256": "f66bd914e5379bcddbbe7ef9d485c7e712443e5f5a880ce98a0cc0aafe3aeeeb"
+        },
+        {
+          "path": "Source/GigaAMv3Encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3Encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 441545792,
+          "sha256": "cacb9c2b41a62b3fcdb3522c0571a3196648dfe39dfb1df9a31969239c8e3877"
+        },
+        {
+          "path": "Source/GigaAMv3DecoderStep.mlpackage/Manifest.json",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3DecoderStep.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "392239871ff24dbc7d1091dbe11982f202d8ce53e3ce9fb2f11cd671881ebbf9"
+        },
+        {
+          "path": "Source/GigaAMv3DecoderStep.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3DecoderStep.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 7367,
+          "sha256": "71194a592055ad6a24ae4c980edcd52a25ea51c079b79f736033d07e00d6dfa5"
+        },
+        {
+          "path": "Source/GigaAMv3DecoderStep.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3DecoderStep.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 2297280,
+          "sha256": "5b23897e619a78cea140dbf3677efc92a58ed7935542047df7d452f03cf98edd"
+        },
+        {
+          "path": "Source/GigaAMv3JointStep.mlpackage/Manifest.json",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3JointStep.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "378654b204d17a89750d807c95aa3bc4e3893bb808ca4c0e2f22259e3b210c42"
+        },
+        {
+          "path": "Source/GigaAMv3JointStep.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3JointStep.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 2916,
+          "sha256": "9fa81aeaf320573eca794c17ad825d4c3ea7219f35414387732994df43a7bec3"
+        },
+        {
+          "path": "Source/GigaAMv3JointStep.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/GigaAMv3JointStep.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 1356098,
+          "sha256": "bbd11afc9f9954dea7ddf860e13e57a24ae908e061c80ac3e8b0b9693fb4886d"
+        },
+        {
+          "path": "Metadata/tokens.json",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/tokens.json",
+          "bytes": 12406,
+          "sha256": "260c932355adc98a7440d49887f72a2fca42256971ad07a4e91265e93859ff69"
+        },
+        {
+          "path": "Metadata/tokenizer.model",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/tokenizer.model",
+          "bytes": 255336,
+          "sha256": "828c12c991019eef952a960661f25a92d6ad279591e2ea466b4aeddf1d20a18a"
+        },
+        {
+          "path": "Metadata/model_info.json",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/model_info.json",
+          "bytes": 248,
+          "sha256": "94c1307cc14f9c4e23068b42ed743154bafc9fab1d2d6979888415adb249b5d7"
+        },
+        {
+          "path": "Metadata/convert_info.json",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/convert_info.json",
+          "bytes": 38,
+          "sha256": "4441cbcc93838917a7d3b7e2e6b71b50118cb5b34b5b1ecaa427474a68ae70b9"
+        },
+        {
+          "path": "Metadata/v3_e2e_rnnt.yaml",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/v3_e2e_rnnt.yaml",
+          "bytes": 1039,
+          "sha256": "8d428173a8d9176ed972900763b5d78360e46ce86f1485727e6992fe0f219466"
+        },
+        {
+          "path": "Metadata/README.md",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/README.md",
+          "bytes": 8164,
+          "sha256": "304e361566208d60454c885ce0e55757db7cf62f8f930450941b1e2244c29349"
+        },
+        {
+          "path": "Metadata/example_infer.py",
+          "url": "https://huggingface.co/smkrv/gigaam-v3-e2e-rnnt-coreml/resolve/846833ef075fde2a8e50521d093ddb9ed7b7fd45/example_infer.py",
+          "bytes": 2768,
+          "sha256": "e817cccb67c856db63f259b5a933a2630254f85a93eef70996ddbe53068ff2f8"
+        }
+      ],
+      "totalDownloadBytes": 445910667,
+      "installedBytes": 445910667,
+      "stagingBytes": 945910667,
+      "minimumFreeDiskBytes": 1300000000,
+      "license": "MIT",
+      "coreMLCompiledCacheVersion": 1
+    },
+    "sherpa-onnx-int8": {
+      "id": "sherpa-onnx-int8",
+      "kind": "sherpaONNXInt8",
+      "repo": "Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx",
+      "revision": "c0acd38c8aeb2bdc04da221bd661ffcdb9645f7d",
+      "files": [
+        {
+          "path": "encoder.int8.onnx",
+          "url": "https://huggingface.co/Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx/resolve/c0acd38c8aeb2bdc04da221bd661ffcdb9645f7d/encoder.int8.onnx",
+          "bytes": 224571327,
+          "sha256": "aa4e9bd1d8f1b30534c0b56d743970be53fd102dba639c2b1cc06e2aa898ada0"
+        },
+        {
+          "path": "decoder.onnx",
+          "url": "https://huggingface.co/Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx/resolve/c0acd38c8aeb2bdc04da221bd661ffcdb9645f7d/decoder.onnx",
+          "bytes": 1159351,
+          "sha256": "ea08443676485385c0dd31d938233bffaed6e52d47d84844c9b568589f1c9b27"
+        },
+        {
+          "path": "joiner.onnx",
+          "url": "https://huggingface.co/Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx/resolve/c0acd38c8aeb2bdc04da221bd661ffcdb9645f7d/joiner.onnx",
+          "bytes": 687791,
+          "sha256": "ade116563dbf66e503b0994efab6b5861412743e52bf31c39fc3fffa3783d5d1"
+        },
+        {
+          "path": "tokens.txt",
+          "url": "https://huggingface.co/Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx/resolve/c0acd38c8aeb2bdc04da221bd661ffcdb9645f7d/tokens.txt",
+          "bytes": 13354,
+          "sha256": "39abae20e692998290c574e606f11a9edef2902a1995463fcff63d1490cf22b7"
+        },
+        {
+          "path": "config.yaml",
+          "url": "https://huggingface.co/Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx/resolve/c0acd38c8aeb2bdc04da221bd661ffcdb9645f7d/config.yaml",
+          "bytes": 1041,
+          "sha256": "d23270a1f327e365ebc4554b7ceee69ac12898e21092c18085151516aa58f91b"
+        }
+      ],
+      "totalDownloadBytes": 226432864,
+      "installedBytes": 226432864,
+      "stagingBytes": 30000000,
+      "minimumFreeDiskBytes": 520000000,
+      "license": "MIT"
+    }
+  },
+  "runtime": {
+    "sherpaOnnxVersion": "1.13.7",
+    "sileroVAD": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+      "bytes": 643854,
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+    }
+  }
+}

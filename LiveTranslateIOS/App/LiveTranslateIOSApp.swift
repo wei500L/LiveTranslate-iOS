@@ -59,7 +59,7 @@ final class AppEnvironment {
         self.engineManager = ASREngineManager(settings: settings)
         self.repository = TranscriptRepository(modelContainer: modelContainer)
         self.modelManager = ModelManager()
-        self.benchmarkRunner = ASRBenchmarkRunner()
+        self.benchmarkRunner = ASRBenchmarkRunner(engineManager: engineManager)
         self.translationService = AppEnvironment.makeTranslationService(
             settings: settings, keychain: keychain
         )
