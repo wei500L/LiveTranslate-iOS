@@ -209,8 +209,6 @@ struct BackendComparisonReport: Codable, Sendable, Equatable {
         return String(format: "%.3f s", value)
     }
 
-    private func fmt(_ value: TimeInterval) -> String { fmt(Double(value)) }
-
     private func mb(_ bytes: Int64) -> String {
         String(format: "%.1f MB", Double(bytes) / 1_000_000)
     }

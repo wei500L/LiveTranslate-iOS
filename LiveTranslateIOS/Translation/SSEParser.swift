@@ -3,9 +3,9 @@ import Foundation
 /// Incremental Server-Sent Events parser for OpenAI-compatible streaming
 /// responses.
 ///
-/// Feed arbitrary text chunks (a chunk may split a line, a multi-byte UTF-8
-/// character is never split because callers feed decoded lines); complete
-/// events are returned as payload strings in arrival order.
+/// Feed arbitrary text chunks (a chunk may split a line or a multi-byte UTF-8
+/// character); complete events are returned as payload strings in arrival
+/// order.
 ///
 /// Handles:
 /// - `data: {...}` lines with optional space after the colon
@@ -14,28 +14,28 @@ import Foundation
 /// - comment lines starting with `:`
 /// - both `\n` and `\r\n` line endings
 /// - a final event without a trailing blank line (via `finish()`)
+///
+/// Line splitting operates on Unicode scalars, not `Character`s: in Swift the
+/// CRLF pair forms a single grapheme cluster, so `firstIndex(of: "\n")` on the
+/// `Character` view never matches a `\r\n`-terminated line.
 struct SSEParser {
     /// Partial line accumulated across chunk boundaries.
-    private var pendingLine = ""
+    private var pendingLine: [Unicode.Scalar] = []
     /// `data:` lines of the event currently being assembled.
     private var eventDataLines: [String] = []
 
     /// Feed one text chunk. Returns the payloads of every event that became
     /// complete within this chunk.
     mutating func feed(_ chunk: String) -> [String] {
-        var work = pendingLine + chunk
-        pendingLine = ""
+        pendingLine.append(contentsOf: chunk.unicodeScalars)
         var payloads: [String] = []
-        while let newline = work.firstIndex(of: "\n") {
-            var line = String(work[..<newline])
-            if line.hasSuffix("\r") { line.removeLast() }
-            work.removeSubrange(work.startIndex...newline)
+        while let newline = pendingLine.firstIndex(of: "\n") {
+            var line = String(String.UnicodeScalarView(pendingLine[..<newline]))
+            if line.hasScalarSuffix("\r") { line.unicodeScalars.removeLast() }
+            pendingLine.removeSubrange(pendingLine.startIndex...newline)
             if let payload = processLine(line) {
                 payloads.append(payload)
             }
-        }
-        if !work.isEmpty {
-            pendingLine = String(work)
         }
         return payloads
     }
@@ -45,9 +45,9 @@ struct SSEParser {
     mutating func finish() -> [String] {
         var payloads: [String] = []
         if !pendingLine.isEmpty {
-            var line = pendingLine
-            if line.hasSuffix("\r") { line.removeLast() }
-            pendingLine = ""
+            var line = String(String.UnicodeScalarView(pendingLine))
+            pendingLine = []
+            if line.hasScalarSuffix("\r") { line.unicodeScalars.removeLast() }
             if let payload = processLine(line) {
                 payloads.append(payload)
             }
@@ -82,5 +82,13 @@ struct SSEParser {
         let payload = eventDataLines.joined(separator: "\n")
         eventDataLines = []
         return payload
+    }
+}
+
+private extension String {
+    /// Scalar-level suffix check — `hasSuffix("\r")` is false for a string
+    /// whose last grapheme cluster is the CRLF pair.
+    func hasScalarSuffix(_ scalar: Unicode.Scalar) -> Bool {
+        unicodeScalars.last == scalar
     }
 }

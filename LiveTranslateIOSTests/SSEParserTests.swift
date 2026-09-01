@@ -4,14 +4,11 @@ import XCTest
 final class SSEParserTests: XCTestCase {
     func testWholeStreamAtOnce() {
         var parser = SSEParser()
-        let stream = """
-        data: {"choices":[{"delta":{"content":"Привет"}}]}
-
-        data: {"choices":[{"delta":{"content":" мир"}}]}
-
-        data: [DONE]
-
-        """
+        // Built with explicit terminators: a multiline literal cannot end in
+        // a newline, which would silently drop the blank line after [DONE].
+        let stream = "data: {\"choices\":[{\"delta\":{\"content\":\"Привет\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{\"content\":\" мир\"}}]}\n\n"
+            + "data: [DONE]\n\n"
         let payloads = parser.feed(stream)
         XCTAssertEqual(payloads, [
             "{\"choices\":[{\"delta\":{\"content\":\"Привет\"}}]}",

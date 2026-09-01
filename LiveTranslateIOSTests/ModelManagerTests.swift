@@ -69,7 +69,9 @@ final class ModelManagerTests: XCTestCase {
     func testVerifyDetectsCorruptedFile() async throws {
         let data = Data("encoder weights".utf8)
         let url = tempDir.appendingPathComponent("encoder.bin")
-        try Data("corrupted weights".utf8).write(to: url)
+        // Same byte count, different content: size checks pass, the hash
+        // gate must catch it.
+        try Data("encoder xeights".utf8).write(to: url)
         let file = makeFileInfo(path: "encoder.bin", data: data)
 
         let failure = await ModelIntegrityVerifier.verify(file: file, at: url)

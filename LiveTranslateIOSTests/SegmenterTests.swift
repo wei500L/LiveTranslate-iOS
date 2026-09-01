@@ -239,10 +239,21 @@ final class SegmenterTests: XCTestCase {
 
     // MARK: - Overlap dedup (text level)
 
-    func testDeduplicateOverlapRemovesExactSeam() {
+    func testDeduplicateOverlapRemovesPhraseSeam() {
+        // A genuine replay spans a word boundary and is removed.
+        XCTAssertEqual(
+            SpeechSegmenter.deduplicateOverlap(previous: "Привет мир как", next: "мир как дела"),
+            "дела"
+        )
+    }
+
+    func testDeduplicateOverlapKeepsSingleWordSeam() {
+        // A single repeated word is genuinely ambiguous (the teacher may be
+        // opening the next sentence with the previous one's keyword) — the
+        // reference implementation deliberately keeps it.
         XCTAssertEqual(
             SpeechSegmenter.deduplicateOverlap(previous: "Привет мир", next: "мир как дела"),
-            "как дела"
+            "мир как дела"
         )
     }
 
@@ -254,7 +265,7 @@ final class SegmenterTests: XCTestCase {
     }
 
     func testDeduplicateOverlapShortMatchIsKept() {
-        // 3 shared characters < 4 minimum: not evidence of a seam.
+        // 3 shared characters: below the minimum overlap.
         XCTAssertEqual(
             SpeechSegmenter.deduplicateOverlap(previous: "дом", next: "дом"),
             "дом"
@@ -271,8 +282,17 @@ final class SegmenterTests: XCTestCase {
     func testDeduplicateOverlapPrefersLongestMatch() {
         // The longest exact seam wins, not a shorter prefix of it.
         XCTAssertEqual(
-            SpeechSegmenter.deduplicateOverlap(previous: "abc дефг", next: "дефг xyz"),
+            SpeechSegmenter.deduplicateOverlap(previous: "abc дефг hij", next: "дефг hij xyz"),
             "xyz"
+        )
+    }
+
+    func testDeduplicateOverlapIgnoresTailPunctuationAndCase() {
+        // The committed tail's trailing punctuation never begins the next
+        // recognition; matching itself is case-insensitive.
+        XCTAssertEqual(
+            SpeechSegmenter.deduplicateOverlap(previous: "Сегодня Большая Лекция.", next: "большая лекция продолжается"),
+            "продолжается"
         )
     }
 

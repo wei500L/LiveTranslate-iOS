@@ -212,6 +212,7 @@ private struct GoldenFixture {
 
     struct Meta: Decodable {
         let wav: String
+        let featuresFile: String?
         let frames: Int
         let computedFrames: Int
     }
@@ -235,9 +236,14 @@ private struct GoldenFixture {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let meta = try decoder.decode(Meta.self, from: Data(contentsOf: metaURL))
-        let wavURL = try resourceURL(name: name, ext: "wav")
+        // `meta.wav` is authoritative: the >30 s fixture's golden features
+        // were computed against its window-truncated twin, not the original.
+        let wavName = (meta.wav as NSString).deletingPathExtension
+        let wavURL = try resourceURL(name: wavName, ext: "wav")
         let samples = try TestWAVReader.readMono16kSamples(at: wavURL)
-        let goldenURL = try resourceURL(name: "\(name).logmel", ext: "f32")
+        let goldenFile = meta.featuresFile ?? "\(name).logmel.f32"
+        let goldenURL = try resourceURL(
+            name: (goldenFile as NSString).deletingPathExtension, ext: "f32")
         let goldenData = try Data(contentsOf: goldenURL)
         let golden = goldenData.withUnsafeBytes { raw in
             Array(raw.bindMemory(to: Float.self))

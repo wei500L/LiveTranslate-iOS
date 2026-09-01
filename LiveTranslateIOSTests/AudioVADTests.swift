@@ -8,31 +8,40 @@ final class AudioVADTests: XCTestCase {
     // MARK: - Resampler: 48 kHz → 16 kHz
 
     func testResample48kTo16kRampIsExact() {
-        // A linear ramp resamples exactly: every output sample lands on an
-        // input sample and linear interpolation is exact on linear input.
+        // The reference project resamples with `np.linspace(0, n-1, n_out)`
+        // (endpoint-stretched positions), not a pure 3:1 rate-ratio grid:
+        // for 4800→1600 the step is 4799/1599, not exactly 3. A linear ramp
+        // is reproduced exactly under linear interpolation, so the output
+        // must be exactly the ramp sampled at those stretched positions —
+        // first sample hits input[0], last hits input[4799].
         let input = (0..<4800).map { Float($0) }
         let output = AudioResampler.resample(input, from: 48_000, to: 16_000)
         XCTAssertEqual(output.count, 1600)
+        let step = 4799.0 / 1599.0
         for i in 0..<output.count {
-            XCTAssertEqual(output[i], Float(i * 3), accuracy: 1e-4,
-                           "output[\(i)] should hit input[\(i * 3)] exactly")
+            XCTAssertEqual(Double(output[i]), Double(i) * step, accuracy: 1e-2,
+                           "output[\(i)] should hit the ramp at stretched position \(Double(i) * step)")
         }
+        XCTAssertEqual(output.first!, 0, accuracy: 1e-6)
+        XCTAssertEqual(output.last!, 4799, accuracy: 1e-3)
     }
 
     func testResample48kTo16kSinePreservesFrequency() {
-        // A 440 Hz sine at 48 kHz downsampled to 16 kHz must stay 440 Hz:
-        // compare zero crossings against a directly synthesized reference.
+        // A 440 Hz sine at 48 kHz downsampled to 16 kHz stays 440 Hz when
+        // sampled at the same stretched positions the reference uses — the
+        // remaining difference from a directly synthesized reference is the
+        // linear-interpolation error alone.
         let frequency: Float = 440
         let input = (0..<4800).map { i in
             sin(2 * .pi * frequency * Float(i) / 48_000)
         }
         let output = AudioResampler.resample(input, from: 48_000, to: 16_000)
+        let step = 4799.0 / 1599.0
         let reference = (0..<1600).map { i in
-            sin(2 * .pi * frequency * Float(i) / 16_000)
+            sin(2 * .pi * frequency * Float(Double(i) * step) / 48_000)
         }
-        // Linear interpolation error at these rates is tiny but nonzero.
         for i in 0..<output.count {
-            XCTAssertEqual(output[i], reference[i], accuracy: 0.02)
+            XCTAssertEqual(output[i], reference[i], accuracy: 0.005)
         }
     }
 

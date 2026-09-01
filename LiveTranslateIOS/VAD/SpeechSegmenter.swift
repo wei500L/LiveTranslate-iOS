@@ -310,23 +310,53 @@ final class SpeechSegmenter: @unchecked Sendable {
     ///
     /// A forced split repeats 300 ms of audio in the next segment, so ASR
     /// may repeat the tail of the previous utterance at the head of the
-    /// next. Only an *exact* character-level match of at least
-    /// `minOverlap` characters between previous tail and next head is
-    /// removed — shorter matches and near-misses are kept so a teacher's
-    /// legitimate repetition is never deleted.
-    static func deduplicateOverlap(previous: String, next: String, minOverlap: Int = 4) -> String {
+    /// next. Following the reference implementation
+    /// (`_strip_committed_overlap` in the desktop project):
+    ///
+    /// - matching is case-insensitive, and the previous tail is matched with
+    ///   trailing punctuation/whitespace removed;
+    /// - only the *longest* exact match is considered;
+    /// - an overlap only counts when it **spans a word boundary** — a single
+    ///   repeated word is genuinely ambiguous (a teacher opening the next
+    ///   sentence with the previous one's keyword), and deleting a real word
+    ///   is unrecoverable while a duplicated one is easy to read past.
+    ///
+    /// This is a Russian-classroom app; the reference's unspaced-script
+    /// (Han/kana) branch has no Cyrillic analogue and is not ported.
+    static func deduplicateOverlap(previous: String, next: String, minOverlap: Int = 3) -> String {
         guard !previous.isEmpty, !next.isEmpty else { return next }
-        let prev = Array(previous)
-        let nxt = Array(next)
-        let maxPossible = Swift.min(prev.count, nxt.count)
-        guard maxPossible >= minOverlap else { return next }
-        for length in stride(from: maxPossible, through: minOverlap, by: -1) {
-            let tail = String(prev[(prev.count - length)...])
-            let head = String(nxt[..<length])
-            if tail == head {
-                return String(nxt[length...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+
+        // Committed text may end in punctuation that never begins the next
+        // recognition — strip it from the tail before matching.
+        var tail = previous
+        while let last = tail.unicodeScalars.last, Self.echoBoundary.contains(last) {
+            tail.unicodeScalars.removeLast()
+        }
+        guard !tail.isEmpty else { return next }
+
+        let loweredTail = Array(tail.lowercased())
+        let loweredNext = Array(next.lowercased())
+        // lowercased() can change the Character count in exotic locales;
+        // the index math below assumes it did not.
+        guard loweredNext.count == Array(next).count else { return next }
+
+        let maxCheck = min(loweredTail.count, loweredNext.count)
+        guard maxCheck >= minOverlap else { return next }
+
+        for length in stride(from: maxCheck, through: minOverlap, by: -1) {
+            let head = String(loweredNext[..<length])
+            guard head == String(loweredTail[(loweredTail.count - length)...]) else { continue }
+            // Longest match found; every shorter one is its prefix, so if
+            // this one is not substantial none of them are.
+            let trimmedHead = head.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedHead.contains(" ") || trimmedHead.contains("\t") else { return next }
+            return String(next.dropFirst(length))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return next
     }
+
+    /// Punctuation and spacing that ends a committed sentence but never
+    /// begins the next recognition (mirrors `_ECHO_BOUNDARY`).
+    private static let echoBoundary = CharacterSet(charactersIn: " \t\n。．.!！?？,，、;；:：\"'）)》」』…")
 }

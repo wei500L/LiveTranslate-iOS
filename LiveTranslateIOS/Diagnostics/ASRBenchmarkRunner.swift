@@ -336,7 +336,6 @@ final class ASRBenchmarkRunner {
                 throw NSError(domain: "BenchmarkAudio", code: 4,
                               userInfo: [NSLocalizedDescriptionKey: "Cannot allocate converted buffer"])
             }
-            let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat)
             guard let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat) else {
                 throw NSError(domain: "BenchmarkAudio", code: 5,
                               userInfo: [NSLocalizedDescriptionKey: "Cannot create audio converter"])

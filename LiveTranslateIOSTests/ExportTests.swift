@@ -10,8 +10,9 @@ final class ExportTests: XCTestCase {
         var components = DateComponents()
         components.year = y; components.month = mo; components.day = d
         components.hour = h; components.minute = mi; components.second = s
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
+        // The exporter's formatters use the local timezone; build the
+        // fixture dates in the same one so expectations hold on any host.
+        let calendar = Calendar(identifier: .gregorian)
         return calendar.date(from: components)!
     }
 
@@ -144,7 +145,17 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(entries[0]["originalText"] as? String, "Здравствуйте, начнём лекцию.")
         XCTAssertEqual(entries[0]["translatedText"] as? String, "大家好，我们开始上课。")
         XCTAssertNil(entries[1]["translatedText"])
-        XCTAssertEqual(object["startTime"] as? String, "2026-09-01T10:00:00Z")
+        // `start` is built in the local timezone (the markdown formatters
+        // use it); the JSON stamp must carry the same instant in UTC ISO
+        // form, whatever the host timezone is.
+        let stamp = try XCTUnwrap(object["startTime"] as? String)
+        XCTAssertTrue(stamp.hasSuffix("Z"), "expected a UTC stamp, got \(stamp)")
+        let parsed = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: stamp),
+            "startTime is not a parseable ISO-8601 instant: \(stamp)"
+        )
+        XCTAssertEqual(parsed.timeIntervalSinceReferenceDate, start.timeIntervalSinceReferenceDate,
+                       accuracy: 1.0)
     }
 
     // MARK: - File naming

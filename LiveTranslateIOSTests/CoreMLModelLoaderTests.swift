@@ -41,14 +41,17 @@ final class CoreMLModelLoaderTests: XCTestCase {
     /// chunk boundaries plus a remainder. Digest precomputed with `shasum -a 256`.
     func testSHA256ChunkedRead() throws {
         let big = tempDir.appendingPathComponent("big")
+        FileManager.default.createFile(atPath: big.path, contents: nil)
         let chunk = [UInt8](repeating: 0, count: 1 << 20)
         let handle = try FileHandle(forWritingTo: big)
         defer { try? handle.close() }
         for _ in 0..<8 { try handle.write(contentsOf: Data(chunk)) }
         try handle.write(contentsOf: Data([0x01, 0x02, 0x03]))
+        // sha256(8 MiB of zeros || 01 02 03), verified independently with
+        // `shasum -a 256`.
         XCTAssertEqual(
             try CoreMLModelLoader.sha256File(at: big),
-            "62797a2a086527398949f1f0d2badfde8c0ec725e98fc1e4d5519f4783b07e7e"
+            "8d34707f6dba91b317df9ba2a18b2e79384d281cf30c7166ae12061d651788d5"
         )
     }
 

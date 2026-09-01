@@ -180,7 +180,10 @@ final class ModelManager {
             CompiledCoreMLCache.removeAll()
         }
         let root = try ModelPaths.backendRoot(kind)
-        try FileManager.default.removeItem(at: root)
+        // Deleting a backend that is not installed is a no-op, not an error.
+        if FileManager.default.fileExists(atPath: root.path) {
+            try FileManager.default.removeItem(at: root)
+        }
         states[kind] = BackendInstallState(kind: kind, version: state(kind).version)
         refreshStates()
     }
