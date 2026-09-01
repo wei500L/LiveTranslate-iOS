@@ -240,7 +240,7 @@ enum TranscriptExporter {
         return formatter
     }()
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    private nonisolated(unsafe) static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

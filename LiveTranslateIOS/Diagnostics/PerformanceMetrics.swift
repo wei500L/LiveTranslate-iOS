@@ -49,7 +49,7 @@ enum PerformanceMetrics {
 
     static func osVersionString() -> String {
         let os = ProcessInfo.processInfo.operatingSystemVersion
-        return "iOS \(os.versionMajor).\(os.versionMinor).\(os.versionPatchVersion)"
+        return "iOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
     }
 
     static func megabytes(_ bytes: Int64) -> Double {

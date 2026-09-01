@@ -25,6 +25,9 @@ final class ModelManager {
         var downloadProgress: Double?
         var isVerifying = false
         var isCompiling = false
+        /// True after an explicit user pause (download stopped, partial
+        /// progress kept); cleared on resume / new install / completion.
+        var isPaused = false
         var error: String?
 
         var id: ASRBackendKind { kind }
@@ -49,8 +52,10 @@ final class ModelManager {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.manifest = try? ModelManifest.load()
-        for backend in manifest?.backends.values ?? [] {
-            states[backend.kind]?.version = backend.revision
+        if let manifest {
+            for backend in manifest.backends.values {
+                states[backend.kind]?.version = backend.revision
+            }
         }
         // Silero VAD is shared by both backends and installed on demand by
         // the VAD layer; ModelManager only tracks the two ASR backends.
@@ -99,6 +104,7 @@ final class ModelManager {
         }
         pendingInstall = nil
         states[kind]?.error = nil
+        states[kind]?.isPaused = false
         states[kind]?.downloadProgress = state(kind).isInstalled ? 1.0 : 0.0
         installTask = Task { [weak self] in
             guard let self else { return }
@@ -110,6 +116,7 @@ final class ModelManager {
                 }
                 self.states[kind]?.downloadProgress = nil
                 self.states[kind]?.isCompiling = false
+                self.states[kind]?.isPaused = false
                 self.refreshStates()
                 // Post-install full verification.
                 await self.reverify(kind)
@@ -119,6 +126,7 @@ final class ModelManager {
             } catch {
                 self.states[kind]?.downloadProgress = nil
                 self.states[kind]?.isCompiling = false
+                self.states[kind]?.isPaused = false
                 self.states[kind]?.error = error.localizedDescription
                 Self.logger.error("Install \(kind.rawValue, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             }
@@ -127,6 +135,7 @@ final class ModelManager {
 
     func pause(_ kind: ASRBackendKind) {
         installer.pause()
+        states[kind]?.isPaused = true
         states[kind]?.downloadProgress = installer.progress.fraction
     }
 
@@ -215,9 +224,10 @@ final class ModelManager {
 
     private func installedBytes(_ info: ModelManifest.BackendInfo, at root: URL) -> Int {
         info.files.reduce(0) { sum, file in
-            let size = (try? FileManager.default.attributesOfItem(
+            let attributes = try? FileManager.default.attributesOfItem(
                 atPath: root.appendingPathComponent(file.path).path
-            )?[.size] as? Int) ?? 0
+            )
+            let size = (attributes?[.size] as? Int) ?? 0
             return sum + size
         }
     }

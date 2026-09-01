@@ -48,6 +48,12 @@ final class ASRBenchmarkRunner {
     private(set) var phase: Phase = .idle
     private(set) var report: BackendComparisonReport?
 
+    /// True while a comparison is in flight (any phase except idle).
+    var isRunning: Bool {
+        if case .idle = phase { return false }
+        return true
+    }
+
     /// Engine control injected by the app (backed by ASREngineManager).
     /// Loading must raise an error on failure — never silently substitute
     /// the other backend.
@@ -331,6 +337,10 @@ final class ASRBenchmarkRunner {
                               userInfo: [NSLocalizedDescriptionKey: "Cannot allocate converted buffer"])
             }
             let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat)
+            guard let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat) else {
+                throw NSError(domain: "BenchmarkAudio", code: 5,
+                              userInfo: [NSLocalizedDescriptionKey: "Cannot create audio converter"])
+            }
             var error: NSError?
             var inputExhausted = false
             converter.convert(to: outBuffer, error: &error) { _, inputStatus in

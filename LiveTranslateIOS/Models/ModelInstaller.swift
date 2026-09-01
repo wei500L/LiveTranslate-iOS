@@ -52,8 +52,11 @@ final class ModelInstaller {
     private(set) var currentFile: String?
     private(set) var isCompiling = false
 
-    private var activeTask: Task<Void, Never>?
+    private var activeTask: Task<Void, any Error>?
     private let session: URLSession
+
+    /// Download bytes accumulated per disk write.
+    nonisolated private static let writeChunkBytes = 262_144
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -65,7 +68,7 @@ final class ModelInstaller {
     /// again to retry. `onProgress` fires on the main actor as bytes land.
     func install(
         _ backend: ModelManifest.BackendInfo,
-        onProgress: @escaping (Progress) -> Void = { _ in }
+        onProgress: @escaping @MainActor (Progress) -> Void = { _ in }
     ) async throws {
         precondition(!isInstalling, "installer is not reentrant")
         isInstalling = true
@@ -105,7 +108,7 @@ final class ModelInstaller {
             isCompiling = true
             try await CompiledCoreMLCache.compileAll(cacheVersion: cacheVersion)
         }
-        logger.info("Install complete for \(backend.kind.rawValue, privacy: .public)")
+        Self.logger.info("Install complete for \(backend.kind.rawValue, privacy: .public)")
     }
 
     /// Pause the in-flight install. Partial files stay on disk for resume.
@@ -113,7 +116,7 @@ final class ModelInstaller {
         guard isInstalling, !isPaused else { return }
         isPaused = true
         activeTask?.cancel()
-        logger.info("Install paused at \(self.progress.fraction, privacy: .public)")
+        Self.logger.info("Install paused at \(self.progress.fraction, privacy: .public)")
     }
 
     // MARK: - Internals
@@ -125,7 +128,7 @@ final class ModelInstaller {
         let available = values.volumeAvailableCapacityForImportantUsage ?? 0
         guard available >= backend.minimumFreeDiskBytes else {
             throw InstallerError.diskSpaceLow(
-                neededBytes: backend.minimumFreeDiskBytes, availableBytes: available
+                neededBytes: backend.minimumFreeDiskBytes, availableBytes: Int(available)
             )
         }
     }
@@ -134,7 +137,7 @@ final class ModelInstaller {
         _ file: ModelManifest.BackendInfo.FileInfo,
         to destination: URL,
         backend: ModelManifest.BackendInfo,
-        onProgress: @escaping (Progress) -> Void
+        onProgress: @escaping @MainActor (Progress) -> Void
     ) async throws {
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
@@ -170,7 +173,7 @@ final class ModelInstaller {
         // Detached: file writes must stay off the main actor; progress hops
         // back through `reportProgress`.
         let downloadTask = Task.detached(priority: .userInitiated) {
-            let (bytes, response) = try await session.bytes(for: request)
+            let (bytes, response) = try await self.session.bytes(for: request)
             var offset = resumeOffset
             // A server that ignores Range answers 200 with the full body.
             if let http = response as? HTTPURLResponse, resumeOffset > 0, http.statusCode == 200 {
@@ -185,12 +188,25 @@ final class ModelInstaller {
             defer { try? fileHandle.close() }
             if offset > 0 { try fileHandle.seek(toOffset: UInt64(offset)) }
 
+            // AsyncBytes yields one byte at a time; batch into 256 KiB
+            // writes so disk I/O and the progress hop stay reasonable.
             var iterator = bytes.makeAsyncIterator()
+            var buffer = [UInt8]()
+            buffer.reserveCapacity(Self.writeChunkBytes)
             while true {
                 if Task.isCancelled { throw InstallerError.cancelled }
-                guard let chunk = try await iterator.next() else { break }
-                try fileHandle.write(contentsOf: chunk)
-                offset += chunk.count
+                guard let byte = try await iterator.next() else { break }
+                buffer.append(byte)
+                if buffer.count >= Self.writeChunkBytes {
+                    try fileHandle.write(contentsOf: buffer)
+                    offset += buffer.count
+                    await self.reportProgress(base: baseCompleted, fileBytes: offset, onProgress: onProgress)
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            if !buffer.isEmpty {
+                try fileHandle.write(contentsOf: buffer)
+                offset += buffer.count
                 await self.reportProgress(base: baseCompleted, fileBytes: offset, onProgress: onProgress)
             }
         }
@@ -216,7 +232,7 @@ final class ModelInstaller {
     private func reportProgress(
         base: Int,
         fileBytes: Int,
-        onProgress: @escaping (Progress) -> Void
+        onProgress: @escaping @MainActor (Progress) -> Void
     ) {
         progress.completedBytes = base + fileBytes
         onProgress(progress)

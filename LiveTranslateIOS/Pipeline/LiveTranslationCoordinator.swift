@@ -44,8 +44,10 @@ final class LiveTranslationCoordinator {
     private(set) var state = PipelineState()
     private(set) var entries: [LiveTranscriptItem] = []
     private(set) var isNetworkAvailable = true
-    /// Input level for the waveform (0…1), updated ~10 Hz.
-    private(set) var micLevel: Float = 0
+    /// Rolling input-level history for the waveform, newest last, ~10 Hz,
+    /// values clamped to [0, 1].
+    private(set) var audioLevels: [Float] = []
+    private static let levelHistoryCount = 64
     private(set) var isPaused = false
 
     // MARK: - Dependencies
@@ -101,6 +103,14 @@ final class LiveTranslationCoordinator {
 
     deinit {
         pathMonitor.cancel()
+    }
+
+    /// Append one waveform sample, trimming to the rolling window.
+    private func appendLevel(_ level: Float) {
+        audioLevels.append(level)
+        if audioLevels.count > Self.levelHistoryCount {
+            audioLevels.removeFirst(audioLevels.count - Self.levelHistoryCount)
+        }
     }
 
     // MARK: - Session control
@@ -351,9 +361,9 @@ final class LiveTranslationCoordinator {
 
             levelCounter += 1
             if levelCounter % 3 == 0 {
-                let level = chunk.rms
+                let level = min(max(chunk.rms, 0), 1)
                 Task { @MainActor [weak self] in
-                    self?.micLevel = level
+                    self?.appendLevel(level)
                 }
             }
             // Leading-edge speech indication only (no per-window chatter).

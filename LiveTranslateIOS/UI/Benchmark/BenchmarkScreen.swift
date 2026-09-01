@@ -86,7 +86,11 @@ struct BenchmarkScreen: View {
                             .textSelection(.enabled)
                     }
                     Button(String(localized: "Export Markdown")) { export(named: "comparison", content: report.markdown(), ext: "md") }
-                    Button(String(localized: "Export JSON")) { export(named: "comparison", content: report.json(), ext: "json") }
+                    Button(String(localized: "Export JSON")) {
+                        if let data = try? report.jsonData(), let text = String(data: data, encoding: .utf8) {
+                            export(named: "comparison", content: text, ext: "json")
+                        }
+                    }
                 }
             }
         }
@@ -143,7 +147,16 @@ struct BenchmarkScreen: View {
     // MARK: - Run / export
 
     private func run() async {
-        await environment.benchmarkRunner.run(items: items)
+        let computeDescription: String
+        switch environment.settings.coreMLCompute {
+        case .accuracy: computeDescription = "cpuAndGPU"
+        case .neuralEngineExperimental: computeDescription = "cpuAndNeuralEngine"
+        }
+        _ = try? await environment.benchmarkRunner.run(
+            items: items,
+            coreMLComputeDescription: computeDescription,
+            onnxThreadCount: environment.settings.onnxThreads
+        )
     }
 
     private func export(named: String, content: String, ext: String) {

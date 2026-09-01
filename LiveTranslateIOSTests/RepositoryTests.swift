@@ -9,7 +9,7 @@ final class RepositoryTests: XCTestCase {
 
     override func setUp() async throws {
         let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
-        let config = ModelConfiguration(schema: schema, isInMemory: true)
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         container = try ModelContainer(for: schema, configurations: [config])
         repository = TranscriptRepository(
             container: container,

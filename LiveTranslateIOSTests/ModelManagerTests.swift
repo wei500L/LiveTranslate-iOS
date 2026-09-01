@@ -25,7 +25,7 @@ final class ModelManagerTests: XCTestCase {
         let payload = Data("LiveTranslate".utf8)
         try payload.write(to: url)
 
-        let expected = SHA256.hash(data: payload).hexString
+        let expected = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
         let computed = try await ModelIntegrityVerifier.sha256(of: url)
         XCTAssertEqual(computed, expected)
     }
@@ -42,7 +42,7 @@ final class ModelManagerTests: XCTestCase {
         }
         try data.write(to: url)
 
-        let expected = SHA256.hash(data: data).hexString
+        let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let computed = try await ModelIntegrityVerifier.sha256(of: url)
         XCTAssertEqual(computed, expected)
     }
@@ -52,7 +52,7 @@ final class ModelManagerTests: XCTestCase {
             path: path,
             url: "https://example.invalid/\(path)",
             bytes: data.count,
-            sha256: SHA256.hash(data: data).hexString
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         )
     }
 

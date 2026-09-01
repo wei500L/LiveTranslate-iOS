@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import AVFoundation
 
 /// View model for the Live tab. Wraps the pipeline coordinator (which owns
 /// audio/VAD/ASR/translation orchestration) and the model manager, exposing
@@ -24,7 +25,15 @@ final class LiveViewModel {
         environment?.coordinator.state ?? PipelineState()
     }
     var entries: [SubtitleEntryViewModel] {
-        environment?.coordinator.entries ?? []
+        environment?.coordinator.entries.map {
+            SubtitleEntryViewModel(
+                sequenceID: $0.sequenceID,
+                startOffset: $0.startOffset,
+                originalText: $0.originalText,
+                translatedText: $0.translatedText,
+                translationStatus: $0.translationStatus
+            )
+        } ?? []
     }
     var audioLevels: [Float] {
         environment?.coordinator.audioLevels ?? []
@@ -41,9 +50,16 @@ final class LiveViewModel {
         }
     }
 
-    /// Mic route as reported by the coordinator (e.g. "iPhone mic", "AirPods").
+    /// Mic route straight from the audio session (e.g. "iPhone mic",
+    /// "AirPods"), falling back to a generic label when no input is routed.
     var micRoute: String {
-        environment?.coordinator.audioRouteDescription ?? String(localized: "Microphone")
+        let inputs = AVAudioSession.sharedInstance().currentRoute.inputs
+        if let input = inputs.first {
+            return input.portType == .builtInMic
+                ? String(localized: "iPhone mic")
+                : input.portName
+        }
+        return String(localized: "Microphone")
     }
 
     var controlMode: ControlMode {

@@ -38,10 +38,10 @@ struct RecordsScreen: View {
         guard !trimmed.isEmpty else { return sessions }
         return sessions.filter { session in
             session.title.localizedCaseInsensitiveContains(trimmed)
-                || (session.entries?.contains {
+                || session.entries.contains {
                     $0.originalText.localizedCaseInsensitiveContains(trimmed)
                         || ($0.translatedText ?? "").localizedCaseInsensitiveContains(trimmed)
-                } ?? false)
+                }
         }
     }
 

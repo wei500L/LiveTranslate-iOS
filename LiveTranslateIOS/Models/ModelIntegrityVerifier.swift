@@ -35,7 +35,7 @@ struct ModelIntegrityVerifier: Sendable {
             while let block = try handle.read(upToCount: blockSize), !block.isEmpty {
                 hasher.update(data: block)
             }
-            return hasher.finalize().hexString
+            return hasher.finalize().map { String(format: "%02x", $0) }.joined()
         }.value
     }
 

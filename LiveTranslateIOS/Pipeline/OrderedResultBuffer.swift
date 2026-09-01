@@ -11,7 +11,7 @@ import Foundation
 /// A `final class` (not struct) on purpose: the internal state must be shared
 /// across every submitting task behind one lock. Value semantics would hand
 /// each task its own copy and silently break ordering.
-final class OrderedResultBuffer<Element: Sendable>: Sendable {
+final class OrderedResultBuffer<Element: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var order: [Int] = []
     private var pending: [Int: Element] = [:]

@@ -12,11 +12,6 @@ struct SessionDetailView: View {
     @State private var isRetranslating = false
     @State private var shareItem: SharedFile?
 
-/// URL wrapper so `.sheet(item:)` can present the share sheet.
-struct SharedFile: Identifiable {
-    let id = UUID()
-    let url: URL
-}
     @State private var titleEditing = false
 
     var body: some View {
@@ -265,4 +260,11 @@ struct LabeledRow: View {
         }
         .font(.subheadline)
     }
+}
+
+/// URL wrapper so `.sheet(item:)` can present the share sheet.
+/// File-scope (not nested) so BenchmarkScreen can use it too.
+struct SharedFile: Identifiable {
+    let id = UUID()
+    let url: URL
 }

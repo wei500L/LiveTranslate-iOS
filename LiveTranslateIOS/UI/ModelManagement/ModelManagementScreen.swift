@@ -15,9 +15,9 @@ struct ModelManagementScreen: View {
                     state: environment.modelManager.states[kind],
                     sessionActive: environment.engineManager.sessionActive,
                     isPreferred: environment.settings.preferredBackend == kind,
-                    onInstall: { Task { await environment.modelManager.install(kind) } },
-                    onPause: { Task { await environment.modelManager.pause(kind) } },
-                    onResume: { Task { await environment.modelManager.resume(kind) } },
+                    onInstall: { environment.modelManager.install(kind) },
+                    onPause: { environment.modelManager.pause(kind) },
+                    onResume: { environment.modelManager.resume(kind) },
                     onDelete: { confirmDelete = kind },
                     onReverify: { Task { await environment.modelManager.reverify(kind) } },
                     onSetPreferred: { environment.settings.preferredBackend = kind }
@@ -37,10 +37,8 @@ struct ModelManagementScreen: View {
         ) {
             if let kind = confirmDelete {
                 Button(String(localized: "Delete"), role: .destructive) {
-                    Task {
-                        await environment.modelManager.delete(kind)
-                        await environment.modelManager.refreshStates()
-                    }
+                    try? environment.modelManager.delete(kind)
+                    environment.modelManager.refreshStates()
                     confirmDelete = nil
                 }
             }
