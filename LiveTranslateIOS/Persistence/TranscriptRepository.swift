@@ -16,6 +16,20 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func deleteAllSessions() throws
     func storageBytes() -> Int
     func markAbnormalTerminations() throws
+
+    // MARK: Cloud-sync support
+    /// Hook receiving every persisted mutation (the sync service builds
+    /// its outbox operations from these notifications).
+    var mutationObserver: (any TranscriptMutationObserving)? { get set }
+    func renameSession(_ session: ClassroomSession, to title: String) throws
+    func recordServerVersion(entityType: SyncEntityType, entityID: UUID, version: Int) throws
+    func applyRemoteSession(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func applyRemoteEntry(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteSessionByID(_ id: UUID) throws
+    func deleteEntryByID(_ id: UUID) throws
+    /// Snapshot of every locally-stored entity as outbox operations, in
+    /// batches (used by the first-upload flow).
+    func syncSnapshots(batchSize: Int, progress: ((Int, Int) -> Void)?) -> [SyncOutboxItem]
 }
 
 struct SessionDraft: Sendable {

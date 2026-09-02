@@ -27,6 +27,10 @@ final class ClassroomSession {
     var abnormalTermination: Bool
     var createdAt: Date
     var updatedAt: Date
+    /// Cloud-sync metadata: server version of the last acknowledged push
+    /// (0 = never synced). Added with a default so existing stores
+    /// lightweight-migrate in place.
+    var serverVersion: Int
 
     @Relationship(deleteRule: .cascade, inverse: \TranscriptEntry.session)
     var entries: [TranscriptEntry]
@@ -46,7 +50,8 @@ final class ClassroomSession {
         computePreference: String = "",
         translationModel: String = "",
         entryCount: Int = 0,
-        abnormalTermination: Bool = false
+        abnormalTermination: Bool = false,
+        serverVersion: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -65,6 +70,7 @@ final class ClassroomSession {
         self.abnormalTermination = abnormalTermination
         self.createdAt = .now
         self.updatedAt = .now
+        self.serverVersion = serverVersion
         self.entries = []
     }
 }
@@ -87,6 +93,8 @@ final class TranscriptEntry {
     var asrRTF: Double
     var translationLatency: TimeInterval?
     var createdAt: Date
+    /// Cloud-sync metadata (0 = never synced).
+    var serverVersion: Int
 
     var session: ClassroomSession?
 
@@ -102,7 +110,8 @@ final class TranscriptEntry {
         asrBackend: String,
         asrLatency: TimeInterval = 0,
         asrRTF: Double = 0,
-        translationLatency: TimeInterval? = nil
+        translationLatency: TimeInterval? = nil,
+        serverVersion: Int = 0
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -117,6 +126,7 @@ final class TranscriptEntry {
         self.asrRTF = asrRTF
         self.translationLatency = translationLatency
         self.createdAt = .now
+        self.serverVersion = serverVersion
     }
 }
 

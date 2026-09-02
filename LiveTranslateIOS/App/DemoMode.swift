@@ -106,7 +106,9 @@ extension AppEnvironment {
             coordinator: demoCoordinator,
             translationService: service,
             translationServiceBox: box,
-            bookmarks: BookmarkStore(defaults: defaults, repository: repository)
+            bookmarks: BookmarkStore(defaults: defaults, repository: repository),
+            // Demo mode never touches the production sync server.
+            cloudSync: nil
         )
 
         environment.flow.demoGreeting = "晚上好，学习者"

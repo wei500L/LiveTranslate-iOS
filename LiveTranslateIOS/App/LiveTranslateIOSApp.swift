@@ -56,6 +56,10 @@ final class AppEnvironment {
     let flow = AppFlow()
     /// UI-layer bookmarks & session favorites (UserDefaults-backed, IDs only).
     let bookmarks: BookmarkStore
+    /// Private-server cloud sync. Nil when the build configures no server
+    /// URL (and always nil in the Debug demo environment — demo mode never
+    /// touches the production server). One instance per app lifetime.
+    let cloudSync: CloudSyncService?
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -129,6 +133,21 @@ final class AppEnvironment {
             settings: settings,
             translationServiceProvider: { box.get() }
         )
+        // Cloud sync only when this build carries a server URL (Debug →
+        // local/LAN server, Release → the HTTPS production domain). The
+        // service observes repository + bookmark mutations from here on.
+        let bookmarks = BookmarkStore(repository: repository)
+        let cloudSync: CloudSyncService?
+        if let baseURL = ServerConfiguration.baseURL {
+            cloudSync = CloudSyncService(
+                baseURL: baseURL,
+                keychain: keychain,
+                repository: repository,
+                bookmarks: bookmarks
+            )
+        } else {
+            cloudSync = nil
+        }
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -141,7 +160,8 @@ final class AppEnvironment {
             coordinator: coordinator,
             translationService: service,
             translationServiceBox: box,
-            bookmarks: BookmarkStore(repository: repository)
+            bookmarks: bookmarks,
+            cloudSync: cloudSync
         )
     }
 
@@ -159,7 +179,8 @@ final class AppEnvironment {
         coordinator: any LiveTranslationCoordinating,
         translationService: any TranslationService,
         translationServiceBox: TranslationServiceBox,
-        bookmarks: BookmarkStore
+        bookmarks: BookmarkStore,
+        cloudSync: CloudSyncService?
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -173,6 +194,7 @@ final class AppEnvironment {
         self.translationService = translationService
         self.translationServiceBox = translationServiceBox
         self.bookmarks = bookmarks
+        self.cloudSync = cloudSync
     }
 
     static func databaseURL() -> URL {
@@ -267,19 +289,11 @@ final class AppEnvironment {
     }
 
     /// Mark sessions that never got a clean `endTime` as abnormally
-    /// terminated — the app was killed mid-classroom.
+    /// terminated — the app was killed mid-classroom. Routed through the
+    /// repository so the mutation observer (cloud sync) learns about the
+    /// recovered rows.
     func reconcileAbnormalTerminations() {
-        let context = ModelContext(modelContainer)
-        let descriptor = FetchDescriptor<ClassroomSession>(
-            predicate: #Predicate { $0.endTime == nil }
-        )
-        guard let unfinished = try? context.fetch(descriptor), !unfinished.isEmpty else { return }
-        for session in unfinished {
-            session.abnormalTermination = true
-            session.endTime = session.updatedAt
-            session.duration = session.endTime!.timeIntervalSince(session.startTime)
-        }
-        try? context.save()
+        try? repository.markAbnormalTerminations()
     }
 }
 

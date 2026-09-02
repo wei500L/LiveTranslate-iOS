@@ -1,0 +1,50 @@
+import Foundation
+
+/// Conflict rules mirrored from the server's protocol v1
+/// (services/conflict_resolver.py). The same rules must hold on both
+/// sides; a future Web client reuses the server's copy.
+enum SyncConflictResolver {
+    /// Merges a push item with the server record returned by a `conflict`
+    /// result and produces the re-submission payload. Rules:
+    ///
+    /// - Russian original: server wins unless server's is empty (the
+    ///   original is immutable after first write).
+    /// - Everything else: the local (newer-intent) payload wins.
+    /// - `deleted` server records never resurrect: the caller drops the
+    ///   local entity instead.
+    static func mergedPayload(
+        entityType: SyncEntityType, local: SyncPushPayloadDTO,
+        server: SyncServerRecordDTO
+    ) -> SyncPushPayloadDTO? {
+        guard !server.deleted else { return nil }
+
+        var merged = local
+        switch entityType {
+        case .entry:
+            if let serverRussian = server.russianText, !serverRussian.isEmpty {
+                merged.russianText = serverRussian
+            }
+            // The server's chinese may be newer than ours when it lost a
+            // race; prefer ours only when non-empty, else keep server's.
+            if (merged.chineseText ?? "").isEmpty, let serverChinese = server.chineseText {
+                merged.chineseText = serverChinese
+            }
+        case .session:
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+        case .bookmark, .favorite:
+            break // boolean states: local intent wins on equal versions
+        }
+        return merged
+    }
+
+    /// Decides whether a remote change should overwrite the local row.
+    /// Returns false when the local row is newer (higher serverVersion) —
+    /// the pull apply loop uses this to skip no-op writes.
+    static func shouldApplyRemote(
+        localServerVersion: Int, remoteServerVersion: Int
+    ) -> Bool {
+        remoteServerVersion > localServerVersion
+    }
+}

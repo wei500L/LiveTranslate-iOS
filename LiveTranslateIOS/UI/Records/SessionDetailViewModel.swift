@@ -172,10 +172,9 @@ final class SessionDetailViewModel {
 
     func rename(to rawTitle: String) {
         guard let session else { return }
-        let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        session.title = trimmed
-        session.updatedAt = .now
+        // Through the repository (not direct model mutation) so the write
+        // is saved deterministically and the cloud-sync layer is notified.
+        try? environment?.repository.renameSession(session, to: rawTitle)
     }
 
     func copyTranscript() {

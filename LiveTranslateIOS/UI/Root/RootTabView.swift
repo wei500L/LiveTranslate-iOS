@@ -9,6 +9,7 @@ import SwiftUI
 /// (转写 / 笔记 / 书签 / 搜索).
 struct RootTabView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -54,9 +55,17 @@ struct RootTabView: View {
         .task {
             environment.reconcileAbnormalTerminations()
             environment.modelManager.refreshStates()
+            environment.cloudSync?.start()
             #if DEBUG
             environment.presentDemoLaunchScreenIfNeeded()
             #endif
+        }
+        // Returning to the foreground is a sync trigger: anything that
+        // accumulated while the app was backgrounded flushes now.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                environment.cloudSync?.syncNow()
+            }
         }
     }
 

@@ -47,6 +47,7 @@ struct SettingsScreen: View {
             vadSection
             translationSection
             dataSection
+            cloudSection
             aboutSection
         }
         .navigationTitle(String(localized: "我的"))
@@ -375,6 +376,34 @@ struct SettingsScreen: View {
             get: { environment.settings.saveRawAudio },
             set: { environment.settings.saveRawAudio = $0 }
         )
+    }
+
+    // MARK: - Cloud sync
+
+    /// 云端同步 entry: real status chip from the live service (nil service
+    /// → 仅保存在本机). The detail page holds sign-in and the sync controls.
+    private var cloudSection: some View {
+        Section {
+            NavigationLink {
+                CloudSyncSettingsView()
+            } label: {
+                HStack {
+                    Text(String(localized: "云端同步"))
+                    Spacer()
+                    if let sync = environment.cloudSync {
+                        StatusChip(text: sync.phase.statusText, tint: sync.phase.tint)
+                    } else {
+                        Text(String(localized: "仅保存在本机"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text(String(localized: "Cloud sync"))
+        } footer: {
+            Text(String(localized: "通过你自己的云端服务器在设备间同步课堂记录；不使用 iCloud。语音音频永不离开本机。"))
+        }
     }
 
     // MARK: - About

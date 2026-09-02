@@ -14,6 +14,9 @@ settings:
     # Simulator builds need no signing identity; device builds are done by
     # the user with their own team selected in Xcode.
     CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: "YES"
+    # Ad-hoc signing on the simulator keeps entitlements embedded (with the
+    # default "iPhone Developer" identity and no team they get stripped).
+    CODE_SIGN_IDENTITY[sdk=iphonesimulator*]: "-"
     DEVELOPMENT_TEAM: ""
 
 targets:
@@ -51,12 +54,32 @@ targets:
           # hosts (Ollama / LM Studio / vLLM on the LAN). Arbitrary loads
           # remain blocked; public endpoints must use HTTPS.
           NSAllowsLocalNetworking: true
+        # Private sync server base URL (expanded from the per-config build
+        # setting below). Empty in Release until a real HTTPS domain is
+        # configured — never a guessed placeholder domain.
+        CloudSyncServerURL: $(CLOUD_SYNC_SERVER_URL)
+    entitlements:
+      path: LiveTranslateIOS/LiveTranslateIOS.entitlements
+      properties:
+        # Sign in with Apple. Requires an Apple Developer team + capability
+        # for device builds; simulator builds compile without it.
+        com.apple.developer.applesignin: [Default]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: false
         ENABLE_PREVIEWS: "YES"
+      configs:
+        # Debug points at the local development server (run uvicorn on
+        # 127.0.0.1:8000); plain HTTP is allowed for local networking via
+        # the scoped ATS exception above. Release stays EMPTY until the
+        # production HTTPS domain is configured — sync then shows
+        # 仅保存在本机 instead of guessing an address.
+        Debug:
+          CLOUD_SYNC_SERVER_URL: http://127.0.0.1:8000/v1
+        Release:
+          CLOUD_SYNC_SERVER_URL: ""
 
   LiveTranslateIOSTests:
     type: bundle.unit-test

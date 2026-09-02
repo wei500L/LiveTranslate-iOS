@@ -167,6 +167,19 @@ struct RecordsScreen: View {
         HStack {
             LTSectionHeader(title: "全部课堂")
             Spacer()
+            // Restrained cloud-sync marker: only pending uploads or a
+            // failure are worth a line here — a synced state stays silent.
+            if let sync = environment.cloudSync, sync.isSignedIn {
+                if sync.pendingUploadCount > 0 {
+                    Text("待同步 \(sync.pendingUploadCount)")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.textTertiary)
+                } else if let error = sync.lastError {
+                    Text("部分内容同步失败")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.warning)
+                }
+            }
             // Only meaningful once something is actually on disk (fresh
             // installs and the in-memory demo store report zero).
             if viewModel.storageBytes > 0 {

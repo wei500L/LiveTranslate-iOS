@@ -67,12 +67,44 @@ final class BookmarkStore {
     /// Versioned on-disk record (v2: IDs only). `migration` is nil for
     /// records written before the resumable migration existed — those
     /// stores already ran the one-shot migration, so they count as
-    /// completed.
+    /// completed. `*Versions` (added with the cloud sync) default to
+    /// empty when absent, so older records decode unchanged.
     private struct StoreRecord: Codable {
         var version = 2
         var entryBookmarks: [EntryBookmark] = []
         var favoriteSessionIDs: [UUID] = []
         var migration: MigrationProgress?
+        var bookmarkVersions: [String: Int] = [:]
+        var favoriteVersions: [String: Int] = [:]
+
+        enum CodingKeys: String, CodingKey {
+            case version, entryBookmarks, favoriteSessionIDs, migration
+            case bookmarkVersions, favoriteVersions
+        }
+
+        init(
+            entryBookmarks: [EntryBookmark] = [],
+            favoriteSessionIDs: [UUID] = [],
+            migration: MigrationProgress? = nil,
+            bookmarkVersions: [String: Int] = [:],
+            favoriteVersions: [String: Int] = [:]
+        ) {
+            self.entryBookmarks = entryBookmarks
+            self.favoriteSessionIDs = favoriteSessionIDs
+            self.migration = migration
+            self.bookmarkVersions = bookmarkVersions
+            self.favoriteVersions = favoriteVersions
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 2
+            entryBookmarks = try container.decodeIfPresent([EntryBookmark].self, forKey: .entryBookmarks) ?? []
+            favoriteSessionIDs = try container.decodeIfPresent([UUID].self, forKey: .favoriteSessionIDs) ?? []
+            migration = try container.decodeIfPresent(MigrationProgress.self, forKey: .migration)
+            bookmarkVersions = try container.decodeIfPresent([String: Int].self, forKey: .bookmarkVersions) ?? [:]
+            favoriteVersions = try container.decodeIfPresent([String: Int].self, forKey: .favoriteVersions) ?? [:]
+        }
     }
 
     /// Legacy v1 record — decode-only, for the resumable migration below.
@@ -100,6 +132,26 @@ final class BookmarkStore {
     /// repository reads succeed (e.g. the Bookmarks tab reload).
     private(set) var legacyMigration: MigrationProgress?
 
+    // MARK: Cloud sync
+
+    /// A local toggle the sync service should upload. The payload carries
+    /// the server version of the target row (0 = never synced).
+    enum SyncChange {
+        case bookmark(sessionID: UUID, entryID: UUID, isBookmarked: Bool, version: Int)
+        case favorite(sessionID: UUID, isFavorite: Bool, version: Int)
+    }
+
+    /// Cloud-sync hook: fires on user-driven bookmark/favorite changes.
+    /// Remote-applied changes (below) do NOT fire it.
+    var syncObserver: ((SyncChange) -> Void)?
+    /// True while remote changes are being applied (re-entrancy guard for
+    /// `syncObserver`).
+    var isApplyingRemote = false
+    /// Last acknowledged server version per bookmarked entry / favorited
+    /// session (drives push baseVersions).
+    private var bookmarkVersions: [UUID: Int] = [:]
+    private var favoriteVersions: [UUID: Int] = [:]
+
     init(
         defaults: UserDefaults = .standard,
         repository: (any ClassroomRepositoryProtocol)? = nil
@@ -117,6 +169,12 @@ final class BookmarkStore {
             entryBookmarks = record.entryBookmarks
             favoriteSessionIDs = Set(record.favoriteSessionIDs)
             legacyMigration = record.migration ?? MigrationProgress(state: .completed)
+            bookmarkVersions = record.bookmarkVersions.reduce(into: [:]) { dict, pair in
+                if let id = UUID(uuidString: pair.key) { dict[id] = pair.value }
+            }
+            favoriteVersions = record.favoriteVersions.reduce(into: [:]) { dict, pair in
+                if let id = UUID(uuidString: pair.key) { dict[id] = pair.value }
+            }
         } else {
             // No v2 record yet: favorites migrate one-shot (a plain string
             // array that cannot fail partially); entry bookmarks start the
@@ -237,15 +295,21 @@ final class BookmarkStore {
     /// Toggle a bookmark by stable entry ID; returns the new state.
     @discardableResult
     func toggleBookmark(sessionID: UUID, entryID: UUID) -> Bool {
+        let newState: Bool
         if let index = entryBookmarks.firstIndex(where: { $0.entryID == entryID }) {
             entryBookmarks.remove(at: index)
-            persist()
-            return false
+            newState = false
+        } else {
+            entryBookmarks.append(EntryBookmark(sessionID: sessionID, entryID: entryID))
+            entryBookmarks.sort { $0.createdAt < $1.createdAt }
+            newState = true
         }
-        entryBookmarks.append(EntryBookmark(sessionID: sessionID, entryID: entryID))
-        entryBookmarks.sort { $0.createdAt < $1.createdAt }
         persist()
-        return true
+        syncObserver?(.bookmark(
+            sessionID: sessionID, entryID: entryID,
+            isBookmarked: newState, version: bookmarkVersions[entryID] ?? 0
+        ))
+        return newState
     }
 
     /// Remove a bookmark by record (bookmarks list action).
@@ -263,14 +327,77 @@ final class BookmarkStore {
     /// Toggle favorite; returns the new state.
     @discardableResult
     func toggleFavorite(_ sessionID: UUID) -> Bool {
+        let newState: Bool
         if favoriteSessionIDs.contains(sessionID) {
             favoriteSessionIDs.remove(sessionID)
-            persist()
-            return false
+            newState = false
+        } else {
+            favoriteSessionIDs.insert(sessionID)
+            newState = true
         }
-        favoriteSessionIDs.insert(sessionID)
         persist()
-        return true
+        syncObserver?(.favorite(
+            sessionID: sessionID, isFavorite: newState,
+            version: favoriteVersions[sessionID] ?? 0
+        ))
+        return newState
+    }
+
+    // MARK: - Cloud sync (remote apply + version bookkeeping)
+
+    /// Applies a remotely-synced bookmark state. Guarded by
+    /// `isApplyingRemote` so it never re-enters the sync observer. A
+    /// bookmark whose owning session cannot be determined (`sessionID`
+    /// nil — only possible for orphaned server records) is skipped: the
+    /// record-keyed UI cannot place it, and the version is still recorded
+    /// so a later local toggle pushes the right base version.
+    func applyRemoteBookmark(
+        sessionID: UUID?, entryID: UUID, isBookmarked: Bool, version: Int
+    ) {
+        isApplyingRemote = true
+        defer { isApplyingRemote = false }
+        let had = entryBookmarks.contains { $0.entryID == entryID }
+        if isBookmarked, !had, let sessionID {
+            entryBookmarks.append(EntryBookmark(sessionID: sessionID, entryID: entryID))
+            entryBookmarks.sort { $0.createdAt < $1.createdAt }
+        } else if !isBookmarked && had {
+            entryBookmarks.removeAll { $0.entryID == entryID }
+        }
+        if version > 0 { bookmarkVersions[entryID] = version }
+        persist()
+    }
+
+    /// Applies a remotely-synced favorite state.
+    func applyRemoteFavorite(sessionID: UUID, isFavorite: Bool, version: Int) {
+        isApplyingRemote = true
+        defer { isApplyingRemote = false }
+        if isFavorite {
+            favoriteSessionIDs.insert(sessionID)
+        } else {
+            favoriteSessionIDs.remove(sessionID)
+        }
+        if version > 0 { favoriteVersions[sessionID] = version }
+        persist()
+    }
+
+    /// Records the server version acknowledged for a pushed bookmark.
+    func recordRemoteVersion(entryID: UUID, version: Int) {
+        bookmarkVersions[entryID] = version
+        persist()
+    }
+
+    func recordRemoteFavoriteVersion(sessionID: UUID, version: Int) {
+        favoriteVersions[sessionID] = version
+        persist()
+    }
+
+    /// Server version backing the next push of this bookmark (0 = new).
+    func serverVersion(forBookmark entryID: UUID) -> Int {
+        bookmarkVersions[entryID] ?? 0
+    }
+
+    func serverVersion(forFavorite sessionID: UUID) -> Int {
+        favoriteVersions[sessionID] ?? 0
     }
 
     // MARK: - Maintenance
@@ -303,7 +430,13 @@ final class BookmarkStore {
             entryBookmarks: entryBookmarks,
             favoriteSessionIDs: favoriteSessionIDs
                 .sorted { $0.uuidString < $1.uuidString },
-            migration: legacyMigration
+            migration: legacyMigration,
+            bookmarkVersions: Dictionary(
+                uniqueKeysWithValues: bookmarkVersions.map { ($0.key.uuidString, $0.value) }
+            ),
+            favoriteVersions: Dictionary(
+                uniqueKeysWithValues: favoriteVersions.map { ($0.key.uuidString, $0.value) }
+            )
         )
         if let data = try? JSONEncoder().encode(record) {
             defaults.set(data, forKey: Self.storeKey)
