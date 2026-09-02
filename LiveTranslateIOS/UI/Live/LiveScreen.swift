@@ -8,8 +8,16 @@ import SwiftUI
 struct LiveScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var viewModel = LiveViewModel()
+    /// Owned by the environment (one per coordinator session) so the
+    /// in-classroom UI state survives collapsing and re-opening the
+    /// classroom — never recreated while a session runs, released when it
+    /// ends. Already attached to the environment when handed in.
+    private let viewModel: LiveViewModel
     @State private var showEndConfirmation = false
+
+    init(viewModel: LiveViewModel) {
+        self.viewModel = viewModel
+    }
 
     var body: some View {
         ZStack {
@@ -26,7 +34,17 @@ struct LiveScreen: View {
         }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(viewModel.isRunning)
-        .task { viewModel.attach(environment) }
+        .task(id: viewModel.state.phase) {
+            // The error banner's 切换到另一后端 button must reflect a real
+            // disk-backed install check, refreshed whenever the phase
+            // changes into an error state.
+            switch viewModel.state.phase {
+            case .backendError, .modelNotInstalled:
+                await viewModel.refreshOtherBackendAvailability()
+            default:
+                break
+            }
+        }
         .confirmationDialog(
             "结束这堂课？",
             isPresented: $showEndConfirmation,
@@ -384,7 +402,10 @@ struct LiveScreen: View {
     // MARK: - Actions
 
     private func endSession() async {
-        await viewModel.stop()
+        // Stops the coordinator and releases the session's presentation
+        // view model (the finished view reads straight from the
+        // coordinator afterwards).
+        await environment.endLiveSession()
         LTHaptics.success()
     }
 }

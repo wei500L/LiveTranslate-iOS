@@ -53,6 +53,14 @@ protocol TranslationService: Sendable {
     /// Whether an endpoint + model + key are configured.
     var isConfigured: Bool { get async }
 
+    /// Synchronous, I/O-free configuration check. The **single source of
+    /// truth** for "a usable service is configured": presentation adapters
+    /// (home readiness, live-classroom banner, the pipeline's dispatch-time
+    /// triage) all consult this, so they can never disagree with each other
+    /// when settings change. The API key itself stays inside the service —
+    /// views only ever see this Bool.
+    var isConfiguredNow: Bool { get }
+
     /// Translate one request. Network failures, timeouts, 429 and 5xx come
     /// back as `.retryable`; auth and request-shape errors as `.fatal`.
     func translate(_ request: TranslationRequest) async -> TranslationOutcome

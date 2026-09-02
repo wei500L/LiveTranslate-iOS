@@ -98,7 +98,7 @@ final class ModelInstaller {
             }
 
             currentFile = (file.path as NSString).lastPathComponent
-            try await downloadFile(file, to: destination, backend: backend, onProgress: onProgress)
+            try await downloadFile(file, to: destination, onProgress: onProgress)
         }
 
         if backend.kind == .coreMLFP16 {
@@ -109,6 +109,39 @@ final class ModelInstaller {
             try await CompiledCoreMLCache.compileAll(cacheVersion: cacheVersion)
         }
         Self.logger.info("Install complete for \(backend.kind.rawValue, privacy: .public)")
+    }
+
+    /// Install the shared Silero VAD runtime model. Both ASR backends need
+    /// it before a classroom can start, so every backend install runs this
+    /// first — otherwise a fresh install could report the ASR backend ready
+    /// while the classroom would die at VAD initialization. Verified against
+    /// the manifest hash; downloaded only when missing or corrupt.
+    func ensureRuntimeVAD(_ manifest: ModelManifest) async throws {
+        guard let destination = try? ModelPaths.vadModelURL() else { return }
+        let vad = manifest.runtime.sileroVAD
+        let file = ModelManifest.BackendInfo.FileInfo(
+            path: "vad/silero_vad.onnx",
+            url: vad.url,
+            bytes: vad.bytes,
+            sha256: vad.sha256
+        )
+        guard ModelIntegrityVerifier.isSafePath(file.path) else {
+            throw InstallerError.unsafePath(file.path)
+        }
+        // Already installed and hash-verified: nothing to do.
+        if FileManager.default.fileExists(atPath: destination.path),
+           await ModelIntegrityVerifier.verify(file: file, at: destination) == nil {
+            return
+        }
+
+        isInstalling = true
+        isPaused = false
+        isCompiling = false
+        progress = Progress(completedBytes: 0, totalBytes: vad.bytes)
+        defer { isInstalling = false; currentFile = nil }
+        currentFile = "silero_vad.onnx"
+        try await downloadFile(file, to: destination) { _ in }
+        Self.logger.info("Silero VAD runtime model installed")
     }
 
     /// Pause the in-flight install. Partial files stay on disk for resume.
@@ -136,7 +169,6 @@ final class ModelInstaller {
     private func downloadFile(
         _ file: ModelManifest.BackendInfo.FileInfo,
         to destination: URL,
-        backend: ModelManifest.BackendInfo,
         onProgress: @escaping @MainActor (Progress) -> Void
     ) async throws {
         try FileManager.default.createDirectory(

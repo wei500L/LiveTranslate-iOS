@@ -161,7 +161,7 @@ final class LiveViewModel {
     /// "wants translation but not configured" is what shows the
     /// 前往设置 banner; the disabled case shows nothing.
     var isTranslationConfigured: Bool {
-        environment?.settings.isTranslationConfigured ?? false
+        environment?.isTranslationConfigured ?? false
     }
 
     /// True while speech is being collected but no entry has landed yet
@@ -284,20 +284,36 @@ final class LiveViewModel {
 
     /// True when the error state offers an escape to the other installed
     /// backend (explicit user action only — never an automatic switch).
+    /// `otherBackendIsInstalled` is set by `refreshOtherBackendAvailability()`
+    /// (awaited from the live screen's task); false means "not proven
+    /// installed", in which case the banner's button stays hidden and the
+    /// 切换动作 is never offered for a backend that cannot load.
     var showsSwitchToOtherBackend: Bool {
         guard state.phase == .backendError || state.phase == .modelNotInstalled else { return false }
-        return otherInstalledBackend != nil
+        return otherBackendIsInstalled
     }
 
     private var otherInstalledBackend: ASRBackendKind? {
         guard let environment else { return nil }
         let preferred = environment.settings.preferredBackend
         let other: ASRBackendKind = preferred == .coreMLFP16 ? .sherpaONNXInt8 : .coreMLFP16
-        // Whether the other backend is installed is only knowable via the
-        // async manifest check; expose the switch whenever an error leaves
-        // the classroom unusable and let the action verify.
         return other
     }
+
+    /// Real install check for the other backend. Call before presenting
+    /// the switch affordance (the banner consults this on appear).
+    @MainActor
+    func refreshOtherBackendAvailability() async {
+        guard let environment, let other = otherInstalledBackend else {
+            otherBackendIsInstalled = false
+            return
+        }
+        otherBackendIsInstalled = await environment.engineManager.isInstalled(other)
+    }
+
+    /// Backing storage for `showsSwitchToOtherBackend` after the async
+    /// check runs; false until proven installed (never a fake "ready").
+    private var otherBackendIsInstalled = false
 
     /// Retry starting with the currently preferred backend (after an error
     /// left the classroom unusable). Never switches backends implicitly —
@@ -307,11 +323,15 @@ final class LiveViewModel {
     }
 
     /// Switch to the other backend and restart listening. Bound to a
-    /// user-initiated button only.
+    /// user-initiated button only; re-verified against disk before the
+    /// settings change so the button never silently no-ops.
     func switchToOtherInstalledBackend() async {
         guard let environment, let other = otherInstalledBackend else { return }
         let installed = await environment.engineManager.isInstalled(other)
-        guard installed else { return }
+        guard installed else {
+            otherBackendIsInstalled = false
+            return
+        }
         environment.settings.preferredBackend = other
         await environment.coordinator.start(title: sessionTitle)
     }

@@ -331,6 +331,11 @@ struct SettingsScreen: View {
     private func saveAPIKey() {
         let key = apiKeyInput.trimmingCharacters(in: .whitespaces)
         try? environment.keychain.set(key, forKey: AppEnvironment.apiKeychainKey)
+        // The translator snapshots the key at construction, so a fresh
+        // service must be built the moment the stored key changes —
+        // otherwise "Test connection" (and live translation) would keep
+        // probing with the previous, possibly nil, key.
+        environment.refreshTranslationService()
     }
 
     private func testConnection() async {

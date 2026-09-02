@@ -27,6 +27,9 @@ final class HomeViewModel {
         case modelManagement
         /// Deep link into the system Settings app when mic is denied.
         case systemSettings
+        /// Translation not configured (or unreachable) — route to the
+        /// 我的 tab where the translation API section lives.
+        case translationSettings
     }
 
     struct SessionSummary: Identifiable {
@@ -60,6 +63,9 @@ final class HomeViewModel {
     var dailyMinutes: [Double] = []
     var todayTotalSeconds: TimeInterval = 0
     var weekSessionCount = 0
+    /// Presentation override for the greeting line (Debug UI demo only;
+    /// nil in production keeps the real time-of-day greeting).
+    var greetingOverride: String?
 
     // MARK: - Lifecycle
 
@@ -71,15 +77,22 @@ final class HomeViewModel {
         guard let environment else { return }
 
         // Permission state (not granted yet = still requestable, so
-        // "denied" is the only red state).
-        let permission = AVAudioApplication.shared.recordPermission
-        micAuthorized = permission == .granted
+        // "denied" is the only red state). The demo environment may
+        // short-circuit this so readiness stays deterministic without
+        // touching AVAudioApplication.
+        if environment.capabilities.assumesMicrophoneAuthorized {
+            micAuthorized = true
+        } else {
+            let permission = AVAudioApplication.shared.recordPermission
+            micAuthorized = permission == .granted
+        }
 
         // Language resources: whichever backend the user prefers, plus the
-        // "anything installed" signal for the degraded banner.
-        async let coreML = environment.engineManager.isInstalled(.coreMLFP16)
-        async let sherpa = environment.engineManager.isInstalled(.sherpaONNXInt8)
-        let (coreMLInstalled, sherpaInstalled) = await (coreML, sherpa)
+        // "anything installed" signal for the degraded banner. Sequential
+        // awaits — the existential engine manager must not cross into a
+        // child task.
+        let coreMLInstalled = await environment.engineManager.isInstalled(.coreMLFP16)
+        let sherpaInstalled = await environment.engineManager.isInstalled(.sherpaONNXInt8)
         anyBackendInstalled = coreMLInstalled || sherpaInstalled
         preferredBackendInstalled = environment.settings.preferredBackend == .coreMLFP16
             ? coreMLInstalled
@@ -119,14 +132,17 @@ final class HomeViewModel {
         micAuthorized && preferredBackendInstalled && translationConfigured
     }
 
-    /// Translation service is configured when base URL + model are set
-    /// (local servers such as Ollama need no API key, so the key is not
-    /// part of readiness). Same rule as `SettingsStore.isTranslationConfigured`.
+    /// Translation service readiness. Single source of truth is the current
+    /// translator's `TranslatorConfig.isConfigured` (base URL + model set;
+    /// local servers such as Ollama need no API key, so the key is not part
+    /// of readiness) — exposed synchronously through the environment's
+    /// presentation adapter so UI and pipeline can never disagree.
     var translationConfigured: Bool {
-        environment?.settings.isTranslationConfigured ?? false
+        environment?.isTranslationConfigured ?? false
     }
 
     var greeting: String {
+        if let greetingOverride { return greetingOverride }
         let hour = Calendar.current.component(.hour, from: .now)
         switch hour {
         case 5..<11: return "早上好"
@@ -164,13 +180,16 @@ final class HomeViewModel {
             action: nil
         ))
 
+        // Names the user's current ASR runtime choice (准确度优先/速度优先)
+        // so the row answers "which backend am I on", not just "installed?".
+        let backendTitle = environment.settings.preferredBackend.userTitle
         let resourcesDetail: String
         let resourcesState: ReadinessItem.State
         if preferredBackendInstalled {
-            resourcesDetail = "本地模式 · 转写可用"
+            resourcesDetail = "本地模式 · \(backendTitle) · 转写可用"
             resourcesState = .ok
         } else if anyBackendInstalled {
-            resourcesDetail = "当前偏好模式未安装，可前往语言资源管理切换"
+            resourcesDetail = "当前识别模式（\(backendTitle)）未安装，可前往语言资源管理切换"
             resourcesState = .warning
         } else {
             resourcesDetail = "语言资源未准备好，需要先下载"
@@ -195,8 +214,8 @@ final class HomeViewModel {
         let translationDetail: String
         if translationConfigured {
             translationDetail = environment.coordinator.isNetworkAvailable
-                ? "云端翻译 · 已连接"
-                : "云端翻译 · 当前无网络"
+                ? "云端翻译 · 已配置"
+                : "本地转录可用，翻译等待网络恢复"
             items.append(ReadinessItem(
                 id: "translation",
                 title: "翻译服务",
@@ -208,9 +227,9 @@ final class HomeViewModel {
             items.append(ReadinessItem(
                 id: "translation",
                 title: "翻译服务",
-                detail: "未配置 · 课堂仅显示俄语原文",
+                detail: "未配置 · 可进行俄语本地转录",
                 state: .warning,
-                action: nil
+                action: .translationSettings
             ))
         }
 

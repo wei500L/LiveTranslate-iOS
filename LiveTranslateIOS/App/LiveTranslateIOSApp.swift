@@ -3,7 +3,15 @@ import SwiftData
 
 @main
 struct LiveTranslateIOSApp: App {
+    #if DEBUG
+    /// Debug builds consult launch arguments (`--ui-demo --demo-screen …`)
+    /// and may assemble the isolated demo environment instead of the real
+    /// one (see `App/DemoMode.swift`). Release builds have no demo path
+    /// compiled in at all.
+    let environment: AppEnvironment = AppEnvironment.makeForLaunch()
+    #else
     let environment = AppEnvironment()
+    #endif
 
     var body: some Scene {
         WindowGroup {
@@ -23,14 +31,27 @@ final class AppEnvironment {
     /// Keychain account for the translation API key.
     static let apiKeychainKey = "translation.apiKey"
 
+    /// Assembly-level capability switches. The Debug UI demo environment
+    /// swaps these at composition time; views consult the environment
+    /// rather than any global demo flag.
+    struct Capabilities: Sendable {
+        /// Whether the new-classroom flow may raise the system microphone
+        /// permission prompt (the demo environment never prompts).
+        var requestsMicrophonePermission = true
+        /// Readiness displays report the microphone as authorized without
+        /// touching AVAudioApplication (demo keeps 全部就绪 deterministic).
+        var assumesMicrophoneAuthorized = false
+    }
+
+    let capabilities: Capabilities
     let modelContainer: ModelContainer
     let settings: SettingsStore
-    let engineManager: ASREngineManager
-    let keychain: KeychainStore
+    let engineManager: any ASREngineManaging
+    let keychain: any KeychainStoring
     let repository: any ClassroomRepositoryProtocol
-    let modelManager: ModelManager
+    let modelManager: any ModelManaging
     let benchmarkRunner: ASRBenchmarkRunner
-    let coordinator: LiveTranslationCoordinator
+    let coordinator: any LiveTranslationCoordinating
     /// UI navigation state (selected tab, live-classroom presentation).
     let flow = AppFlow()
     /// UI-layer bookmarks & session favorites (UserDefaults-backed, IDs only).
@@ -46,13 +67,19 @@ final class AppEnvironment {
     /// closure crossing — both setters and getters are MainActor in practice.
     private let translationServiceBox: TranslationServiceBox
 
-    init() {
-        let box = TranslationServiceBox()
-        self.translationServiceBox = box
-        // Local so the coordinator's provider closure can capture the store
-        // without capturing `self` mid-initialization.
+    /// Presentation view model for the live classroom. Owned here (not as
+    /// @State inside LiveScreen) so collapsing the full-screen cover never
+    /// destroys in-classroom UI state: selected tab, auto-follow, manual
+    /// browse position, search text, error hint, bookmark focus. One view
+    /// model per coordinator session — a new session gets a fresh one, and
+    /// the model is released when the classroom ends.
+    private(set) var liveViewModel: LiveViewModel?
+    private var liveViewModelSessionID: UUID?
+
+    /// Production assembly.
+    convenience init() {
         let settings = SettingsStore.shared
-        self.settings = settings
+        let modelContainer: ModelContainer
         do {
             let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
             let config = ModelConfiguration(
@@ -60,45 +87,92 @@ final class AppEnvironment {
                 schema: schema,
                 url: AppEnvironment.databaseURL()
             )
-            self.modelContainer = try ModelContainer(for: schema, configurations: [config])
+            modelContainer = try ModelContainer(for: schema, configurations: [config])
         } catch {
             // A corrupt store must not brick the app; start fresh and let
             // the user's existing records show as unreadable rather than
             // crash-looping on launch.
             assertionFailure("ModelContainer failed: \(error)")
-            self.modelContainer = try! ModelContainer(
+            modelContainer = try! ModelContainer(
                 for: Schema([ClassroomSession.self, TranscriptEntry.self])
             )
         }
-        self.keychain = KeychainStore()
-        self.engineManager = ASREngineManager(settings: settings)
-        self.repository = TranscriptRepository(container: modelContainer)
-        self.modelManager = ModelManager()
-        self.benchmarkRunner = ASRBenchmarkRunner(engineManager: engineManager)
-        // ID-only bookmark store; needs the repository to resolve IDs and
-        // to migrate the legacy (v1 snapshot) records.
-        self.bookmarks = BookmarkStore(repository: repository)
+        let engineManager = ASREngineManager(settings: settings)
+        let repository = TranscriptRepository(container: modelContainer)
+        let keychain = KeychainStore()
+        let modelManager = ModelManager()
+        // Real delete protection: the manager refuses to remove files a
+        // running classroom is using (not just the disabled UI button).
+        modelManager.isBackendInUse = { [weak engineManager] kind in
+            guard let engineManager else { return false }
+            return engineManager.sessionActive
+                && engineManager.residentBackendKind == kind
+        }
         let service = AppEnvironment.makeTranslationService(
             settings: settings, keychain: keychain
         )
-        self.translationService = service
+        let box = TranslationServiceBox()
         box.set(service)
         // The coordinator resolves the translator through the box on every
         // use, so `refreshTranslationService()` takes effect without any
         // explicit coordinator update. The provider deliberately does NOT
         // consult the live-translation toggle: the coordinator reads that
-        // user-intent flag itself (together with
-        // `settings.isTranslationConfigured`) so "user turned translation
-        // off" stays distinguishable from "service not configured" — the
-        // former never enqueues a request at all. The provider is @MainActor
-        // and only resolved on the main actor, so reading the toggle is
+        // user-intent flag itself (together with the service's
+        // `isConfiguredNow`) so "user turned translation off" stays
+        // distinguishable from "service not configured" — the former never
+        // enqueues a request at all. The provider is @MainActor and only
+        // resolved on the main actor, so reading the toggle is
         // concurrency-safe.
-        self.coordinator = LiveTranslationCoordinator(
+        let coordinator = LiveTranslationCoordinator(
             engineManager: engineManager,
             repository: repository,
             settings: settings,
             translationServiceProvider: { box.get() }
         )
+        self.init(
+            capabilities: Capabilities(),
+            modelContainer: modelContainer,
+            settings: settings,
+            engineManager: engineManager,
+            keychain: keychain,
+            repository: repository,
+            modelManager: modelManager,
+            benchmarkRunner: ASRBenchmarkRunner(engineManager: engineManager),
+            coordinator: coordinator,
+            translationService: service,
+            translationServiceBox: box,
+            bookmarks: BookmarkStore(repository: repository)
+        )
+    }
+
+    /// Full dependency-injection initializer — the composition boundary the
+    /// Debug demo environment also assembles through.
+    init(
+        capabilities: Capabilities,
+        modelContainer: ModelContainer,
+        settings: SettingsStore,
+        engineManager: any ASREngineManaging,
+        keychain: any KeychainStoring,
+        repository: any ClassroomRepositoryProtocol,
+        modelManager: any ModelManaging,
+        benchmarkRunner: ASRBenchmarkRunner,
+        coordinator: any LiveTranslationCoordinating,
+        translationService: any TranslationService,
+        translationServiceBox: TranslationServiceBox,
+        bookmarks: BookmarkStore
+    ) {
+        self.capabilities = capabilities
+        self.modelContainer = modelContainer
+        self.settings = settings
+        self.engineManager = engineManager
+        self.keychain = keychain
+        self.repository = repository
+        self.modelManager = modelManager
+        self.benchmarkRunner = benchmarkRunner
+        self.coordinator = coordinator
+        self.translationService = translationService
+        self.translationServiceBox = translationServiceBox
+        self.bookmarks = bookmarks
     }
 
     static func databaseURL() -> URL {
@@ -108,10 +182,21 @@ final class AppEnvironment {
         return support.appendingPathComponent("LiveTranslate.sqlite")
     }
 
+    // MARK: - Translation configuration (single source of truth)
+
+    /// Whether a usable translation service is configured. Delegates
+    /// synchronously to the *current* translator's `TranslatorConfig`
+    /// check (`TranslationService.isConfiguredNow`) so UI presentation
+    /// and the pipeline's dispatch-time triage can never disagree. The
+    /// API key itself never leaves the service — views only see this Bool.
+    var isTranslationConfigured: Bool {
+        translationService.isConfiguredNow
+    }
+
     /// Build a translator from current settings; the API key comes from the
     /// Keychain only.
     static func makeTranslationService(
-        settings: SettingsStore, keychain: KeychainStore
+        settings: SettingsStore, keychain: any KeychainStoring
     ) -> any TranslationService {
         let apiKey = (try? keychain.get(forKey: apiKeychainKey)) ?? ""
         let config = TranslatorConfig(
@@ -137,6 +222,48 @@ final class AppEnvironment {
             settings: settings, keychain: keychain
         )
         translationServiceBox.set(translationService)
+    }
+
+    // MARK: - Live classroom presentation
+
+    /// Present the live classroom full-screen. The presentation view model
+    /// is created once per coordinator session and reused across collapse /
+    /// re-open, so in-classroom state survives. A *different* coordinator
+    /// session (or a not-running classroom) always gets a fresh view model —
+    /// re-entering never re-attaches, re-registers observers or restarts
+    /// anything: the model is a passive mirror of the coordinator.
+    func presentLive() {
+        let sessionID = coordinator.activeSessionID
+        if liveViewModel == nil
+            || liveViewModelSessionID != sessionID
+            || !coordinator.isRunning {
+            let viewModel = LiveViewModel()
+            viewModel.attach(self)
+            liveViewModel = viewModel
+            liveViewModelSessionID = sessionID
+        }
+        flow.openLive()
+    }
+
+    /// Fallback accessor used by the full-screen cover's content builder
+    /// (in practice `presentLive()` has already created the model).
+    func acquireLiveViewModel() -> LiveViewModel {
+        if let liveViewModel { return liveViewModel }
+        let viewModel = LiveViewModel()
+        viewModel.attach(self)
+        liveViewModel = viewModel
+        liveViewModelSessionID = coordinator.activeSessionID
+        return viewModel
+    }
+
+    /// End the classroom: stop the coordinator, release the presentation
+    /// view model (its state is meaningless once the session is over) and
+    /// collapse back to the tabs.
+    func endLiveSession() async {
+        await coordinator.stop()
+        liveViewModel = nil
+        liveViewModelSessionID = nil
+        flow.collapseLive()
     }
 
     /// Mark sessions that never got a clean `endTime` as abnormally
@@ -199,4 +326,18 @@ final class AppFlow {
         isLivePresented = false
         selectedTab = tab
     }
+
+    #if DEBUG
+    /// UI-demo navigation directive (Debug builds only): set at launch by
+    /// the demo composition, consumed exactly once by the screen it points
+    /// at.
+    var pendingDemoScreen: DemoLaunchOptions.Screen?
+    /// Demo override that freezes the home greeting so demo screenshots are
+    /// deterministic (Debug builds only).
+    var demoGreeting: String?
+    /// Seeded session the demo `--demo-screen detail` directive pushes.
+    var demoDetailSessionID: UUID?
+    /// Demo prefill for the new-classroom name field (Debug builds only).
+    var demoPrefilledSessionName: String?
+    #endif
 }

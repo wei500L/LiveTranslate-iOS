@@ -12,6 +12,9 @@ struct RecordsScreen: View {
     @State private var exportError = false
     /// The failed export, kept so the alert's retry can re-run it.
     @State private var failedExport: (session: ClassroomSession, format: ExportFormat)?
+    /// Debug UI demo: pushes the seeded detail screen once.
+    @State private var isPushingDemoDetail = false
+    @State private var demoDetailSessionID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -34,6 +37,13 @@ struct RecordsScreen: View {
                     sortMenu
                 }
             }
+            .navigationDestination(isPresented: $isPushingDemoDetail) {
+                if let demoDetailSessionID {
+                    SessionDetailView(sessionID: demoDetailSessionID)
+                } else {
+                    EmptyView()
+                }
+            }
         }
         .task {
             viewModel.attach(environment)
@@ -42,6 +52,13 @@ struct RecordsScreen: View {
         .onAppear {
             // Returning from a classroom or detail edit — refresh.
             viewModel.reload()
+            #if DEBUG
+            if environment.flow.pendingDemoScreen == .detail {
+                environment.flow.pendingDemoScreen = nil
+                demoDetailSessionID = environment.flow.demoDetailSessionID
+                isPushingDemoDetail = true
+            }
+            #endif
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
@@ -150,9 +167,13 @@ struct RecordsScreen: View {
         HStack {
             LTSectionHeader(title: "全部课堂")
             Spacer()
-            Text("存储 \(Format.bytes(viewModel.storageBytes))")
-                .font(LTTypography.timestamp)
-                .foregroundStyle(LTColors.textTertiary)
+            // Only meaningful once something is actually on disk (fresh
+            // installs and the in-memory demo store report zero).
+            if viewModel.storageBytes > 0 {
+                Text("存储 \(Format.bytes(viewModel.storageBytes))")
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+            }
         }
 
         if viewModel.isLoaded && viewModel.visibleSessions.isEmpty {

@@ -106,8 +106,11 @@ struct BookmarksScreen: View {
     }
 
     /// Resolve every bookmark against the repository (newest title/text),
-    /// pruning session-level and entry-level orphans along the way.
+    /// pruning session-level and entry-level orphans along the way. Also
+    /// retries a legacy migration that was blocked at launch by an
+    /// unreadable repository.
     private func reload() {
+        environment.bookmarks.retryLegacyMigration()
         let sessions = (try? environment.repository.sessions(matching: "")) ?? []
         environment.bookmarks.pruneSessions(Set(sessions.map(\.id)))
 

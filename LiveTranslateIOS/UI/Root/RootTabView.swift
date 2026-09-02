@@ -48,12 +48,15 @@ struct RootTabView: View {
         }
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: liveBinding) {
-            LiveScreen()
+            LiveScreen(viewModel: environment.acquireLiveViewModel())
                 .environment(environment)
         }
         .task {
             environment.reconcileAbnormalTerminations()
             environment.modelManager.refreshStates()
+            #if DEBUG
+            environment.presentDemoLaunchScreenIfNeeded()
+            #endif
         }
     }
 
@@ -69,7 +72,7 @@ struct RootTabView: View {
             get: { environment.flow.isLivePresented },
             set: { presented in
                 if presented {
-                    environment.flow.openLive()
+                    environment.presentLive()
                 } else {
                     // Swipe dismissal is disabled while a classroom runs,
                     // so reaching here means the classroom has ended.

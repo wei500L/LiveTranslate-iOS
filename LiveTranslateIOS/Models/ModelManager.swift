@@ -57,8 +57,9 @@ final class ModelManager {
                 states[backend.kind]?.version = backend.revision
             }
         }
-        // Silero VAD is shared by both backends and installed on demand by
-        // the VAD layer; ModelManager only tracks the two ASR backends.
+        // Silero VAD is shared by both backends; every backend install
+        // ensures it first (see `install`). ModelManager only tracks the
+        // two ASR backends' install states.
         restoreLastLoadedMetrics()
     }
 
@@ -110,6 +111,12 @@ final class ModelManager {
             guard let self else { return }
             defer { self.installTask = nil; self.pendingInstall = nil }
             do {
+                // Shared runtime prerequisite first: both backends need the
+                // Silero VAD model at classroom start, so an install must
+                // never leave a "ready" ASR backend without it.
+                if let manifest = self.manifest {
+                    try await self.installer.ensureRuntimeVAD(manifest)
+                }
                 try await self.installer.install(info) { progress in
                     self.states[kind]?.downloadProgress = progress.fraction
                     self.states[kind]?.isCompiling = self.installer.isCompiling

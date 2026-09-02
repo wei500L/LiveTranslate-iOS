@@ -158,7 +158,7 @@ final class RepositoryTests: XCTestCase {
     func testEntriesNeedingRetry() throws {
         let session = try repository.createSession(makeDraft())
         var ids: [UUID] = []
-        for sequence in 0..<3 {
+        for sequence in 0..<4 {
             let entry = try repository.addEntry(
                 EntryDraft(
                     sequenceID: sequence, startOffset: 0, endOffset: 1,
@@ -172,8 +172,11 @@ final class RepositoryTests: XCTestCase {
         try repository.updateTranslation(entryID: ids[0], text: "ok", latency: nil, status: .completed)
         try repository.updateTranslation(entryID: ids[1], text: "", latency: nil, status: .failed)
         // ids[2] stays pending.
+        // Not-configured entries are retryable: the class can be recorded
+        // local-only and the translation API configured afterwards.
+        try repository.updateTranslation(entryID: ids[3], text: "", latency: nil, status: .notConfigured)
         let retry = try repository.entriesNeedingRetry(for: session)
-        XCTAssertEqual(retry.map(\.sequenceID), [1])
+        XCTAssertEqual(retry.map(\.sequenceID), [1, 3])
     }
 
     func testDeleteSessionCascades() throws {

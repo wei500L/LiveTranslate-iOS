@@ -40,15 +40,6 @@ final class SettingsStore {
         didSet { defaults.set(liveTranslationEnabled, forKey: Keys.liveTranslationEnabled) }
     }
 
-    /// Synchronous mirror of `TranslatorConfig.isConfigured` (base URL +
-    /// model set; local servers need no key) for MainActor checks that
-    /// cannot await the service. Keeps "user wants translation but has not
-    /// configured a service" a distinct, cheaply knowable state.
-    var isTranslationConfigured: Bool {
-        !apiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !translationModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     var preferredBackend: ASRBackendKind {
         didSet { defaults.set(preferredBackend.rawValue, forKey: Keys.preferredBackend) }
     }

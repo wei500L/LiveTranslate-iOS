@@ -48,6 +48,8 @@ struct OpenAICompatibleTranslator: TranslationService {
 
     var isConfigured: Bool { config.isConfigured }
 
+    var isConfiguredNow: Bool { config.isConfigured }
+
     // MARK: - TranslationService
 
     func translate(_ request: TranslationRequest) async -> TranslationOutcome {

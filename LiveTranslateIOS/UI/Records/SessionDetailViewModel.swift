@@ -91,13 +91,13 @@ final class SessionDetailViewModel {
 
     var isMatchFocused: (TranscriptEntry) -> Bool {
         { entry in
-            matchIDs.indices.contains(currentMatchIndex)
-                && matchIDs[currentMatchIndex] == entry.sequenceID
+            self.matchIDs.indices.contains(self.currentMatchIndex)
+                && self.matchIDs[self.currentMatchIndex] == entry.sequenceID
         }
     }
 
     var isMatch: (TranscriptEntry) -> Bool {
-        { entry in matchIDs.contains(entry.sequenceID) }
+        { entry in self.matchIDs.contains(entry.sequenceID) }
     }
 
     func previousMatch() {
@@ -124,7 +124,7 @@ final class SessionDetailViewModel {
 
     var isBookmarked: (TranscriptEntry) -> Bool {
         { entry in
-            environment?.bookmarks.isBookmarked(entryID: entry.id) ?? false
+            self.environment?.bookmarks.isBookmarked(entryID: entry.id) ?? false
         }
     }
 
@@ -218,9 +218,16 @@ final class SessionDetailViewModel {
                     latency: outcome.latency, status: .completed
                 )
             } else {
+                // Keep the state honest: a request that produced nothing
+                // because the API is (still) not configured must not be
+                // rewritten into a hard failure — it stays retryable as
+                // `.notConfigured` once the user configures the API.
+                let notConfigured = outcome.errorDescription
+                    == TranslationError.notConfigured.errorDescription
                 try? environment.repository.updateTranslation(
                     entryID: entry.id, text: "",
-                    latency: outcome.latency, status: .failed
+                    latency: outcome.latency,
+                    status: notConfigured ? .notConfigured : .failed
                 )
             }
         }

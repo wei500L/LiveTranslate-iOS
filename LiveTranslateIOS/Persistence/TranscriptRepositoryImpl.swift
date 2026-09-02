@@ -45,7 +45,13 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
 
     func finishSession(_ session: ClassroomSession, abnormal: Bool) throws {
         session.endTime = .now
-        session.duration = session.endTime!.timeIntervalSince(session.startTime)
+        // The coordinator writes a pause-aware duration (classroom time with
+        // paused intervals excluded) before finishing; keep it. Only fall
+        // back to wall-clock when the caller supplied no duration (a session
+        // finished without going through the coordinator's stop path).
+        if session.duration <= 0 {
+            session.duration = session.endTime!.timeIntervalSince(session.startTime)
+        }
         session.abnormalTermination = session.abnormalTermination || abnormal
         session.updatedAt = .now
         try context.save()
@@ -108,8 +114,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         session.entries.sorted { $0.sequenceID < $1.sequenceID }
     }
 
+    /// Failure states worth re-running: real failures plus entries whose
+    /// translation was never attempted because the API wasn't configured
+    /// yet (the class was recorded local-only and the user configured the
+    /// API afterwards). Skipped is a user intent and stays excluded.
     func entriesNeedingRetry(for session: ClassroomSession) throws -> [TranscriptEntry] {
-        try entries(for: session).filter { $0.status == .failed }
+        try entries(for: session).filter { $0.status == .failed || $0.status == .notConfigured }
     }
 
     // MARK: - Deletion

@@ -35,7 +35,6 @@ struct NewSessionSheet: View {
                         directionSection
                         liveSettingsSection
                         storageSection
-                        micSection
                         startButton
                     }
                     .padding(.horizontal, LTSpacing.screenPadding)
@@ -81,11 +80,24 @@ struct NewSessionSheet: View {
             // start(), so a cancelled sheet (xmark, swipe-down, or a push
             // inside this stack) never triggers this.
             if shouldOpenLive {
-                environment.flow.openLive()
+                environment.presentLive()
             }
         }
         .task {
-            micAuthorized = AVAudioApplication.shared.recordPermission == .granted
+            // Debug UI demo: prefill the classroom name for deterministic
+            // screenshots. Production always starts empty.
+            #if DEBUG
+            if name.isEmpty, let prefill = environment.flow.demoPrefilledSessionName {
+                name = prefill
+            }
+            #endif
+            // The demo environment short-circuits real permission state so
+            // the sheet never depends on (or prompts) the microphone.
+            if environment.capabilities.assumesMicrophoneAuthorized {
+                micAuthorized = true
+            } else {
+                micAuthorized = AVAudioApplication.shared.recordPermission == .granted
+            }
             preferredBackendInstalled = await environment.engineManager.isInstalled(
                 environment.settings.preferredBackend
             )
@@ -380,14 +392,19 @@ struct NewSessionSheet: View {
             return
         }
 
-        // 3. Microphone permission (request if undetermined).
-        if AVAudioApplication.shared.recordPermission == .undetermined {
-            isRequestingPermission = true
-            let granted = await AudioCaptureService.recordPermission()
-            isRequestingPermission = false
-            micAuthorized = granted
+        // 3. Microphone permission (request if undetermined). The demo
+        //    environment opts out — it must never raise the system prompt.
+        if environment.capabilities.requestsMicrophonePermission {
+            if AVAudioApplication.shared.recordPermission == .undetermined {
+                isRequestingPermission = true
+                let granted = await AudioCaptureService.recordPermission()
+                isRequestingPermission = false
+                micAuthorized = granted
+            } else {
+                micAuthorized = AVAudioApplication.shared.recordPermission == .granted
+            }
         } else {
-            micAuthorized = AVAudioApplication.shared.recordPermission == .granted
+            micAuthorized = true
         }
         guard micAuthorized else {
             startError = "需要麦克风权限才能录制课堂，请在系统设置中开启"
@@ -396,9 +413,13 @@ struct NewSessionSheet: View {
         }
 
         // 4. Local language resources.
-        guard preferredBackendInstalled || await environment.engineManager.isInstalled(
-            environment.settings.preferredBackend
-        ) else {
+        var resourcesReady = preferredBackendInstalled
+        if !resourcesReady {
+            resourcesReady = await environment.engineManager.isInstalled(
+                environment.settings.preferredBackend
+            )
+        }
+        guard resourcesReady else {
             startError = "语言资源尚未安装，请在“我的 → 语言资源管理”中完成下载"
             LTHaptics.warning()
             return

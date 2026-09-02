@@ -21,29 +21,32 @@ import OSLog
 ///   429, 5xx); after that the entry is marked failed-but-retryable and
 ///   batch retry happens on network recovery or user action. 401/403/400
 ///   are never blindly retried.
+/// One live transcript row as shown in the classroom feed (presentation
+/// mirror of the pipeline's in-flight state; the persisted truth is
+/// `TranscriptEntry`).
+struct LiveTranscriptItem: Identifiable {
+    let id = UUID()
+    let sequenceID: Int
+    let timestamp: String
+    let startOffset: TimeInterval
+    var originalText: String
+    var translatedText: String?
+    var translationStatus: TranslationStatus
+    var asrLatency: TimeInterval = 0
+    /// Translation failed with a retryable error — eligible for retry.
+    var isRetryableTranslation = false
+    /// Stable persisted `TranscriptEntry.id` (set once the Russian
+    /// original is saved); nil only if that save itself failed. The UI
+    /// uses it as the bookmark identity.
+    var entryID: UUID?
+}
+
 @MainActor
 @Observable
 final class LiveTranslationCoordinator {
     private static let logger = Logger(subsystem: "com.livetranslate.ios", category: "coordinator")
 
     // MARK: - UI state
-
-    struct LiveTranscriptItem: Identifiable {
-        let id = UUID()
-        let sequenceID: Int
-        let timestamp: String
-        let startOffset: TimeInterval
-        var originalText: String
-        var translatedText: String?
-        var translationStatus: TranslationStatus
-        var asrLatency: TimeInterval = 0
-        /// Translation failed with a retryable error — eligible for retry.
-        var isRetryableTranslation = false
-        /// Stable persisted `TranscriptEntry.id` (set once the Russian
-        /// original is saved); nil only if that save itself failed. The UI
-        /// uses it as the bookmark identity.
-        var entryID: UUID?
-    }
 
     private(set) var state = PipelineState()
     private(set) var entries: [LiveTranscriptItem] = []
@@ -454,8 +457,12 @@ final class LiveTranslationCoordinator {
         // service is configured" (`.notConfigured`). The toggle is applied
         // per utterance, so re-enabling affects subsequent segments only.
         let translationWanted = settings.liveTranslationEnabled
+        // Single source of truth: the *current* translator decides whether
+        // a service is configured (see `TranslationService.isConfiguredNow`)
+        // — never a duplicated rule on the settings store.
+        let translationConfigured = translationServiceProvider()?.isConfiguredNow ?? false
         let initialStatus: TranslationStatus = translationWanted
-            ? (settings.isTranslationConfigured ? .pending : .notConfigured)
+            ? (translationConfigured ? .pending : .notConfigured)
             : .skipped
 
         var entry = LiveTranscriptItem(
@@ -480,9 +487,10 @@ final class LiveTranslationCoordinator {
                 asrLatency: result.inferenceDuration,
                 asrRTF: result.realTimeFactor
             )
+            // addEntry owns the entryCount increment — a second one here
+            // would double every "N 段" the UI derives from the session.
             if let stored = try? repository.addEntry(draft, to: session) {
                 entryIDBySequence[sequenceID] = stored.id
-                session.entryCount += 1
             }
         }
         entry.entryID = entryIDBySequence[sequenceID]
@@ -491,7 +499,11 @@ final class LiveTranslationCoordinator {
 
         state.lastASRLatency = latency
         state.lastRTF = result.realTimeFactor
-        state.phase = isNetworkAvailable ? .transcribing : .networkOffline
+        // pause() flushes the segmenter, so a tail segment's result can land
+        // after the classroom is already paused — keep the chip honest.
+        state.phase = isPaused
+            ? .paused
+            : (isNetworkAvailable ? .transcribing : .networkOffline)
 
         orderedTranslations.register(sequenceID)
         if translationWanted {

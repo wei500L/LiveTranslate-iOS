@@ -25,6 +25,16 @@ enum Format {
         String(format: "%.2f s", interval)
     }
 
+    /// Compact human duration for study-stat tiles: "2小时15分钟",
+    /// "45分钟" — friendlier than clock time for accumulated totals.
+    static func studyDuration(_ interval: TimeInterval) -> String {
+        let total = Int(interval.rounded())
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        if h > 0 { return "\(h)小时\(m)分钟" }
+        return "\(m)分钟"
+    }
+
     static func percent(_ fraction: Double) -> String {
         Int((fraction * 100).rounded()).description + "%"
     }

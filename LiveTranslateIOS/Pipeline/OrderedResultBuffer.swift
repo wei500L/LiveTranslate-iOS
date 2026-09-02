@@ -25,9 +25,15 @@ final class OrderedResultBuffer<Element: Sendable>: @unchecked Sendable {
 
     /// Deposit a completed element. Returns the contiguous run of elements
     /// that became releasable, in order.
+    ///
+    /// An `id` that already left the queue (a retried translation: its slot
+    /// was released on the first completion) has nothing to wait behind any
+    /// more, so it is returned directly — parking it in `pending` would leak
+    /// the entry and, worse, drop the retry's outcome on the floor.
     @discardableResult
     func complete(_ id: Int, _ element: Element) -> [(id: Int, element: Element)] {
         lock.lock(); defer { lock.unlock() }
+        guard order.contains(id) else { return [(id, element)] }
         pending[id] = element
         var released: [(Int, Element)] = []
         while let first = order.first, let element = pending.removeValue(forKey: first) {

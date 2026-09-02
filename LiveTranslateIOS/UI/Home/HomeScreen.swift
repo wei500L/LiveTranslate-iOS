@@ -37,11 +37,28 @@ struct HomeScreen: View {
         }
         .task {
             viewModel.attach(environment)
+            #if DEBUG
+            if let greeting = environment.flow.demoGreeting {
+                viewModel.greetingOverride = greeting
+            }
+            #endif
             await viewModel.reload()
+        }
+        // Network reachability is live state (the coordinator owns the
+        // monitor); the readiness card must follow it instead of showing
+        // the launch-time snapshot forever.
+        .onChange(of: environment.coordinator.isNetworkAvailable) { _, _ in
+            Task { await viewModel.reload() }
         }
         .onAppear {
             // Tab switches destroy this view; refresh readiness + recents
             // (e.g. right after a classroom ended).
+            #if DEBUG
+            if environment.flow.pendingDemoScreen == .newSession {
+                environment.flow.pendingDemoScreen = nil
+                showNewSessionSheet = true
+            }
+            #endif
             Task { await viewModel.reload() }
         }
     }
@@ -93,7 +110,7 @@ struct HomeScreen: View {
     private var ongoingBanner: some View {
         if viewModel.hasOngoingSession && !environment.flow.isLivePresented {
             Button {
-                environment.flow.openLive()
+                environment.presentLive()
             } label: {
                 HStack(spacing: LTSpacing.s) {
                     LTActivityDot(active: true)
@@ -124,7 +141,7 @@ struct HomeScreen: View {
     private var startCard: some View {
         Button {
             if viewModel.hasOngoingSession {
-                environment.flow.openLive()
+                environment.presentLive()
             } else {
                 showNewSessionSheet = true
             }
@@ -216,6 +233,10 @@ struct HomeScreen: View {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
+            case .translationSettings:
+                // Land on the 我的 tab, where the translation API
+                // section lives.
+                environment.flow.selectedTab = .profile
             case nil:
                 break
             }
@@ -337,7 +358,7 @@ struct HomeScreen: View {
                     VStack(spacing: LTSpacing.m) {
                         HStack(spacing: LTSpacing.l) {
                             statTile(
-                                value: Format.clock(viewModel.todayTotalSeconds),
+                                value: Format.studyDuration(viewModel.todayTotalSeconds),
                                 caption: "今日累计时长"
                             )
                             statTile(

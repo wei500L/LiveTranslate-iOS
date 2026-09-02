@@ -11,8 +11,10 @@ import Observation
 /// text bulk never accumulates in UserDefaults.
 ///
 /// Storage is versioned: `ui.bookmarks.v2` holds everything. The legacy v1
-/// keys (full text snapshots) are migrated once at init and then left in
-/// place until a later, verified release removes them.
+/// keys (full text snapshots) migrate through an explicit, resumable state
+/// machine — a record is only dropped once its session/entry is
+/// *confirmed* gone (a successful fetch that no longer contains it),
+/// never merely because the repository could not be read yet.
 @MainActor
 @Observable
 final class BookmarkStore {
@@ -37,18 +39,47 @@ final class BookmarkStore {
         }
     }
 
-    /// Versioned on-disk record (v2: IDs only).
+    /// Resumable progress of the v1 → v2 migration, persisted alongside the
+    /// v2 record so an interrupted or repository-blocked migration retries
+    /// on the next launch (or the next `retryLegacyMigration()` call)
+    /// instead of silently dropping records it could not resolve yet.
+    struct MigrationProgress: Codable, Equatable {
+        enum State: String, Codable {
+            case notStarted
+            /// The repository could not be read (e.g. cold-start store not
+            /// ready). Nothing was dropped; retry later.
+            case waitingForRepository
+            /// Some records resolved, others are still waiting on the
+            /// repository. Retry later.
+            case partiallyMigrated
+            /// Every legacy record either migrated to a v2 ID bookmark or
+            /// was confirmed to reference data that no longer exists.
+            case completed
+        }
+
+        var state: State
+        /// Legacy records still awaiting resolution (kept verbatim; they
+        /// key on `(sessionID, sequenceID)` and cannot become v2 IDs until
+        /// the repository answers).
+        var pending: [LegacyEntryBookmark] = []
+    }
+
+    /// Versioned on-disk record (v2: IDs only). `migration` is nil for
+    /// records written before the resumable migration existed — those
+    /// stores already ran the one-shot migration, so they count as
+    /// completed.
     private struct StoreRecord: Codable {
         var version = 2
         var entryBookmarks: [EntryBookmark] = []
         var favoriteSessionIDs: [UUID] = []
+        var migration: MigrationProgress?
     }
 
-    /// Legacy v1 record — decode-only, for the one-shot migration below.
+    /// Legacy v1 record — decode-only, for the resumable migration below.
     /// The v1 format also stored original/translated text and a session
     /// title snapshot; those fields are deliberately ignored (IDs make them
     /// redundant).
-    private struct LegacyEntryBookmark: Codable {
+    struct LegacyEntryBookmark: Codable, Equatable {
         let sessionID: UUID
         let sequenceID: Int
         let createdAt: Date?
@@ -65,6 +96,9 @@ final class BookmarkStore {
 
     private(set) var entryBookmarks: [EntryBookmark] = []
     private(set) var favoriteSessionIDs: Set<UUID> = []
+    /// Observable so screens can retry a blocked migration once their own
+    /// repository reads succeed (e.g. the Bookmarks tab reload).
+    private(set) var legacyMigration: MigrationProgress?
 
     init(
         defaults: UserDefaults = .standard,
@@ -82,44 +116,89 @@ final class BookmarkStore {
            let record = try? JSONDecoder().decode(StoreRecord.self, from: data) {
             entryBookmarks = record.entryBookmarks
             favoriteSessionIDs = Set(record.favoriteSessionIDs)
-            return
+            legacyMigration = record.migration ?? MigrationProgress(state: .completed)
+        } else {
+            // No v2 record yet: favorites migrate one-shot (a plain string
+            // array that cannot fail partially); entry bookmarks start the
+            // resumable migration from scratch.
+            let legacyFavorites = defaults.stringArray(forKey: Self.legacyFavoritesKey) ?? []
+            favoriteSessionIDs = Set(legacyFavorites.compactMap(UUID.init(uuidString:)))
+            legacyMigration = MigrationProgress(state: .notStarted)
         }
-        migrateLegacyStoreIfNeeded()
+        resumeLegacyMigration()
     }
 
-    /// TEMPORARY v1 → v2 migration (runs once, when no v2 record exists).
-    /// v1 keyed bookmarks by (sessionID, sequenceID) and stored full text
-    /// snapshots; v2 stores the persisted entry's stable UUID. Each legacy
-    /// record is resolved through the repository: records whose session or
-    /// entry no longer exists are dropped (they were already invisible in
-    /// v1's pruned view). Unparseable legacy data decodes to nil and is
-    /// skipped — it must never crash the launch path. The legacy keys stay
-    /// on disk; only the new v2 key is written.
-    private func migrateLegacyStoreIfNeeded() {
-        let legacyFavorites = defaults.stringArray(forKey: Self.legacyFavoritesKey) ?? []
-        favoriteSessionIDs = Set(legacyFavorites.compactMap(UUID.init(uuidString:)))
-
-        guard let data = defaults.data(forKey: Self.legacyBookmarksKey),
-              let legacy = try? JSONDecoder().decode([LegacyEntryBookmark].self, from: data) else {
-            // Favorites migrate independently of entry bookmarks; only
-            // persist when there is something to carry over.
-            if !favoriteSessionIDs.isEmpty { persist() }
+    /// TEMPORARY v1 → v2 migration (resumable). v1 keyed bookmarks by
+    /// (sessionID, sequenceID) and stored full text snapshots; v2 stores
+    /// the persisted entry's stable UUID. Resolution rules:
+    ///
+    /// - repository read *throws* → the record stays pending (state
+    ///   `waitingForRepository` / `partiallyMigrated`) and is retried on
+    ///   the next launch or `retryLegacyMigration()`;
+    /// - fetch succeeds and the session/entry is absent → confirmed
+    ///   orphan, dropped;
+    /// - fetch succeeds and the entry exists → converted to a v2 ID
+    ///   bookmark; the progress record persists with each pass.
+    ///
+    /// Unparseable legacy data decodes to nil and ends the migration
+    /// (nothing more can ever be done with it) without crashing. The
+    /// legacy keys stay on disk; only the v2 key is written.
+    private func resumeLegacyMigration() {
+        guard legacyMigration?.state != .completed else { return }
+        guard let data = defaults.data(forKey: Self.legacyBookmarksKey) else {
+            legacyMigration = MigrationProgress(state: .completed)
+            persist()
             return
         }
-        guard let repository else { return }
+        // An unparseable legacy payload ends the migration rather than
+        // crashing or retrying forever.
+        guard let legacy = try? JSONDecoder().decode([LegacyEntryBookmark].self, from: data) else {
+            legacyMigration = MigrationProgress(state: .completed)
+            persist()
+            return
+        }
 
-        let sessions = (try? repository.sessions(matching: "")) ?? []
+        // Resume a partially migrated pass from its pending list.
+        let pending = (legacyMigration?.pending.isEmpty == false)
+            ? legacyMigration!.pending
+            : legacy
+        guard let repository else {
+            legacyMigration = MigrationProgress(state: .waitingForRepository, pending: pending)
+            persist()
+            return
+        }
+
+        // A *thrown* fetch means "not readable yet" — retry later. A
+        // successful-but-absent lookup means the data is really gone.
+        let sessions: [ClassroomSession]
+        do {
+            sessions = try repository.sessions(matching: "")
+        } catch {
+            legacyMigration = MigrationProgress(state: .waitingForRepository, pending: pending)
+            persist()
+            return
+        }
         let sessionsByID = Dictionary(
             sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
         )
-        var migrated: [EntryBookmark] = []
-        for record in legacy {
-            guard let session = sessionsByID[record.sessionID] else { continue }
-            let entries = (try? repository.entries(for: session)) ?? []
+
+        var migrated = entryBookmarks
+        var stillPending: [LegacyEntryBookmark] = []
+        for record in pending {
+            guard let session = sessionsByID[record.sessionID] else {
+                continue // confirmed orphan: session permanently deleted
+            }
+            let entries: [TranscriptEntry]
+            do {
+                entries = try repository.entries(for: session)
+            } catch {
+                stillPending.append(record) // not readable yet — retry later
+                continue
+            }
             // sequenceID is unique within a session (monotonic per
             // utterance), so this lookup is unambiguous.
             guard let entry = entries.first(where: { $0.sequenceID == record.sequenceID }) else {
-                continue
+                continue // confirmed orphan: entry permanently deleted
             }
             migrated.append(EntryBookmark(
                 sessionID: record.sessionID,
@@ -128,7 +207,19 @@ final class BookmarkStore {
             ))
         }
         entryBookmarks = migrated
+        entryBookmarks.sort { $0.createdAt < $1.createdAt }
+        legacyMigration = MigrationProgress(
+            state: stillPending.isEmpty ? .completed : .partiallyMigrated,
+            pending: stillPending
+        )
         persist()
+    }
+
+    /// Re-entry for screens whose repository access succeeded after launch
+    /// (e.g. the Bookmarks tab reload): keeps retrying a blocked or
+    /// partial migration without waiting for the next launch.
+    func retryLegacyMigration() {
+        resumeLegacyMigration()
     }
 
     // MARK: - Entry bookmarks
@@ -155,6 +246,12 @@ final class BookmarkStore {
         entryBookmarks.sort { $0.createdAt < $1.createdAt }
         persist()
         return true
+    }
+
+    /// Remove a bookmark by record (bookmarks list action).
+    func removeBookmark(_ bookmark: EntryBookmark) {
+        entryBookmarks.removeAll { $0.id == bookmark.id }
+        persist()
     }
 
     // MARK: - Session favorites
@@ -205,7 +302,8 @@ final class BookmarkStore {
         let record = StoreRecord(
             entryBookmarks: entryBookmarks,
             favoriteSessionIDs: favoriteSessionIDs
-                .sorted { $0.uuidString < $1.uuidString }
+                .sorted { $0.uuidString < $1.uuidString },
+            migration: legacyMigration
         )
         if let data = try? JSONEncoder().encode(record) {
             defaults.set(data, forKey: Self.storeKey)
