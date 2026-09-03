@@ -66,12 +66,7 @@ extension AppEnvironment {
         UserDefaults.standard.removePersistentDomain(forName: suiteName)
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
 
-        let schema = Schema([
-            ClassroomSession.self, TranscriptEntry.self,
-            Course.self, SessionNote.self, StudyReview.self,
-            SessionAttachment.self,
-            GlossaryTerm.self, StudyCard.self, StudyTask.self
-        ])
+        let schema = AppEnvironment.librarySchema
         let configuration = ModelConfiguration(
             "ui-demo", schema: schema, isStoredInMemoryOnly: true
         )

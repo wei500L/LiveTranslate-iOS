@@ -11,7 +11,8 @@ final class RepositoryTests: XCTestCase {
         let schema = Schema([
             ClassroomSession.self, TranscriptEntry.self,
             Course.self, SessionNote.self, StudyReview.self, SessionAttachment.self,
-            GlossaryTerm.self, StudyCard.self, StudyTask.self
+            GlossaryTerm.self, StudyCard.self, StudyTask.self,
+            SessionRecording.self, TranscriptCorrection.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         container = try ModelContainer(for: schema, configurations: [config])

@@ -14,7 +14,8 @@ enum RepositoryError: Error {
 /// Raw-recording storage (written by the live coordinator while 保存原始
 /// 录音 is on). Deleting a session removes its recording directory too —
 /// the audio is session data and nothing else can reach it once the
-/// session is gone (there is no playback path).
+/// session is gone. `SessionRecording` rows are the metadata layer views
+/// read; this enum owns the files.
 enum SessionRecordings {
     static var rootDirectory: URL {
         let support = FileManager.default.urls(
@@ -27,13 +28,54 @@ enum SessionRecordings {
         rootDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
     }
 
+    /// The recording's absolute URL, resolved from its metadata row (the
+    /// file name/format travel with the row — no hardcoded raw.wav at the
+    /// call sites). A future format change needs only this resolver.
+    static func fileURL(for recording: SessionRecording) -> URL {
+        directory(for: recording.sessionID)
+            .appendingPathComponent(recording.fileName)
+    }
+
+    static func recordingFileExists(sessionID: UUID) -> Bool {
+        let url = directory(for: sessionID).appendingPathComponent("raw.wav")
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
+    }
+
+    /// Bytes on disk of the legacy raw.wav (0 when absent).
+    static func rawWAVFileSize(sessionID: UUID) -> Int64 {
+        let url = directory(for: sessionID).appendingPathComponent("raw.wav")
+        return ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64) ?? 0
+    }
+
     /// Best-effort removal; missing directories are not an error.
     static func remove(for sessionID: UUID) {
         try? FileManager.default.removeItem(at: directory(for: sessionID))
     }
 
+    /// Removes ONE recording's file (storage management keeps the row).
+    static func removeFile(for recording: SessionRecording) {
+        try? FileManager.default.removeItem(at: fileURL(for: recording))
+    }
+
     static func removeAll() {
         try? FileManager.default.removeItem(at: rootDirectory)
+    }
+}
+
+/// Reads the minimal WAV facts from raw bytes/size without loading the
+/// file: for our own writer the layout is fixed (44-byte header, 16-bit
+/// mono PCM), so duration follows from the byte count. Used for legacy
+/// and interrupted files whose RIFF header was never patched.
+enum WAVFileInspector {
+    static let headerLength = 44
+    /// 16 kHz × 1 channel × 2 bytes.
+    static let bytesPerSecond = 32_000
+
+    static func durationOfRawWAV(bytes: Int64) -> TimeInterval {
+        guard bytes > headerLength else { return 0 }
+        return Double(bytes - headerLength) / Double(bytesPerSecond)
     }
 }
 
@@ -130,6 +172,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             endOffset: draft.endOffset,
             originalText: draft.originalText,
             asrBackend: draft.asrBackend.rawValue,
+            timeSource: draft.timeSource,
             asrLatency: draft.asrLatency,
             asrRTF: draft.asrRTF
         )
@@ -195,12 +238,20 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 hitSessionIDs.insert(attachment.sessionID)
             }
         }
+        // Corrections participate: the user's edited text is what they
+        // search for. Build entryID → correction once.
+        let corrections = try context.fetch(FetchDescriptor<TranscriptCorrection>())
+        let correctionsByEntry = Dictionary(
+            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         return all.filter { session in
             if hitSessionIDs.contains(session.id) { return true }
             if session.title.lowercased().contains(needle) { return true }
             return session.entries.contains { entry in
-                entry.originalText.lowercased().contains(needle)
-                    || (entry.translatedText?.lowercased().contains(needle) ?? false)
+                entry.effectiveRussianText(correction: correctionsByEntry[entry.id])
+                    .lowercased().contains(needle)
+                    || (entry.effectiveChineseText(correction: correctionsByEntry[entry.id]) ?? "")
+                        .lowercased().contains(needle)
             }
         }
     }
@@ -224,8 +275,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         // Notes are session-scoped with no SwiftData relationship — delete
         // them explicitly alongside the cascade-deleted entries, together
         // with the session's study review AND attachments (metadata rows
-        // plus their files). Raw recordings (保存原始录音) are session data
-        // too.
+        // plus their files). Corrections follow their entries; the
+        // recording row + file are session data too.
         let noteDescriptor = FetchDescriptor<SessionNote>(
             predicate: #Predicate { $0.sessionID == sessionID }
         )
@@ -241,6 +292,15 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         for attachment in try context.fetch(attachmentDescriptor) {
             context.delete(attachment)
         }
+        let correctionDescriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.sessionID == sessionID }
+        )
+        for correction in try context.fetch(correctionDescriptor) {
+            context.delete(correction)
+        }
+        if let recording = try recording(sessionID: sessionID) {
+            context.delete(recording)
+        }
         context.delete(session)
         try context.save()
         SessionRecordings.remove(for: sessionID)
@@ -255,6 +315,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         try context.delete(model: SessionNote.self)
         try context.delete(model: StudyReview.self)
         try context.delete(model: SessionAttachment.self)
+        try context.delete(model: TranscriptCorrection.self)
+        try context.delete(model: SessionRecording.self)
         try context.save()
         SessionRecordings.removeAll()
         AttachmentFileStoreShared.store?.removeAll()
@@ -357,6 +419,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let task = try context.fetch(descriptor).first else { return }
             task.serverVersion = max(task.serverVersion, version)
+        case .transcriptCorrection:
+            let descriptor = FetchDescriptor<TranscriptCorrection>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let correction = try context.fetch(descriptor).first else { return }
+            correction.serverVersion = max(correction.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -457,6 +525,14 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         if let sequence = record.sequenceId { entry.sequenceID = sequence }
         if let start = record.startOffset { entry.startOffset = start }
         if let end = record.endOffset { entry.endOffset = end }
+        // Time provenance: rows applied from the server carry offsets of
+        // unknown origin (another device's segmenter, a cloud import) —
+        // legacy is the honest marker unless the record says otherwise.
+        if let source = record.timeSource, let parsed = TranscriptTimeSource(rawValue: source) {
+            entry.timeSource = parsed
+        } else {
+            entry.timeSource = .legacy
+        }
         entry.serverVersion = serverVersion
         try context.save()
     }
@@ -481,6 +557,15 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         for attachment in try context.fetch(attachmentDescriptor) {
             context.delete(attachment)
         }
+        let correctionDescriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.sessionID == id }
+        )
+        for correction in try context.fetch(correctionDescriptor) {
+            context.delete(correction)
+        }
+        if let recording = try recording(sessionID: id) {
+            context.delete(recording)
+        }
         try context.delete(session)
         try context.save()
         SessionRecordings.remove(for: id)
@@ -496,7 +581,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             session.entryCount -= 1
         }
         // Notes AND attachments anchored to the removed entry keep their
-        // content — the anchor is metadata and is simply dropped.
+        // content — the anchor is metadata and is simply dropped. The
+        // correction overlay dies with its entry (nothing left to correct).
         let noteDescriptor = FetchDescriptor<SessionNote>(
             predicate: #Predicate { $0.anchorEntryID == id }
         )
@@ -510,6 +596,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         for attachment in try context.fetch(attachmentDescriptor) {
             attachment.anchorEntryID = nil
             attachment.updatedAt = .now
+        }
+        let correctionDescriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.id == id }
+        )
+        for correction in try context.fetch(correctionDescriptor) {
+            context.delete(correction)
         }
         try context.delete(entry)
         try context.save()
@@ -583,6 +675,21 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                     entityID: entry.id,
                     operation: .upsert,
                     baseServerVersion: entry.serverVersion,
+                    payload: payload
+                ))
+            }
+            // Corrections ride after their entries (the server validates
+            // the parent entry exists, like notes after sessions).
+            let corrections = (try? corrections(forSessionID: session.id)) ?? []
+            for correction in corrections {
+                var payload = CloudSyncService.payload(for: correction)
+                payload.sessionId = correction.sessionID
+                payload.entryId = correction.id
+                items.append(SyncOutboxItem(
+                    entityType: .transcriptCorrection,
+                    entityID: correction.id,
+                    operation: .upsert,
+                    baseServerVersion: correction.serverVersion,
                     payload: payload
                 ))
             }
@@ -847,6 +954,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         let note = SessionNote(
             sessionID: id,
             anchorEntryID: draft.anchorEntryID,
+            timeOffset: draft.timeOffset,
             text: draft.text
         )
         context.insert(note)
@@ -895,11 +1003,16 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 id: recordID,
                 sessionID: sessionID,
                 anchorEntryID: record.anchorEntryId,
+                timeOffset: record.noteTimeOffset,
                 text: record.noteText ?? ""
             )
             context.insert(note)
         }
         if let text = record.noteText, !text.isEmpty { note.text = text }
+        // The note's classroom-relative position: adopted when the record
+        // carries one (absent keeps the local value — an approximation
+        // beats no position).
+        if let offset = record.noteTimeOffset { note.timeOffset = offset }
         // Full row state: a record without an anchor means the note is
         // unanchored server-side.
         note.anchorEntryID = record.anchorEntryId
@@ -1894,5 +2007,302 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         guard let task = try context.fetch(descriptor).first else { return }
         context.delete(task)
         try context.save()
+    }
+
+    // MARK: - Session recordings (device-local)
+
+    func recording(sessionID: UUID) throws -> SessionRecording? {
+        let descriptor = FetchDescriptor<SessionRecording>(
+            predicate: #Predicate { $0.sessionID == sessionID }
+        )
+        return try context.fetch(descriptor).first
+    }
+
+    func allRecordings() throws -> [SessionRecording] {
+        try context.fetch(FetchDescriptor<SessionRecording>())
+    }
+
+    func beginRecording(sessionID: UUID) throws -> SessionRecording {
+        if let existing = try recording(sessionID: sessionID) {
+            // A row already exists (relaunch after an abnormal end, or a
+            // stale row from a deleted file): reuse it — the writer starts
+            // a fresh file, so reset the state honestly.
+            existing.isDeleted = false
+            existing.isComplete = false
+            existing.duration = 0
+            existing.fileSize = 0
+            existing.waveformStatus = .notGenerated
+            existing.updatedAt = .now
+            try context.save()
+            return existing
+        }
+        let recording = SessionRecording(sessionID: sessionID)
+        context.insert(recording)
+        try context.save()
+        return recording
+    }
+
+    func finishRecording(
+        _ recording: SessionRecording, duration: TimeInterval, fileSize: Int64
+    ) throws {
+        recording.duration = max(0, duration)
+        recording.fileSize = max(0, fileSize)
+        recording.isComplete = true
+        recording.updatedAt = .now
+        try context.save()
+    }
+
+    func updateRecordingWaveformStatus(
+        _ recording: SessionRecording, status: SessionRecording.WaveformStatus
+    ) throws {
+        guard recording.waveformStatus != status else { return }
+        recording.waveformStatus = status
+        recording.updatedAt = .now
+        try context.save()
+    }
+
+    @discardableResult
+    func deleteRecordingFile(_ recording: SessionRecording) throws -> Int64 {
+        guard !recording.isDeleted else {
+            return (try? Self.recordingFileSize(recording)) ?? 0
+        }
+        let reclaimed = (try? Self.recordingFileSize(recording)) ?? 0
+        SessionRecordings.removeFile(for: recording)
+        // The row (and every transcript time offset) survives: only the
+        // audio is gone.
+        recording.isDeleted = true
+        recording.waveformStatus = .notGenerated
+        recording.updatedAt = .now
+        try context.save()
+        return reclaimed
+    }
+
+    /// Real bytes on disk for one recording (0 when the file is gone).
+    private static func recordingFileSize(_ recording: SessionRecording) throws -> Int64 {
+        let url = SessionRecordings.directory(for: recording.sessionID)
+            .appendingPathComponent(recording.fileName)
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? Int64) ?? 0
+    }
+
+    /// Launch-time reconciliation between rows and disk:
+    /// - a raw.wav with no row (recorded by an older app version) gains a
+    ///   legacy row (duration inferred from the file size; completion
+    ///   unknown → false, which the player treats as "may be incomplete");
+    /// - a row whose session is finished but `isComplete` false (the app
+    ///   died mid-class) keeps its duration best-effort from file size;
+    /// - a row whose file is gone flips `isDeleted` (never a phantom play
+    ///   button).
+    /// Never deletes a recording whose session is still running/unfinished.
+    func reconcileRecordingState() throws {
+        // Sessions still in progress keep their files and rows untouched.
+        let runningDescriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.endTime == nil }
+        )
+        let runningIDs = Set(try context.fetch(runningDescriptor).map(\.id))
+
+        let sessions = try context.fetch(FetchDescriptor<ClassroomSession>())
+        var knownIDs = Set<UUID>()
+        for session in sessions {
+            knownIDs.insert(session.id)
+            guard let recording = try recording(sessionID: session.id) else {
+                // Legacy recording: file exists, row does not.
+                if !runningIDs.contains(session.id),
+                   SessionRecordings.recordingFileExists(sessionID: session.id) {
+                    let row = SessionRecording(sessionID: session.id)
+                    row.isComplete = session.abnormalTermination == false
+                    let size = SessionRecordings.rawWAVFileSize(sessionID: session.id)
+                    row.fileSize = size
+                    row.duration = size > 0
+                        ? WAVFileInspector.durationOfRawWAV(bytes: size) : 0
+                    context.insert(row)
+                }
+                continue
+            }
+            if runningIDs.contains(session.id) { continue }
+            let exists = SessionRecordings.recordingFileExists(sessionID: session.id)
+            if exists {
+                if !recording.isDeleted {
+                    // Refresh size (the writer may have died before the
+                    // row was updated).
+                    recording.fileSize = SessionRecordings.rawWAVFileSize(sessionID: session.id)
+                    if recording.duration <= 0, recording.fileSize > 0 {
+                        recording.duration = WAVFileInspector
+                            .durationOfRawWAV(bytes: recording.fileSize)
+                    }
+                    recording.updatedAt = .now
+                }
+            } else if !recording.isDeleted {
+                // The file was removed behind our back — record the truth.
+                recording.isDeleted = true
+                recording.updatedAt = .now
+            }
+        }
+        // Rows without a session are orphans (session deleted on another
+        // device but the file is device-local): the audio is unreachable,
+        // drop both.
+        for recording in try allRecordings() where !knownIDs.contains(recording.sessionID) {
+            SessionRecordings.remove(for: recording.sessionID)
+            context.delete(recording)
+        }
+        try context.save()
+    }
+
+    // MARK: - Transcript corrections
+
+    func corrections(forSessionID id: UUID) throws -> [TranscriptCorrection] {
+        let descriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.sessionID == id }
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func allCorrections() throws -> [TranscriptCorrection] {
+        try context.fetch(FetchDescriptor<TranscriptCorrection>())
+    }
+
+    func saveCorrection(
+        sessionID: UUID, entryID: UUID,
+        russian: String, chinese: String?, needsRetranslation: Bool
+    ) throws -> TranscriptCorrection {
+        let descriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.id == entryID }
+        )
+        let correction: TranscriptCorrection
+        if let existing = try context.fetch(descriptor).first {
+            correction = existing
+        } else {
+            correction = TranscriptCorrection(id: entryID, sessionID: sessionID)
+            context.insert(correction)
+        }
+        correction.russianText = russian
+        correction.chineseText = chinese
+        correction.needsRetranslation = needsRetranslation
+        correction.modifiedAt = .now
+        correction.updatedAt = .now
+        // Corrections are classroom content: the session's staleness
+        // marker (课堂内容已更新) must fire for study reviews.
+        let sessionDescriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == sessionID }
+        )
+        if let session = try context.fetch(sessionDescriptor).first {
+            session.updatedAt = .now
+        }
+        try context.save()
+        mutationObserver?.correctionUpserted(correction)
+        return correction
+    }
+
+    func deleteCorrection(entryID: UUID) throws {
+        let descriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.id == entryID }
+        )
+        guard let correction = try context.fetch(descriptor).first else { return }
+        let sessionID = correction.sessionID
+        context.delete(correction)
+        let sessionDescriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == sessionID }
+        )
+        if let session = try context.fetch(sessionDescriptor).first {
+            session.updatedAt = .now
+        }
+        try context.save()
+        mutationObserver?.correctionDeleted(id: entryID)
+    }
+
+    func applyRemoteCorrection(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id, let sessionID = record.sessionId else { return }
+        let descriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let remoteRussian = record.correctionRussian ?? ""
+        let remoteChinese = record.correctionChinese
+        let remoteModified = record.correctionModifiedAt ?? .distantPast
+
+        let correction: TranscriptCorrection
+        if let existing {
+            // Conflict semantics: both sides substantively edited since the
+            // last common state → keep the LOCAL text (the device the user
+            // is holding wins) and preserve the REMOTE as a conflict copy
+            // the user can adopt deliberately. "Substantive" = the fields
+            // actually differ.
+            let localModified = existing.modifiedAt
+            let differs = existing.russianText != remoteRussian
+                || existing.chineseText != remoteChinese
+            let remoteIsNewer = remoteModified > localModified
+            let remoteHasContent = !remoteRussian.isEmpty || remoteChinese != nil
+            let localHasContent = !existing.russianText.isEmpty || existing.chineseText != nil
+            if remoteIsNewer && differs && remoteHasContent && localHasContent {
+                existing.conflictJSON = CorrectionConflictCopy(
+                    russianText: remoteRussian,
+                    chineseText: remoteChinese,
+                    modifiedAt: remoteModified
+                ).encodedJSON()
+                existing.serverVersion = serverVersion
+                try context.save()
+                return
+            }
+            if remoteIsNewer {
+                existing.russianText = remoteRussian
+                existing.chineseText = remoteChinese
+                if let needs = record.correctionNeedsRetranslation {
+                    existing.needsRetranslation = needs
+                }
+            } else if differs && !remoteIsNewer && remoteHasContent {
+                // Local is newer: keep local content, but a substantive
+                // remote difference still merits the conflict copy so
+                // nothing is silently discarded.
+                existing.conflictJSON = CorrectionConflictCopy(
+                    russianText: remoteRussian,
+                    chineseText: remoteChinese,
+                    modifiedAt: remoteModified
+                ).encodedJSON()
+            }
+            existing.serverVersion = serverVersion
+            existing.updatedAt = .now
+        } else {
+            correction = TranscriptCorrection(
+                id: recordID,
+                sessionID: sessionID,
+                russianText: remoteRussian,
+                chineseText: remoteChinese,
+                modifiedAt: remoteModified == .distantPast ? .now : remoteModified,
+                needsRetranslation: record.correctionNeedsRetranslation ?? false,
+                serverVersion: serverVersion
+            )
+            context.insert(correction)
+        }
+        try context.save()
+    }
+
+    func deleteCorrectionByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<TranscriptCorrection>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let correction = try context.fetch(descriptor).first else { return }
+        context.delete(correction)
+        try context.save()
+    }
+}
+
+/// Conflict copy preserved when a remote correction loses the
+/// newer-modifiedAt race but carries substantively different text. The
+/// user can adopt it (or dismiss it) from the correction editor.
+struct CorrectionConflictCopy: Codable, Sendable, Equatable {
+    var russianText: String
+    var chineseText: String?
+    var modifiedAt: Date
+
+    func encodedJSON() -> String? {
+        guard let data = try? JSONEncoder().encode(self) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func decode(_ json: String?) -> CorrectionConflictCopy? {
+        guard let json, let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(CorrectionConflictCopy.self, from: data)
     }
 }

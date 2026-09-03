@@ -708,7 +708,8 @@ struct GuestLibraryReader {
         ClassroomSession.self, TranscriptEntry.self,
         Course.self, SessionNote.self, StudyReview.self,
         SessionAttachment.self,
-        GlossaryTerm.self, StudyCard.self, StudyTask.self
+        GlossaryTerm.self, StudyCard.self, StudyTask.self,
+        SessionRecording.self, TranscriptCorrection.self
     ])
 
     private var guestURL: URL { AccountScope.guestDatabaseURL }

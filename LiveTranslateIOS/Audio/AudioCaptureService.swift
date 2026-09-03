@@ -421,6 +421,13 @@ final class WAVFileWriter: @unchecked Sendable {
         44 + framesWritten * 2
     }
 
+    /// Recorded duration in seconds (thread-safe — read from the session
+    /// controller after a clean stop).
+    var durationSeconds: TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return Double(framesWritten) / Double(sampleRate)
+    }
+
     static let headerLength = 44
 
     private static func headerBytes(sampleRate: Int, dataBytes: Int) -> Data {

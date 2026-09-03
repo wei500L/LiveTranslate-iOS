@@ -28,7 +28,11 @@ final class SessionDetailViewModel {
     var entries: [TranscriptEntry] = []
     var notes: [SessionNote] = []
     var attachments: [SessionAttachment] = []
+    /// Entry id → correction (effective-text lookups; nil = model only).
+    var correctionsByEntryID: [UUID: TranscriptCorrection] = [:]
     private(set) var review: StudyReview?
+    /// The session's recording metadata (nil = never recorded).
+    private(set) var recording: SessionRecording?
     var isLoaded = false
     var isRetranslating = false
     var displayMode: DisplayMode = .bilingual
@@ -56,6 +60,8 @@ final class SessionDetailViewModel {
             entries = []
             notes = []
             attachments = []
+            correctionsByEntryID = [:]
+            recording = nil
             review = nil
             isLoaded = true
             return
@@ -64,6 +70,11 @@ final class SessionDetailViewModel {
         entries = (try? environment.repository.entries(for: session)) ?? []
         notes = (try? environment.repository.notes(forSessionID: sessionID)) ?? []
         attachments = (try? environment.repository.attachments(forSessionID: sessionID)) ?? []
+        let corrections = (try? environment.repository.corrections(forSessionID: sessionID)) ?? []
+        correctionsByEntryID = Dictionary(
+            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        recording = try? environment.repository.recording(sessionID: sessionID)
         review = try? environment.repository.studyReview(forSessionID: sessionID)
         // Keep bookmark IDs honest: entries deleted upstream drop their
         // bookmarks instead of lingering as orphans.
@@ -92,11 +103,25 @@ final class SessionDetailViewModel {
             return
         }
         matchIDs = entries.filter { entry in
-            entry.originalText.localizedCaseInsensitiveContains(query)
-                || (entry.translatedText ?? "").localizedCaseInsensitiveContains(query)
+            effectiveRussian(entry).localizedCaseInsensitiveContains(query)
+                || (effectiveChinese(entry) ?? "").localizedCaseInsensitiveContains(query)
         }
         .map(\.sequenceID)
         currentMatchIndex = matchIDs.isEmpty ? 0 : min(currentMatchIndex, matchIDs.count - 1)
+    }
+
+    // MARK: - Effective text (correction-aware reads)
+
+    func effectiveRussian(_ entry: TranscriptEntry) -> String {
+        entry.effectiveRussianText(correction: correctionsByEntryID[entry.id])
+    }
+
+    func effectiveChinese(_ entry: TranscriptEntry) -> String? {
+        entry.effectiveChineseText(correction: correctionsByEntryID[entry.id])
+    }
+
+    func isCorrected(_ entry: TranscriptEntry) -> Bool {
+        entry.isCorrected(correction: correctionsByEntryID[entry.id])
     }
 
     var matchCount: Int { matchIDs.count }
@@ -162,14 +187,27 @@ final class SessionDetailViewModel {
         return entries.first { $0.id == anchorID }
     }
 
-    /// Session-relative timestamp for a note (its anchor's offset, else the
-    /// note's creation time relative to the session start).
+    /// Session-relative timestamp for a note: its own recorded position
+    /// (playback or live time) first, then its anchor's offset, then the
+    /// creation time relative to the session start (approximation).
     func noteTimestamp(_ note: SessionNote) -> String {
+        if let offset = note.timeOffset {
+            return TranscriptExporter.mmss(max(0, offset))
+        }
         if let entry = anchorEntry(for: note) {
             return TranscriptExporter.mmss(entry.startOffset)
         }
         let offset = note.createdAt.timeIntervalSince(session?.startTime ?? note.createdAt)
         return TranscriptExporter.mmss(max(0, offset))
+    }
+
+    /// The note's best playback position (nil when nothing usable).
+    func notePlaybackOffset(_ note: SessionNote) -> TimeInterval? {
+        if let offset = note.timeOffset { return max(0, offset) }
+        if let entry = anchorEntry(for: note) { return entry.startOffset }
+        guard let session else { return nil }
+        let offset = note.createdAt.timeIntervalSince(session.startTime)
+        return offset >= 0 ? offset : nil
     }
 
     /// Jump to a note's anchor (scroll target consumed by the view).
@@ -290,8 +328,8 @@ final class SessionDetailViewModel {
         let ordered = entries.sorted { $0.sequenceID < $1.sequenceID }
         let text = ordered.map { entry -> String in
             let time = TranscriptExporter.mmss(entry.startOffset)
-            var line = "[\(time)] \(entry.originalText)"
-            if let translated = entry.translatedText, !translated.isEmpty {
+            var line = "[\(time)] \(effectiveRussian(entry))"
+            if let translated = effectiveChinese(entry), !translated.isEmpty {
                 line += "\n\(translated)"
             }
             return line
@@ -347,7 +385,43 @@ final class SessionDetailViewModel {
             .sorted { $0.sequenceID < $1.sequenceID }
             .filter { $0.status == .completed }
             .suffix(environment?.settings.contextTurns ?? 4)
-            .map { ($0.originalText, $0.translatedText ?? "") }
+            .map { ($0.effectiveRussianText(correction: correctionsByEntryID[$0.id]),
+                    $0.effectiveChineseText(correction: correctionsByEntryID[$0.id]) ?? "") }
+    }
+
+    // MARK: - Recording playback
+
+    /// True when a playable recording exists for this session (row + file
+    /// + not deleted). Drives the bottom mini player's existence.
+    var hasPlayableRecording: Bool {
+        guard let recording, !recording.isDeleted else { return false }
+        return SessionRecordings.recordingFileExists(sessionID: recording.sessionID)
+    }
+
+    /// Loads the recording into the playback engine if not loaded yet.
+    /// Returns false when no playable recording exists.
+    @discardableResult
+    func ensureRecordingLoaded() -> Bool {
+        guard let environment, hasPlayableRecording else { return false }
+        if environment.playback.sessionID != session?.id || environment.playback.phase == .idle {
+            environment.playback.load(recording: (recording)!)
+        }
+        return true
+    }
+
+    /// Play from one entry (context menu 从这里播放 / tapped timestamp).
+    @discardableResult
+    func playFrom(entry: TranscriptEntry) -> Bool {
+        playFrom(offset: max(0, entry.startOffset - 1.5))
+    }
+
+    /// Play from an absolute classroom-relative position (notes, markers).
+    @discardableResult
+    func playFrom(offset: TimeInterval) -> Bool {
+        guard let environment, ensureRecordingLoaded() else { return false }
+        environment.playback.seek(to: max(0, offset - 1.0))
+        environment.playback.play()
+        return true
     }
 
 }

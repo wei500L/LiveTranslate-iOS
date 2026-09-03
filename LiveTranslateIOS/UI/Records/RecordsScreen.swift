@@ -298,12 +298,14 @@ struct RecordsScreen: View {
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
         let review = (try? environment.repository.studyReview(forSessionID: session.id))
             .flatMap { StudyReviewContent.decode($0.contentJSON) }
+        let corrections = (try? environment.repository.corrections(forSessionID: session.id)) ?? []
         guard let url = await SessionExport.writeTemporaryFile(
             session: session,
             entries: entries,
             notes: notes,
             scope: .fullMaterial,
             review: review,
+            corrections: corrections,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
         ) else {

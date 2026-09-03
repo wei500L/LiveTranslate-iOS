@@ -24,6 +24,10 @@ enum SyncEntityType: String, Codable, Sendable {
     case term
     case studyCard = "study_card"
     case studyTask = "study_task"
+    /// User correction overlay for one transcript entry (entity id ==
+    /// entry id). 21 chars — fits VARCHAR(32) on the 00008 table; the
+    /// change-log columns are VARCHAR(32) since 00008 as well.
+    case transcriptCorrection = "transcript_correction"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -193,6 +197,9 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var russianText: String?
     var chineseText: String?
     var translationStatus: String?
+    /// Provenance of the entry's audio position (audio | legacy).
+    /// Absent keeps the server value (default legacy server-side).
+    var timeSource: String?
     // bookmark / favorite
     var entryId: UUID?
     var isBookmarked: Bool?
@@ -209,6 +216,9 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     // note
     var noteText: String?
     var anchorEntryId: UUID?
+    /// The note's classroom-relative position (live time or playback
+    /// position when taken). Absent keeps the server value.
+    var noteTimeOffset: Double?
     // study review (entity id == session id). Only terminal states with
     // content are ever pushed — generating/partial progress is local.
     var reviewStatus: String?
@@ -272,6 +282,14 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var sourceAttachmentId: UUID?
     var sourceReviewId: UUID?
     var sourceTermId: UUID?
+    // transcript_correction (entity id == entry id; the corrected texts
+    // ride their own fields — the model's originals stay immutable).
+    var correctionRussian: String?
+    /// nil = "the user never corrected the Chinese" (keeps model output);
+    /// a JSON-encoded empty string deliberately blanks it.
+    var correctionChinese: String?
+    var correctionModifiedAt: Date?
+    var correctionNeedsRetranslation: Bool?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -315,6 +333,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var russianText: String?
     var chineseText: String?
     var translationStatus: String?
+    var timeSource: String?
     var entryId: UUID?
     var isBookmarked: Bool?
     var isFavorite: Bool?
@@ -325,6 +344,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var isArchived: Bool?
     var noteText: String?
     var anchorEntryId: UUID?
+    var noteTimeOffset: Double?
     var reviewStatus: String?
     var reviewContent: String?
     var reviewGeneratedContent: String?
@@ -376,6 +396,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var sourceAttachmentId: UUID?
     var sourceReviewId: UUID?
     var sourceTermId: UUID?
+    var correctionRussian: String?
+    var correctionChinese: String?
+    var correctionModifiedAt: Date?
+    var correctionNeedsRetranslation: Bool?
     var serverVersion: Int
     var deleted: Bool
 
@@ -396,6 +420,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
         russianText: String? = nil,
         chineseText: String? = nil,
         translationStatus: String? = nil,
+        timeSource: String? = nil,
         entryId: UUID? = nil,
         isBookmarked: Bool? = nil,
         isFavorite: Bool? = nil,
@@ -406,6 +431,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
         isArchived: Bool? = nil,
         noteText: String? = nil,
         anchorEntryId: UUID? = nil,
+        noteTimeOffset: Double? = nil,
         reviewStatus: String? = nil,
         reviewContent: String? = nil,
         reviewGeneratedContent: String? = nil,
@@ -455,6 +481,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
         sourceAttachmentId: UUID? = nil,
         sourceReviewId: UUID? = nil,
         sourceTermId: UUID? = nil,
+        correctionRussian: String? = nil,
+        correctionChinese: String? = nil,
+        correctionModifiedAt: Date? = nil,
+        correctionNeedsRetranslation: Bool? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -482,6 +512,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.isArchived = isArchived
         self.noteText = noteText
         self.anchorEntryId = anchorEntryId
+        self.noteTimeOffset = noteTimeOffset
         self.reviewStatus = reviewStatus
         self.reviewContent = reviewContent
         self.reviewGeneratedContent = reviewGeneratedContent
@@ -531,6 +562,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.sourceAttachmentId = sourceAttachmentId
         self.sourceReviewId = sourceReviewId
         self.sourceTermId = sourceTermId
+        self.correctionRussian = correctionRussian
+        self.correctionChinese = correctionChinese
+        self.correctionModifiedAt = correctionModifiedAt
+        self.correctionNeedsRetranslation = correctionNeedsRetranslation
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -551,6 +586,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
         russianText = try container.decodeIfPresent(String.self, forKey: .russianText)
         chineseText = try container.decodeIfPresent(String.self, forKey: .chineseText)
         translationStatus = try container.decodeIfPresent(String.self, forKey: .translationStatus)
+        timeSource = try container.decodeIfPresent(String.self, forKey: .timeSource)
         entryId = try container.decodeIfPresent(UUID.self, forKey: .entryId)
         isBookmarked = try container.decodeIfPresent(Bool.self, forKey: .isBookmarked)
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite)
@@ -561,6 +597,7 @@ struct SyncServerRecordDTO: Codable, Sendable {
         isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived)
         noteText = try container.decodeIfPresent(String.self, forKey: .noteText)
         anchorEntryId = try container.decodeIfPresent(UUID.self, forKey: .anchorEntryId)
+        noteTimeOffset = try container.decodeIfPresent(Double.self, forKey: .noteTimeOffset)
         reviewStatus = try container.decodeIfPresent(String.self, forKey: .reviewStatus)
         reviewContent = try container.decodeIfPresent(String.self, forKey: .reviewContent)
         reviewGeneratedContent = try container.decodeIfPresent(String.self, forKey: .reviewGeneratedContent)
@@ -610,6 +647,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
         sourceAttachmentId = try container.decodeIfPresent(UUID.self, forKey: .sourceAttachmentId)
         sourceReviewId = try container.decodeIfPresent(UUID.self, forKey: .sourceReviewId)
         sourceTermId = try container.decodeIfPresent(UUID.self, forKey: .sourceTermId)
+        correctionRussian = try container.decodeIfPresent(String.self, forKey: .correctionRussian)
+        correctionChinese = try container.decodeIfPresent(String.self, forKey: .correctionChinese)
+        correctionModifiedAt = try container.decodeIfPresent(Date.self, forKey: .correctionModifiedAt)
+        correctionNeedsRetranslation = try container.decodeIfPresent(Bool.self, forKey: .correctionNeedsRetranslation)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -659,4 +700,5 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var termCount: Int?
     var studyCardCount: Int?
     var studyTaskCount: Int?
+    var transcriptCorrectionCount: Int?
 }

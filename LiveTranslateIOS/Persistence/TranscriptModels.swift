@@ -128,6 +128,29 @@ final class ClassroomSession {
     }
 }
 
+/// Where a transcript entry's audio position came from. The entry's
+/// start/end offsets are RELATIVE to the session's recording (and to the
+/// classroom wall clock with pauses excluded — the two coincide because
+/// paused audio is discarded before it reaches either the segmenter or
+/// the WAV writer).
+///
+/// - `audio`: derived from the VAD segmenter's continuous sample count
+///   against the recorded file — precise to the window (~32 ms).
+/// - `legacy`: an entry written by an older app version that carries
+///   offsets derived the same way, but with no recorded provenance; the
+///   UI may position with it but must not imply sample-exactness.
+/// - `inferred`: `createdAt - session.startTime` on old data where no
+///   offsets were ever stored (cloud-imported rows). Approximate — the
+///   inference happens at read time and is NOT persisted.
+enum TranscriptTimeSource: String, Codable, Sendable {
+    /// Precise position from the audio sample timeline.
+    case audio
+    /// Offsets stored by an older version (same derivation, no marker).
+    case legacy
+    /// No usable position information.
+    case none
+}
+
 /// One recognized utterance with its (possibly pending) translation.
 @Model
 final class TranscriptEntry {
@@ -137,6 +160,10 @@ final class TranscriptEntry {
     var sequenceID: Int
     var startOffset: TimeInterval
     var endOffset: TimeInterval
+    /// Raw value of `TranscriptTimeSource` (default `legacy`: every row
+    /// written before this field existed carries real segment offsets, so
+    /// legacy is the honest default; live classes write `audio`).
+    var timeSourceRaw: String
     var originalText: String
     var translatedText: String?
     /// pending | completed | failed | notConfigured
@@ -160,6 +187,7 @@ final class TranscriptEntry {
         originalText: String,
         translatedText: String? = nil,
         translationStatus: String = TranslationStatus.pending.rawValue,
+        timeSource: TranscriptTimeSource = .audio,
         asrBackend: String,
         asrLatency: TimeInterval = 0,
         asrRTF: Double = 0,
@@ -171,6 +199,7 @@ final class TranscriptEntry {
         self.sequenceID = sequenceID
         self.startOffset = startOffset
         self.endOffset = endOffset
+        self.timeSourceRaw = timeSource.rawValue
         self.originalText = originalText
         self.translatedText = translatedText
         self.translationStatus = translationStatus
@@ -181,18 +210,30 @@ final class TranscriptEntry {
         self.createdAt = .now
         self.serverVersion = serverVersion
     }
+
+    var timeSource: TranscriptTimeSource {
+        get { TranscriptTimeSource(rawValue: timeSourceRaw) ?? .legacy }
+        set { timeSourceRaw = newValue.rawValue }
+    }
 }
 
 /// A user-typed note for one classroom session, optionally anchored to the
 /// transcript entry it refers to. Anchored notes render inline under their
 /// entry and can jump back to it; the anchor is metadata — the note text
 /// survives even if the entry disappears (the anchor is then cleared).
+/// `timeOffset` records the classroom-relative moment the note was taken
+/// (live classroom time, or the playback position while reviewing with
+/// audio); nil on legacy notes (the creation time is then the only
+/// approximation).
 @Model
 final class SessionNote {
     @Attribute(.unique) var id: UUID
     var sessionID: UUID
     /// The transcript entry this note was taken about (nil = standalone).
     var anchorEntryID: UUID?
+    /// Classroom-relative seconds when the note was taken (nil = legacy
+    /// note without a recorded position).
+    var timeOffset: TimeInterval?
     var text: String
     var createdAt: Date
     var updatedAt: Date
@@ -203,12 +244,14 @@ final class SessionNote {
         id: UUID = UUID(),
         sessionID: UUID,
         anchorEntryID: UUID? = nil,
+        timeOffset: TimeInterval? = nil,
         text: String,
         serverVersion: Int = 0
     ) {
         self.id = id
         self.sessionID = sessionID
         self.anchorEntryID = anchorEntryID
+        self.timeOffset = timeOffset
         self.text = text
         self.createdAt = .now
         self.updatedAt = .now

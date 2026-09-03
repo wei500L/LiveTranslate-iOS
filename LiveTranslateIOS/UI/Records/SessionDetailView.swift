@@ -29,6 +29,14 @@ struct SessionDetailView: View {
     @State private var termDraftBox: TermDraftBox?
     @State private var cardDraftBox: CardDraftBox?
     @State private var taskDraftBox: TaskDraftBox?
+    /// Manual correction editor (long-press 转录校正).
+    @State private var correctionEntry: TranscriptEntry?
+    /// Full playback page presentation.
+    @State private var pushingPlayback = false
+    /// Entry to hand the playback page (jump landed from search/review).
+    @State private var pendingPlaybackEntryID: UUID?
+    /// Honesty affordance: a play request with no recording on disk.
+    @State private var noRecordingHint = false
 
     let sessionID: UUID
     /// Opens the study-review page right away (search hit landing).
@@ -77,6 +85,10 @@ struct SessionDetailView: View {
             if openReviewOnLoad, viewModel.hasReviewResult {
                 pushingReview = true
             }
+            // Prepare the playback engine when a recording exists so the
+            // mini player is immediately usable (load is cheap; decode
+            // happens lazily by AVAudioPlayer on first play).
+            _ = viewModel.ensureRecordingLoaded()
         }
         .onChange(of: viewModel.isLoaded) { _, loaded in
             guard loaded, openAttachmentsOnLoad else { return }
@@ -95,6 +107,13 @@ struct SessionDetailView: View {
                     pendingReviewJump = entryID
                     pushingReview = false
                 }
+            )
+            .environment(environment)
+        }
+        .navigationDestination(isPresented: $pushingPlayback) {
+            SessionPlaybackView(
+                sessionID: sessionID,
+                initialEntryID: pendingPlaybackEntryID
             )
             .environment(environment)
         }
@@ -132,6 +151,11 @@ struct SessionDetailView: View {
         .sheet(item: $taskDraftBox) { box in
             TaskSaveSheet(draft: box.draft, editingTask: nil)
         }
+        .sheet(item: $correctionEntry) { entry in
+            TranscriptCorrectionView(sessionID: sessionID, entry: entry)
+                .environment(environment)
+                .onDisappear { viewModel.reload() }
+        }
         .sheet(item: $noteEditor) { context in
             if let session = viewModel.session {
                 NoteEditorView(
@@ -147,6 +171,11 @@ struct SessionDetailView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("无法生成导出文件，请重试。原文内容仍保存在本地。")
+        }
+        .alert("本堂课没有录音", isPresented: $noRecordingHint) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("无法播放声音，文字记录不受影响。")
         }
     }
 
@@ -189,6 +218,12 @@ struct SessionDetailView: View {
                         viewModel.pendingScrollTarget = entry.sequenceID
                     }
                     pendingReviewJump = nil
+                }
+            }
+            if viewModel.hasPlayableRecording {
+                SessionMiniPlayerView(sessionID: sessionID) {
+                    pendingPlaybackEntryID = nil
+                    pushingPlayback = true
                 }
             }
             bottomToolbar
@@ -249,6 +284,12 @@ struct SessionDetailView: View {
                     }
                     if !session.translationModel.isEmpty {
                         LabeledRow(label: "翻译模型", value: session.translationModel)
+                    }
+                    // Honest absence: no fake disabled player.
+                    if viewModel.recording == nil {
+                        LabeledRow(label: "录音", value: "本堂课未保存录音")
+                    } else if viewModel.recording?.isDeleted == true {
+                        LabeledRow(label: "录音", value: "录音已删除 · 文字记录保留")
                     }
                 }
                 .padding(.top, LTSpacing.xs)
@@ -443,6 +484,15 @@ struct SessionDetailView: View {
                     viewModel.detachAnchor(of: note)
                 }
             }
+            if viewModel.hasPlayableRecording, viewModel.notePlaybackOffset(note) != nil {
+                Button {
+                    if let offset = viewModel.notePlaybackOffset(note) {
+                        _ = viewModel.playFrom(offset: offset)
+                    }
+                } label: {
+                    Label("播放录音位置", systemImage: "play")
+                }
+            }
             Button("删除笔记", role: .destructive) {
                 viewModel.deleteNote(note)
             }
@@ -587,15 +637,30 @@ struct SessionDetailView: View {
                             isMatch: viewModel.isMatch(entry),
                             isMatchFocused: viewModel.isMatchFocused(entry),
                             isBookmarked: viewModel.isBookmarked(entry),
+                            isCorrected: viewModel.isCorrected(entry),
+                            hasRecording: viewModel.hasPlayableRecording,
+                            effectiveChineseText: viewModel.effectiveChinese(entry),
+                            effectiveRussianText: viewModel.effectiveRussian(entry),
                             anchoredNotes: viewModel.notes(anchoredTo: entry),
                             onToggleBookmark: { _ = viewModel.toggleBookmark(entry) },
                             onAddNote: {
                                 noteEditor = NoteEditorContext(note: nil, anchorEntry: entry)
                             },
+                            onPlayFrom: {
+                                if !viewModel.playFrom(entry: entry) {
+                                    noRecordingHint = true
+                                }
+                            },
+                            onCorrect: { correctionEntry = entry },
+                            onExpandPlayback: {
+                                pendingPlaybackEntryID = entry.id
+                                _ = viewModel.playFrom(entry: entry)
+                                pushingPlayback = true
+                            },
                             onSaveTerm: {
                                 termDraftBox = TermDraftBox(draft: TermDraft(
-                                    russian: entry.originalText,
-                                    chinese: entry.translatedText ?? "",
+                                    russian: viewModel.effectiveRussian(entry),
+                                    chinese: viewModel.effectiveChinese(entry) ?? "",
                                     courseID: viewModel.session?.courseID,
                                     sessionID: sessionID,
                                     sourceEntryID: entry.id
@@ -603,8 +668,8 @@ struct SessionDetailView: View {
                             },
                             onMakeCard: {
                                 cardDraftBox = CardDraftBox(draft: CardDraft(
-                                    front: entry.originalText,
-                                    back: entry.translatedText ?? "",
+                                    front: viewModel.effectiveRussian(entry),
+                                    back: viewModel.effectiveChinese(entry) ?? "",
                                     courseID: viewModel.session?.courseID,
                                     sessionID: sessionID,
                                     sourceEntryID: entry.id
@@ -612,7 +677,8 @@ struct SessionDetailView: View {
                             },
                             onCreateTask: {
                                 taskDraftBox = TaskDraftBox(draft: TaskDraft(
-                                    title: (entry.translatedText ?? entry.originalText)
+                                    title: (viewModel.effectiveChinese(entry)
+                                        ?? viewModel.effectiveRussian(entry))
                                         .prefix(120).description,
                                     courseID: viewModel.session?.courseID,
                                     sessionID: sessionID,
@@ -765,6 +831,7 @@ struct SessionDetailView: View {
         let entries = (try? environment.repository.entries(for: session)) ?? []
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
         let attachments = (try? environment.repository.attachments(forSessionID: session.id)) ?? []
+        let corrections = (try? environment.repository.corrections(forSessionID: session.id)) ?? []
         let review: StudyReviewContent?
         if scope == .reviewOnly || scope == .fullMaterial {
             review = (try? environment.repository.studyReview(forSessionID: session.id))
@@ -779,6 +846,7 @@ struct SessionDetailView: View {
             scope: scope,
             review: review,
             attachments: attachments,
+            corrections: corrections,
             attachmentFiles: attachmentFiles,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
@@ -798,6 +866,10 @@ struct SessionDetailView: View {
 /// Chinese first, Russian beneath, timestamp on a left timeline node,
 /// bookmark star on the right, search hits highlighted. Notes anchored to
 /// the entry render inline beneath the text with a note-tinted marker.
+/// The texts shown are the EFFECTIVE ones (correction-aware); the 已修正
+/// marker appears only when a correction meaningfully differs. The
+/// timestamp is tappable when a recording exists (jump to sound); the
+/// context menu adds 从这里播放 / 校正这段文字 / 展开回放.
 private struct DetailEntryRow: View {
     let entry: TranscriptEntry
     let displayMode: SessionDetailViewModel.DisplayMode
@@ -805,31 +877,47 @@ private struct DetailEntryRow: View {
     let isMatch: Bool
     let isMatchFocused: Bool
     let isBookmarked: Bool
+    var isCorrected: Bool = false
+    var hasRecording: Bool = false
+    /// Effective texts (correction-aware) — provided by the view model.
+    var effectiveChineseText: String? = nil
+    var effectiveRussianText: String = ""
     var anchoredNotes: [SessionNote] = []
     var onToggleBookmark: () -> Void = {}
     var onAddNote: () -> Void = {}
+    var onPlayFrom: () -> Void = {}
+    var onCorrect: () -> Void = {}
+    var onExpandPlayback: () -> Void = {}
     var onSaveTerm: () -> Void = {}
     var onMakeCard: () -> Void = {}
     var onCreateTask: () -> Void = {}
+
+    private var shownChinese: String? {
+        effectiveChineseText ?? entry.translatedText
+    }
+
+    private var shownRussian: String {
+        effectiveRussianText.isEmpty ? entry.originalText : effectiveRussianText
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: LTSpacing.m) {
             timeline
 
             VStack(alignment: .leading, spacing: LTSpacing.xs) {
-                if displayMode != .russian, let translated = entry.translatedText, !translated.isEmpty {
+                if displayMode != .russian, let translated = shownChinese, !translated.isEmpty {
                     Text(HighlightedText.build(translated, query: query))
                         .font(.subheadline)
                         .foregroundStyle(LTColors.textPrimary)
                         .textSelection(.enabled)
                 }
                 if displayMode != .chinese {
-                    Text(HighlightedText.build(entry.originalText, query: query))
+                    Text(HighlightedText.build(shownRussian, query: query))
                         .font(.footnote)
                         .foregroundStyle(LTColors.textSecondary)
                         .textSelection(.enabled)
                 }
-                if displayMode == .chinese, entry.translatedText == nil {
+                if displayMode == .chinese, shownChinese == nil {
                     Text(translationStateText)
                         .font(LTTypography.caption)
                         .foregroundStyle(entry.status == .failed ? LTColors.warning : LTColors.textTertiary)
@@ -838,6 +926,11 @@ private struct DetailEntryRow: View {
                     Text("翻译失败 · 俄语原文已保存，可在“更多”中重试")
                         .font(LTTypography.caption)
                         .foregroundStyle(LTColors.warning.opacity(0.85))
+                }
+                if isCorrected {
+                    Text("已修正")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.accentCyan.opacity(0.9))
                 }
                 ForEach(anchoredNotes, id: \.id) { note in
                     inlineNote(note)
@@ -871,13 +964,24 @@ private struct DetailEntryRow: View {
                 )
         )
         .contextMenu {
+            if hasRecording {
+                Button(action: onPlayFrom) {
+                    Label("从这里播放", systemImage: "play")
+                }
+                Button(action: onExpandPlayback) {
+                    Label("展开完整回放", systemImage: "waveform")
+                }
+            }
+            Button(action: onCorrect) {
+                Label("校正这段文字", systemImage: "pencil.line")
+            }
             Button("复制中文") {
-                if let translated = entry.translatedText {
+                if let translated = shownChinese {
                     UIPasteboard.general.string = translated
                 }
             }
             Button("复制俄语") {
-                UIPasteboard.general.string = entry.originalText
+                UIPasteboard.general.string = shownRussian
             }
             Button(isBookmarked ? "取消书签" : "标记书签") {
                 onToggleBookmark()
@@ -919,7 +1023,7 @@ private struct DetailEntryRow: View {
         VStack(spacing: 0) {
             Text(TranscriptExporter.mmss(entry.startOffset))
                 .font(LTTypography.timestamp)
-                .foregroundStyle(LTColors.textTertiary)
+                .foregroundStyle(hasRecording ? LTColors.accentCyan : LTColors.textTertiary)
                 .padding(.bottom, 4)
             Circle()
                 .fill(isMatchFocused ? LTColors.accentCyan : LTColors.textTertiary.opacity(0.7))
@@ -932,6 +1036,13 @@ private struct DetailEntryRow: View {
                 .padding(.top, 4)
         }
         .frame(width: 40)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Tapping the timestamp jumps to the sound (only when the
+            // class actually has a recording — otherwise inert, no fake
+            // button).
+            if hasRecording { onPlayFrom() }
+        }
         .accessibilityHidden(true)
     }
 

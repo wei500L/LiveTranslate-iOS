@@ -253,6 +253,59 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Cloud-sync apply for a task record.
     func applyRemoteStudyTask(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteTaskByID(_ id: UUID) throws
+
+    // MARK: Session recordings (device-local)
+    // The audio FILE lives under SessionRecordings; these rows are the
+    // only sanctioned way to reach it (views never build raw.wav paths).
+    // Recordings never sync — only their row exists locally.
+
+    /// The session's recording metadata (nil = never recorded / no row).
+    func recording(sessionID: UUID) throws -> SessionRecording?
+    /// All recordings across sessions (storage management statistics).
+    func allRecordings() throws -> [SessionRecording]
+    /// Registers a recording started by the live coordinator (file is
+    /// already open on disk). Local-only — no sync notification.
+    func beginRecording(sessionID: UUID) throws -> SessionRecording
+    /// Marks duration/size and completion after a clean stop. Local-only.
+    func finishRecording(_ recording: SessionRecording, duration: TimeInterval, fileSize: Int64) throws
+    /// Persists a waveform-status change WITHOUT touching
+    /// duration/completion semantics (the waveform precompute uses this;
+    /// `finishRecording` is reserved for the clean-stop path).
+    /// Local-only.
+    func updateRecordingWaveformStatus(_ recording: SessionRecording, status: SessionRecording.WaveformStatus) throws
+    /// Deletes the audio FILE but keeps the row (isDeleted) so transcript
+    /// time metadata survives. Local-only. Returns the reclaimed bytes.
+    @discardableResult
+    func deleteRecordingFile(_ recording: SessionRecording) throws -> Int64
+    /// Reconciles rows against disk at launch: creates rows for legacy
+    /// recordings (raw.wav exists, no row — recorded by an older version),
+    /// flips isComplete on rows whose session ended, and marks isDeleted
+    /// when the file was removed behind our back. Local-only.
+    func reconcileRecordingState() throws
+
+    // MARK: Transcript corrections (user edit layer)
+    // The model's original ASR/translation text is immutable; corrections
+    // are a separate overlay synced as their own entity (id == entry id).
+
+    /// All corrections of a session, keyed by entry id.
+    func corrections(forSessionID id: UUID) throws -> [TranscriptCorrection]
+    /// All corrections across sessions (search, storage statistics).
+    func allCorrections() throws -> [TranscriptCorrection]
+    /// Saves (creates or updates) the correction for one entry. Bumps the
+    /// session's updatedAt (study-review staleness). Notifies sync.
+    func saveCorrection(
+        sessionID: UUID, entryID: UUID,
+        russian: String, chinese: String?, needsRetranslation: Bool
+    ) throws -> TranscriptCorrection
+    /// Removes the correction (revert to the model's original). Notifies
+    /// sync (delete → tombstone).
+    func deleteCorrection(entryID: UUID) throws
+    /// Cloud-sync apply for a correction record (newer modifiedAt wins;
+    /// a lost-but-substantive race preserves the loser in conflictJSON).
+    func applyRemoteCorrection(record: SyncServerRecordDTO, serverVersion: Int) throws
+    /// Cloud-sync delete for a correction (revert to model original; never
+    /// resurrects locally).
+    func deleteCorrectionByID(_ id: UUID) throws
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).
@@ -282,6 +335,9 @@ struct EntryDraft: Sendable {
     var asrBackend: ASRBackendKind
     var asrLatency: TimeInterval
     var asrRTF: Double
+    /// Provenance of the offsets: live classes write `.audio` (sample
+    /// timeline); remote/cloud rows apply as `.legacy` at pull time.
+    var timeSource: TranscriptTimeSource = .audio
 }
 
 /// Course fields the create/edit form produces.
@@ -293,10 +349,13 @@ struct CourseDraft: Sendable, Equatable {
     var isArchived: Bool = false
 }
 
-/// A new note (text required; anchor optional).
+/// A new note (text required; anchor optional). `timeOffset` is the
+/// classroom-relative moment (live time or playback position); nil on
+/// legacy/unknown.
 struct NoteDraft: Sendable {
     var text: String
     var anchorEntryID: UUID? = nil
+    var timeOffset: TimeInterval? = nil
 }
 
 /// A fully-processed new attachment. The FILES are already on disk (the

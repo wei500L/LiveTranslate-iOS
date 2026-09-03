@@ -18,6 +18,8 @@ struct SearchScreen: View {
     @State private var viewingTerm: GlossaryTerm?
     @State private var viewingTask: StudyTask?
     @State private var viewingCard: StudyCard?
+    /// Entry id → correction (effective-text snippets in results).
+    @State private var correctionsByEntryID: [UUID: TranscriptCorrection] = [:]
 
     /// One matched session with its best snippet.
     struct SessionHit: Identifiable {
@@ -283,6 +285,13 @@ struct SearchScreen: View {
     private func runSearch(_ query: String) async {
         isSearching = true
         defer { isSearching = false }
+        // Corrections participate in matching (the user's edited text is
+        // what they search for). Session-level matching itself is
+        // correction-aware inside the repository.
+        correctionsByEntryID = Dictionary(
+            ((try? environment.repository.allCorrections()) ?? [])
+                .map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         // The repository query already searches titles, both texts and
         // note text.
         let sessions = (try? environment.repository.sessions(matching: query)) ?? []
@@ -356,9 +365,17 @@ struct SearchScreen: View {
         if let hit = entries.first({
             $0.originalText.localizedCaseInsensitiveContains(query)
                 || ($0.translatedText ?? "").localizedCaseInsensitiveContains(query)
+                || (correctionsByEntryID[$0.id]?.russianText ?? "")
+                    .localizedCaseInsensitiveContains(query)
+                || (correctionsByEntryID[$0.id]?.chineseText ?? "")
+                    .localizedCaseInsensitiveContains(query)
         }) {
-            let translated = (hit.translatedText ?? "").isEmpty ? "" : "\(hit.translatedText!) · "
-            return ("\(translated)\(hit.originalText)", .transcript)
+            // Effective text (correction first, model fallback).
+            let correction = correctionsByEntryID[hit.id]
+            let effectiveRussian = hit.effectiveRussianText(correction: correction)
+            let effectiveChinese = hit.effectiveChineseText(correction: correction) ?? ""
+            let translated = effectiveChinese.isEmpty ? "" : "\(effectiveChinese) · "
+            return ("\(translated)\(effectiveRussian)", .transcript)
         }
         return (session.title, .title)
     }

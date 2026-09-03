@@ -137,6 +137,23 @@ enum SyncConflictResolver {
                     merged.taskCompletedAt = completedAt
                 }
             }
+        case .transcriptCorrection:
+            // The user's newer intent (clientUpdatedAt on the push) wins;
+            // the conflict-copy semantics live in the repository's pull
+            // apply (newer modifiedAt wins, loser preserved locally).
+            // Rebase keeps the local texts; only a completely empty local
+            // correction falls back to the server's so a rebase never
+            // blanks the user's edit layer.
+            if (merged.correctionRussian ?? "").isEmpty,
+               let serverRussian = server.correctionRussian {
+                merged.correctionRussian = serverRussian
+            }
+            if merged.correctionChinese == nil, let serverChinese = server.correctionChinese {
+                merged.correctionChinese = serverChinese
+            }
+            if merged.correctionModifiedAt == nil, let serverModified = server.correctionModifiedAt {
+                merged.correctionModifiedAt = serverModified
+            }
         }
         return merged
     }

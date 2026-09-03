@@ -13,8 +13,12 @@ struct SettingsScreen: View {
     @State private var isTestingConnection = false
     @State private var storageBytes = 0
     @State private var showDeleteAllConfirm = false
+    @State private var showDeleteAllRecordingsConfirm = false
     @State private var showPrivacy = false
     @State private var showLicenses = false
+    @State private var recordingCount = 0
+    @State private var incompleteRecordingCount = 0
+    @State private var recordingBytes: Int64 = 0
 
     var body: some View {
         Group {
@@ -27,6 +31,7 @@ struct SettingsScreen: View {
         .task {
             storageBytes = environment.repository.storageBytes()
             refreshAttachmentStorage()
+            refreshRecordingStorage()
             apiKeyInput = (try? environment.keychain.get(forKey: AppEnvironment.apiKeychainKey)) ?? ""
         }
         // Keep the live translator in sync with edited settings.
@@ -69,8 +74,48 @@ struct SettingsScreen: View {
                 try? environment.repository.deleteAllSessions()
                 storageBytes = environment.repository.storageBytes()
                 refreshAttachmentStorage()
+                refreshRecordingStorage()
             }
         }
+        .confirmationDialog(
+            String(localized: "删除全部课堂录音？"),
+            isPresented: $showDeleteAllRecordingsConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "仅删除录音"), role: .destructive) {
+                deleteAllRecordings()
+            }
+            Button(String(localized: "取消"), role: .cancel) {}
+        } message: {
+            Text(String(localized: "将释放约 \(Format.bytes(Int(recordingBytes)))。转录、笔记、图片和学习整理全部保留；仅删除本机的声音文件。"))
+        }
+    }
+
+    // MARK: - Recording storage management
+
+    /// Counts + sizes from the metadata rows against the real files.
+    private func refreshRecordingStorage() {
+        let recordings = (try? environment.repository.allRecordings()) ?? []
+        recordingCount = recordings.filter { !$0.isDeleted }.count
+        incompleteRecordingCount = recordings.filter { !$0.isDeleted && !$0.isComplete }.count
+        recordingBytes = recordings
+            .filter { !$0.isDeleted }
+            .reduce(Int64(0)) { total, recording in
+                let url = SessionRecordings.fileURL(for: recording)
+                let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64) ?? 0
+                return total + size
+            }
+    }
+
+    /// Deletes every recording FILE, keeping all text and study material
+    /// (the rows stay with isDeleted — time metadata survives).
+    private func deleteAllRecordings() {
+        environment.playback.stop()
+        let recordings = (try? environment.repository.allRecordings()) ?? []
+        for recording in recordings where !recording.isDeleted {
+            _ = try? environment.repository.deleteRecordingFile(recording)
+        }
+        refreshRecordingStorage()
     }
 
     // MARK: - Profile
@@ -416,8 +461,8 @@ struct SettingsScreen: View {
         Section(String(localized: "Data")) {
             Toggle(isOn: saveAudioBinding) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(String(localized: "Save raw recordings"))
-                    Text(String(localized: "Off by default. ≈1.9 MB per minute when on."))
+                    Text(String(localized: "课堂录音"))
+                    Text(String(localized: "不保存录音（默认）· 保留原始质量 · ≈1.9 MB 每分钟 · 存储在本机，不随文字记录同步"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -440,9 +485,39 @@ struct SettingsScreen: View {
                 }
                 .disabled(syncedAttachmentIDs.isEmpty)
             }
+            recordingStorageSection
             Button(String(localized: "Delete all records"), role: .destructive) {
                 showDeleteAllConfirm = true
             }
+        }
+    }
+
+    /// Real recording statistics (row + actual file sizes) and the
+    /// text-preserving deletion actions. Deleting audio keeps every
+    /// transcript, note, image and review; only the sound goes.
+    @ViewBuilder
+    private var recordingStorageSection: some View {
+        if recordingCount > 0 {
+            LabeledRow(
+                label: String(localized: "课堂录音"),
+                value: "\(recordingCount) 段 · \(Format.bytes(Int(recordingBytes)))"
+            )
+            if incompleteRecordingCount > 0 {
+                LabeledRow(
+                    label: String(localized: "不完整录音"),
+                    value: "\(incompleteRecordingCount) 段（可播放，可能中断于课堂结束）"
+                )
+            }
+            Button(role: .destructive) {
+                showDeleteAllRecordingsConfirm = true
+            } label: {
+                Text(String(localized: "删除全部课堂录音"))
+            }
+        } else {
+            LabeledRow(
+                label: String(localized: "课堂录音"),
+                value: String(localized: "暂无")
+            )
         }
     }
 

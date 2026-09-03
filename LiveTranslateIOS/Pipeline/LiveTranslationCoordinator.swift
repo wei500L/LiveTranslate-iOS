@@ -231,11 +231,17 @@ final class LiveTranslationCoordinator {
             session = try? repository.createSession(draft)
         }
 
-        // 5. Optional raw audio recording (off by default).
+        // 5. Optional raw audio recording (off by default). The metadata
+        // row (SessionRecording) is created FIRST so the player's
+        // existence probe never races the file creation; the WAV writer
+        // opens the file right after.
         if settings.saveRawAudio, let session {
             let directory = Self.sessionsDirectory().appendingPathComponent(session.id.uuidString)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             wavWriter = try? WAVFileWriter(url: directory.appendingPathComponent("raw.wav"))
+            if wavWriter != nil {
+                try? repository.beginRecording(sessionID: session.id)
+            }
         }
 
         state.phase = .ready
@@ -339,8 +345,17 @@ final class LiveTranslationCoordinator {
         elapsedTimer?.cancel()
         elapsedTimer = nil
 
-        wavWriter?.finish()
+        let writer = wavWriter
         wavWriter = nil
+        writer?.finish()
+        if let session, let writer, let repository,
+           let recording = try? repository.recording(sessionID: session.id) {
+            // Metadata catches up with the file's real state even when the
+            // stop is abnormal (the writer's frame count is the truth).
+            try? repository.finishRecording(
+                recording, duration: writer.durationSeconds, fileSize: Int64(writer.bytesOnDisk)
+            )
+        }
         await capture?.stop()
         capture = nil
 
@@ -479,7 +494,9 @@ final class LiveTranslationCoordinator {
 
         // Persist the Russian original immediately — before any translation
         // is attempted, so a translation failure can never lose it. This
-        // happens regardless of the translation toggle.
+        // happens regardless of the translation toggle. Offsets come from
+        // the segmenter's continuous sample count (the recorded file's own
+        // timeline — paused audio is discarded before either sees it).
         if let session, let repository {
             let draft = EntryDraft(
                 sequenceID: sequenceID,
@@ -488,7 +505,8 @@ final class LiveTranslationCoordinator {
                 originalText: text,
                 asrBackend: result.backend,
                 asrLatency: result.inferenceDuration,
-                asrRTF: result.realTimeFactor
+                asrRTF: result.realTimeFactor,
+                timeSource: .audio
             )
             // addEntry owns the entryCount increment — a second one here
             // would double every "N 段" the UI derives from the session.

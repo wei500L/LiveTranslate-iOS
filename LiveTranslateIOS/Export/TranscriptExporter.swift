@@ -67,7 +67,11 @@ struct ExportReview: Sendable, Equatable {
     var contentJSON: String
 }
 
-/// One exported utterance.
+/// One exported utterance. `originalText`/`translatedText` carry the
+/// EFFECTIVE text (correction first, model fallback — the correction
+/// never travels separately through the format-specific exports). The
+/// JSON format additionally embeds the model's raw fields and the
+/// correction fields when they exist (source-of-truth preservation).
 struct ExportEntry: Sendable, Identifiable, Equatable {
     let sequenceID: Int
     let startOffset: TimeInterval
@@ -75,6 +79,15 @@ struct ExportEntry: Sendable, Identifiable, Equatable {
     let originalText: String
     let translatedText: String?
     let createdAt: Date
+    /// Model's raw ASR text when it differs from `originalText` (JSON
+    /// only; nil = no correction exists).
+    var modelRussianText: String? = nil
+    /// Model's raw translation when it differs (JSON only).
+    var modelChineseText: String? = nil
+    /// The user's Russian correction verbatim (JSON only; nil = none).
+    var correctedRussianText: String? = nil
+    /// The user's Chinese correction verbatim (JSON only; nil = none).
+    var correctedChineseText: String? = nil
 
     var id: Int { sequenceID }
 }
@@ -442,6 +455,21 @@ enum TranscriptExporter {
                 ]
                 if let translated = entry.translatedText {
                     item["translatedText"] = translated
+                }
+                // Correction provenance: the model's raw output and the
+                // user's correction ride alongside the effective text so
+                // a JSON export is a full source-of-truth snapshot.
+                if let modelRussian = entry.modelRussianText {
+                    item["modelRussianText"] = modelRussian
+                }
+                if let modelChinese = entry.modelChineseText {
+                    item["modelChineseText"] = modelChinese
+                }
+                if let correctedRussian = entry.correctedRussianText {
+                    item["correctedRussianText"] = correctedRussian
+                }
+                if let correctedChinese = entry.correctedChineseText {
+                    item["correctedChineseText"] = correctedChinese
                 }
                 return item
             },

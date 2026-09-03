@@ -39,11 +39,15 @@ enum SessionExport {
         scope: ExportScope = .transcriptAndNotes,
         review: StudyReviewContent? = nil,
         attachments: [SessionAttachment] = [],
+        corrections: [TranscriptCorrection] = [],
         fallbackBackend: ASRBackendKind
     ) -> TranscriptExportData {
         let ordered = entries.sorted { $0.sequenceID < $1.sequenceID }
         let entriesByID = Dictionary(
             ordered.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        let correctionsByEntry = Dictionary(
+            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
         )
         let includesTranscript = scope != .reviewOnly
         let includeNotes = scope == .transcriptAndNotes || scope == .fullMaterial
@@ -59,13 +63,22 @@ enum SessionExport {
             computeDescription: session.computePreference,
             translationModel: session.translationModel,
             entries: includesTranscript ? ordered.map { entry in
-                ExportEntry(
+                let correction = correctionsByEntry[entry.id]
+                let effectiveRussian = entry.effectiveRussianText(correction: correction)
+                let effectiveChinese = entry.effectiveChineseText(correction: correction)
+                // JSON-only provenance: model raw + user correction.
+                let corrected = entry.isCorrected(correction: correction)
+                return ExportEntry(
                     sequenceID: entry.sequenceID,
                     startOffset: entry.startOffset,
                     endOffset: entry.endOffset,
-                    originalText: entry.originalText,
-                    translatedText: entry.translatedText,
-                    createdAt: entry.createdAt
+                    originalText: effectiveRussian,
+                    translatedText: effectiveChinese,
+                    createdAt: entry.createdAt,
+                    modelRussianText: corrected ? entry.originalText : nil,
+                    modelChineseText: corrected ? entry.translatedText : nil,
+                    correctedRussianText: correction?.russianText,
+                    correctedChineseText: correction?.chineseText
                 )
             } : [],
             notes: includeNotes ? notes.map { note in
@@ -123,6 +136,7 @@ enum SessionExport {
         scope: ExportScope = .transcriptAndNotes,
         review: StudyReviewContent? = nil,
         attachments: [SessionAttachment] = [],
+        corrections: [TranscriptCorrection] = [],
         attachmentFiles: AttachmentFileOption,
         format: ExportFormat,
         fallbackBackend: ASRBackendKind
@@ -134,6 +148,7 @@ enum SessionExport {
             scope: scope,
             review: review,
             attachments: attachments,
+            corrections: corrections,
             fallbackBackend: fallbackBackend
         )
         // Plain-value snapshot for the file copies — SwiftData models
@@ -235,6 +250,7 @@ enum SessionExport {
         scope: ExportScope = .transcriptAndNotes,
         review: StudyReviewContent? = nil,
         attachments: [SessionAttachment] = [],
+        corrections: [TranscriptCorrection] = [],
         format: ExportFormat,
         fallbackBackend: ASRBackendKind
     ) async -> URL? {
@@ -245,6 +261,7 @@ enum SessionExport {
             scope: scope,
             review: review,
             attachments: attachments,
+            corrections: corrections,
             fallbackBackend: fallbackBackend
         )
         return await writeSnapshot(data: data, format: format)

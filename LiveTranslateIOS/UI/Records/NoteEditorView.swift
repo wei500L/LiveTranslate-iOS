@@ -133,8 +133,18 @@ struct NoteEditorView: View {
             if let note {
                 try environment.repository.updateNote(note, text: trimmed)
             } else {
+                // Timestamp the note with the current playback position when
+                // audio is running (relative classroom time; falls back to
+                // nil when nothing is playing — the createdAt approximation
+                // covers legacy).
+                var position: TimeInterval?
+                let playback = environment.playback
+                if playback.sessionID == session.id,
+                    playback.phase == .playing || playback.phase == .paused {
+                    position = playback.currentTime
+                }
                 _ = try environment.repository.addNote(
-                    NoteDraft(text: trimmed, anchorEntryID: anchorEntry?.id),
+                    NoteDraft(text: trimmed, anchorEntryID: anchorEntry?.id, timeOffset: position),
                     toSessionID: session.id
                 )
             }

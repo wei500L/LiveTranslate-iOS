@@ -483,6 +483,21 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    private func enqueueCorrectionUpsert(_ correction: TranscriptCorrection) {
+        var payload = Self.payload(for: correction)
+        payload.sessionId = correction.sessionID
+        payload.entryId = correction.id
+        let item = SyncOutboxItem(
+            entityType: .transcriptCorrection,
+            entityID: correction.id,
+            operation: .upsert,
+            baseServerVersion: correction.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -789,7 +804,7 @@ final class CloudSyncService: AuthenticationService {
     ) {
         switch entityType {
         case .session, .entry, .course, .note, .studyReview, .attachment,
-             .term, .studyCard, .studyTask:
+             .term, .studyCard, .studyTask, .transcriptCorrection:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -844,6 +859,8 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteCardByID(entityID)
         case .studyTask:
             try? repository.deleteTaskByID(entityID)
+        case .transcriptCorrection:
+            try? repository.deleteCorrectionByID(entityID)
         }
     }
 
@@ -888,6 +905,8 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteStudyCard(record: record, serverVersion: serverVersion)
         case .studyTask:
             try? repository.applyRemoteStudyTask(record: record, serverVersion: serverVersion)
+        case .transcriptCorrection:
+            try? repository.applyRemoteCorrection(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -1159,7 +1178,21 @@ final class CloudSyncService: AuthenticationService {
             endOffset: entry.endOffset,
             russianText: entry.originalText,
             chineseText: entry.translatedText,
-            translationStatus: entry.translationStatus
+            translationStatus: entry.translationStatus,
+            timeSource: entry.timeSource.rawValue
+        )
+    }
+
+    /// Transcript correction (entity id == entry id). The corrected texts
+    /// ride their own fields; the conflict copy is deliberately NOT synced
+    /// (it is a local preservation of the losing side — the server holds
+    /// the authoritative loser already).
+    static func payload(for correction: TranscriptCorrection) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            correctionRussian: correction.russianText,
+            correctionChinese: correction.chineseText,
+            correctionModifiedAt: correction.modifiedAt,
+            correctionNeedsRetranslation: correction.needsRetranslation
         )
     }
 
@@ -1178,7 +1211,11 @@ final class CloudSyncService: AuthenticationService {
             noteText: note.text,
             // Same sentinel rule as the session→course reference: an
             // unanchored note explicitly clears the anchor server-side.
-            anchorEntryId: note.anchorEntryID ?? .nilSentinel
+            anchorEntryId: note.anchorEntryID ?? .nilSentinel,
+            // The note's classroom-relative position: only present when
+            // actually recorded (legacy notes stay absent — the server
+            // keeps its stored value).
+            noteTimeOffset: note.timeOffset
         )
     }
 
@@ -1325,6 +1362,8 @@ protocol TranscriptMutationObserving: AnyObject {
     func taskCreated(_ task: StudyTask)
     func taskUpdated(_ task: StudyTask)
     func taskDeleted(id: UUID)
+    func correctionUpserted(_ correction: TranscriptCorrection)
+    func correctionDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -1426,5 +1465,13 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func taskDeleted(id: UUID) {
         enqueueDelete(entityType: .studyTask, entityID: id)
+    }
+
+    func correctionUpserted(_ correction: TranscriptCorrection) {
+        enqueueCorrectionUpsert(correction)
+    }
+
+    func correctionDeleted(id: UUID) {
+        enqueueDelete(entityType: .transcriptCorrection, entityID: id)
     }
 }

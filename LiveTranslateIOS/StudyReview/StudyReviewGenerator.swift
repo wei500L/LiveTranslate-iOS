@@ -102,11 +102,22 @@ final class StudyReviewGenerator {
     /// Greedy chunk plan over the entries that carry usable text: whole
     /// entries only (never mid-sentence), adjacent entries stay together,
     /// an oversized entry becomes its own chunk. Citation numbers are
-    /// global (1-based index into `citationIDs`).
-    static func chunkPlan(entries: [TranscriptEntry], charBudget: Int = chunkCharBudget) -> StudyChunkState {
+    /// global (1-based index into `citationIDs`). Text is the EFFECTIVE
+    /// text (corrections first, model output fallback) — AI material must
+    /// reflect what the user actually reads.
+    static func chunkPlan(
+        entries: [TranscriptEntry],
+        corrections: [TranscriptCorrection] = [],
+        charBudget: Int = chunkCharBudget
+    ) -> StudyChunkState {
+        let correctionsByEntry = Dictionary(
+            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         let usable = entries.filter { entry in
-            !entry.originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !(entry.translatedText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !entry.effectiveRussianText(correction: correctionsByEntry[entry.id])
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !(entry.effectiveChineseText(correction: correctionsByEntry[entry.id]) ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         var state = StudyChunkState()
         state.citationIDs = usable.map(\.id)
@@ -116,8 +127,8 @@ final class StudyReviewGenerator {
         var firstCitation = 1
         var index = 0
         for (position, entry) in usable.enumerated() {
-            let russian = entry.originalText
-            let chinese = entry.translatedText ?? ""
+            let russian = entry.effectiveRussianText(correction: correctionsByEntry[entry.id])
+            let chinese = entry.effectiveChineseText(correction: correctionsByEntry[entry.id]) ?? ""
             let cost = russian.count + chinese.count
             if !current.isEmpty && currentChars + cost > charBudget {
                 state.chunks.append(.init(
@@ -175,12 +186,18 @@ final class StudyReviewGenerator {
         resume: Bool
     ) async {
         let sessionID = session.id
+        // Corrections are classroom content too — the AI reads the
+        // effective text (the same thing the user reads and searches).
+        let corrections = (try? repository.corrections(forSessionID: sessionID)) ?? []
+        let correctionsByEntry = Dictionary(
+            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         do {
             guard let service = serviceProvider(), service.isConfiguredNow else {
                 throw GenerationError.notConfigured
             }
             let review = try prepareReview(
-                session: session, entries: entries, resume: resume
+                session: session, entries: entries, corrections: corrections, resume: resume
             )
             guard var chunkState = StudyChunkState.decode(review.chunkStateJSON),
                   !chunkState.chunks.isEmpty else {
@@ -200,8 +217,8 @@ final class StudyReviewGenerator {
                     return StudyReviewPrompt.EntryMaterial(
                         citation: chunk.firstCitation + offset,
                         timestamp: TranscriptExporter.mmss(entry.startOffset),
-                        russian: entry.originalText,
-                        chinese: entry.translatedText
+                        russian: entry.effectiveRussianText(correction: correctionsByEntry[entryID]),
+                        chinese: entry.effectiveChineseText(correction: correctionsByEntry[entryID])
                     )
                 }
                 let userPrompt = StudyReviewPrompt.extractionUserPrompt(
@@ -322,18 +339,19 @@ final class StudyReviewGenerator {
     /// Fetches or creates the review row; on a fresh run writes a new
     /// chunk plan, on resume keeps the persisted one.
     private func prepareReview(
-        session: ClassroomSession, entries: [TranscriptEntry], resume: Bool
+        session: ClassroomSession, entries: [TranscriptEntry],
+        corrections: [TranscriptCorrection], resume: Bool
     ) throws -> StudyReview {
         let review = try repository.ensureStudyReview(forSessionID: session.id)
         if !resume {
-            let plan = Self.chunkPlan(entries: entries)
+            let plan = Self.chunkPlan(entries: entries, corrections: corrections)
             guard !plan.chunks.isEmpty else {
                 throw GenerationError.noContent
             }
             try repository.beginStudyReviewGeneration(review, chunkState: plan)
         } else if StudyChunkState.decode(review.chunkStateJSON)?.hasAnyProgress != true {
             // Nothing to resume from — start over with a fresh plan.
-            let plan = Self.chunkPlan(entries: entries)
+            let plan = Self.chunkPlan(entries: entries, corrections: corrections)
             guard !plan.chunks.isEmpty else {
                 throw GenerationError.noContent
             }

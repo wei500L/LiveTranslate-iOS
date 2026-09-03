@@ -13,6 +13,8 @@ final class StudyReviewViewModel {
     private(set) var review: StudyReview?
     private(set) var entries: [TranscriptEntry] = []
     private(set) var attachments: [SessionAttachment] = []
+    /// Entry id → correction (effective-text previews and save flows).
+    private(set) var correctionsByEntryID: [UUID: TranscriptCorrection] = [:]
     var isLoaded = false
 
     // MARK: - Lifecycle
@@ -29,12 +31,17 @@ final class StudyReviewViewModel {
             review = nil
             entries = []
             attachments = []
+            correctionsByEntryID = [:]
             isLoaded = true
             return
         }
         self.session = session
         entries = (try? environment.repository.entries(for: session)) ?? []
         attachments = (try? environment.repository.attachments(forSessionID: sessionID)) ?? []
+        let corrections = (try? environment.repository.corrections(forSessionID: sessionID)) ?? []
+        correctionsByEntryID = Dictionary(
+            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         review = try? environment.repository.studyReview(forSessionID: sessionID)
         reconcileOrphanedGeneration()
         isLoaded = true
@@ -136,11 +143,14 @@ final class StudyReviewViewModel {
         return attachment.kind.displayName
     }
 
-    /// One-line preview of a cited line (outline citations).
+    /// One-line preview of a cited line (outline citations). Effective
+    /// text: the correction when present, else the model output.
     func entryPreview(_ entryID: UUID) -> String? {
         guard let entry = entriesByID[entryID] else { return "原文已不存在" }
-        let chinese = entry.translatedText ?? ""
-        return chinese.isEmpty ? String(entry.originalText.prefix(60)) : String(chinese.prefix(60))
+        let correction = correctionsByEntryID[entryID]
+        let chinese = entry.effectiveChineseText(correction: correction) ?? ""
+        let russian = entry.effectiveRussianText(correction: correction)
+        return chinese.isEmpty ? String(russian.prefix(60)) : String(chinese.prefix(60))
     }
 
     // MARK: - Generation

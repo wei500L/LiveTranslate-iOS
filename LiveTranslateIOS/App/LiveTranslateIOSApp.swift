@@ -91,6 +91,11 @@ final class AppEnvironment {
     let attachmentImporter: AttachmentImportService
     /// The profile's attachment file store (paths, renditions, cleanup).
     let attachmentStore: AttachmentFileStore
+    /// Classroom-recording playback (one engine per app so starting a new
+    /// live classroom or switching accounts can stop it from one place).
+    let playback: ClassroomPlaybackService
+    /// Waveform precompute + cache for recordings (device-local).
+    let waveformStore: RecordingWaveformStore
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -123,12 +128,7 @@ final class AppEnvironment {
         AttachmentFileStoreShared.store = attachmentStore
         let modelContainer: ModelContainer
         do {
-            let schema = Schema([
-                ClassroomSession.self, TranscriptEntry.self,
-                Course.self, SessionNote.self, StudyReview.self,
-                SessionAttachment.self,
-                GlossaryTerm.self, StudyCard.self, StudyTask.self
-            ])
+            let schema = AppEnvironment.librarySchema
             let config = ModelConfiguration(
                 "LiveTranslate",
                 schema: schema,
@@ -141,12 +141,7 @@ final class AppEnvironment {
             // crash-looping on launch.
             assertionFailure("ModelContainer failed: \(error)")
             modelContainer = try! ModelContainer(
-                for: Schema([
-                    ClassroomSession.self, TranscriptEntry.self,
-                    Course.self, SessionNote.self, StudyReview.self,
-                    SessionAttachment.self,
-                    GlossaryTerm.self, StudyCard.self, StudyTask.self
-                ])
+                for: AppEnvironment.librarySchema
             )
         }
         let engineManager = ASREngineManager(settings: settings)
@@ -245,6 +240,8 @@ final class AppEnvironment {
         let attachmentImporter = AttachmentImportService(
             repository: repository, fileStore: attachmentStore
         )
+        let playback = ClassroomPlaybackService()
+        let waveformStore = RecordingWaveformStore()
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -268,7 +265,9 @@ final class AppEnvironment {
             attachmentServiceBox: attachmentBox,
             attachmentAnalysisGenerator: attachmentGenerator,
             attachmentImporter: attachmentImporter,
-            attachmentStore: attachmentStore
+            attachmentStore: attachmentStore,
+            playback: playback,
+            waveformStore: waveformStore
         )
     }
 
@@ -301,7 +300,9 @@ final class AppEnvironment {
         attachmentServiceBox: AttachmentServiceBox = AttachmentServiceBox(),
         attachmentAnalysisGenerator: AttachmentAnalysisGenerator? = nil,
         attachmentImporter: AttachmentImportService? = nil,
-        attachmentStore: AttachmentFileStore? = nil
+        attachmentStore: AttachmentFileStore? = nil,
+        playback: ClassroomPlaybackService? = nil,
+        waveformStore: RecordingWaveformStore? = nil
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -358,6 +359,8 @@ final class AppEnvironment {
             self.attachmentStore = AttachmentFileStore(accountID: nil)
             AttachmentFileStoreShared.store = self.attachmentStore
         }
+        self.playback = playback ?? ClassroomPlaybackService()
+        self.waveformStore = waveformStore ?? RecordingWaveformStore()
     }
 
     /// Profile store location — delegated to `AccountScope` (the single
@@ -365,6 +368,20 @@ final class AppEnvironment {
     static func databaseURL(accountID: UUID? = nil) -> URL {
         AccountScope.databaseURL(accountID: accountID)
     }
+
+    /// The full model schema — one shared definition so every
+    /// composition site (main container, demo, guest-migration reader,
+    /// tests) enumerates the same entities. Recording and correction
+    /// entities are device-cloud split: `SessionRecording` never syncs
+    /// (audio stays local), `TranscriptCorrection` syncs as its own
+    /// entity.
+    static let librarySchema = Schema([
+        ClassroomSession.self, TranscriptEntry.self,
+        Course.self, SessionNote.self, StudyReview.self,
+        SessionAttachment.self,
+        GlossaryTerm.self, StudyCard.self, StudyTask.self,
+        SessionRecording.self, TranscriptCorrection.self
+    ])
 
     // MARK: - Translation configuration (single source of truth)
 
@@ -467,6 +484,10 @@ final class AppEnvironment {
     /// re-entering never re-attaches, re-registers observers or restarts
     /// anything: the model is a passive mirror of the coordinator.
     func presentLive() {
+        // Never play an old recording over an active microphone: opening
+        // the live classroom stops playback outright (an honest stop, not
+        // a mute — the playback screen re-loads on demand).
+        playback.stop()
         let sessionID = coordinator.activeSessionID
         if liveViewModel == nil
             || liveViewModelSessionID != sessionID
@@ -508,6 +529,9 @@ final class AppEnvironment {
         try? repository.markAbnormalTerminations()
         // Same launch-time reconciliation for interrupted image analyses.
         attachmentAnalysisGenerator.reconcileInterruptedAnalyses()
+        // Recording rows ↔ disk: legacy raw.wav files gain metadata rows,
+        // removed files flip isDeleted, orphan rows are reaped.
+        try? repository.reconcileRecordingState()
     }
 }
 
