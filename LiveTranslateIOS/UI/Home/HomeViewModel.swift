@@ -56,6 +56,9 @@ final class HomeViewModel {
 
     var isLoaded = false
     var recentSessions: [SessionSummary] = []
+    /// Courses for the quick-start chips (active only, most recently used
+    /// first). Empty until the user creates their first course.
+    var quickStartCourses: [Course] = []
     var micAuthorized = false
     var preferredBackendInstalled = false
     var anyBackendInstalled = false
@@ -105,6 +108,12 @@ final class HomeViewModel {
             let failed = entries.contains { $0.status == .failed || $0.status == .notConfigured }
             return SessionSummary(session: session, failedEntries: failed)
         }
+
+        // Quick-start courses: active only, most recently used first.
+        quickStartCourses = ((try? environment.repository.courses()) ?? [])
+            .filter { !$0.isArchived }
+            .prefix(6)
+            .map { $0 }
 
         // Study statistics: last 7 days (today last).
         let calendar = Calendar.current
@@ -255,5 +264,39 @@ final class HomeViewModel {
     /// collapsed (user tapped 收起).
     var hasOngoingSession: Bool {
         environment?.coordinator.isRunning ?? false
+    }
+
+    // MARK: - Quick start
+
+    /// Default title for a directly started classroom: course name + date
+    /// (the same default the new-classroom form pre-fills).
+    static func quickStartTitle(for course: Course) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日"
+        return "\(course.name) · \(formatter.string(from: .now))"
+    }
+
+    /// One-tap start for a recurring course. Everything already validated
+    /// (mic granted + preferred backend installed + no running classroom)
+    /// starts immediately; anything less falls back to the full
+    /// new-classroom form (preselected) so the user keeps the complete
+    /// validation chain — no duplicated permission logic here.
+    /// Returns the course to preselect when the caller should open the
+    /// sheet instead.
+    func quickStart(_ course: Course) async -> Course? {
+        guard let environment else { return course }
+        if hasOngoingSession || !micAuthorized || !preferredBackendInstalled {
+            return course
+        }
+        await environment.coordinator.start(
+            title: Self.quickStartTitle(for: course), courseID: course.id
+        )
+        if environment.coordinator.isRunning {
+            environment.presentLive()
+            return nil
+        }
+        // The start failed (engine load etc.) — the form explains why.
+        return course
     }
 }

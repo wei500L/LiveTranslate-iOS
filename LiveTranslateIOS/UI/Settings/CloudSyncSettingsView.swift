@@ -592,7 +592,7 @@ struct CloudSyncSettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 scopePoint(
                     icon: "checkmark.circle.fill", tint: LTColors.accentGreen,
-                    text: String(localized: "上传：课堂记录文字（俄语原文与中文翻译）、标题与时间、书签与收藏。")
+                    text: String(localized: "上传：课堂记录文字（俄语原文与中文翻译）、标题与时间、课程、笔记、书签与收藏。")
                 )
                 scopePoint(
                     icon: "nosign", tint: LTColors.destructive,
@@ -635,7 +635,7 @@ struct CloudSyncSettingsView: View {
             Text(String(localized: "删除云端副本只清除服务器上的数据，本机记录保留。删除账号会同时清除云端数据并注销本机登录。"))
         }
         .confirmationDialog(
-            String(localized: "删除云端服务器上的全部课堂记录、书签与收藏？"),
+            String(localized: "删除云端服务器上的全部课堂记录、课程、笔记、书签与收藏？"),
             isPresented: $showDeleteCloudConfirm,
             titleVisibility: .visible
         ) {

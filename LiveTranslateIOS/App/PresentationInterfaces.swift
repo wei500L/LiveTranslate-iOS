@@ -19,8 +19,11 @@ protocol LiveTranslationCoordinating: AnyObject {
     /// classroom is active.
     var activeSessionID: UUID? { get }
     var activeSessionTitle: String? { get }
+    /// The course the active session belongs to (nil = standalone). Kept
+    /// across a restart of the same classroom.
+    var activeSessionCourseID: UUID? { get }
 
-    func start(title: String?) async
+    func start(title: String?, courseID: UUID?) async
     func pause()
     func resume()
     func stop() async

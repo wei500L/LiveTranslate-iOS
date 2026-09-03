@@ -26,11 +26,15 @@ final class SessionDetailViewModel {
     private(set) var session: ClassroomSession?
 
     var entries: [TranscriptEntry] = []
+    var notes: [SessionNote] = []
     var isLoaded = false
     var isRetranslating = false
     var displayMode: DisplayMode = .bilingual
     var searchQuery = ""
     var showBookmarksOnly = false
+    /// SequenceID the view should scroll to (a tapped note's anchor);
+    /// consumed by the view's scroll reader.
+    var pendingScrollTarget: Int?
 
     /// Matching sequenceIDs in reading order + the focused match index.
     private(set) var matchIDs: [Int] = []
@@ -48,11 +52,13 @@ final class SessionDetailViewModel {
         guard let session = all.first(where: { $0.id == sessionID }) else {
             self.session = nil
             entries = []
+            notes = []
             isLoaded = true
             return
         }
         self.session = session
         entries = (try? environment.repository.entries(for: session)) ?? []
+        notes = (try? environment.repository.notes(forSessionID: sessionID)) ?? []
         // Keep bookmark IDs honest: entries deleted upstream drop their
         // bookmarks instead of lingering as orphans.
         environment.bookmarks.pruneEntries(in: sessionID, existingEntryIDs: Set(entries.map(\.id)))
@@ -134,6 +140,50 @@ final class SessionDetailViewModel {
         return environment?.bookmarks.toggleBookmark(
             sessionID: session.id, entryID: entry.id
         ) ?? false
+    }
+
+    // MARK: - Notes
+
+    /// Notes anchored to one entry, for inline display under the row.
+    func notes(anchoredTo entry: TranscriptEntry) -> [SessionNote] {
+        notes.filter { $0.anchorEntryID == entry.id }
+    }
+
+    /// The entry a note is anchored to (nil when unanchored or the entry
+    /// is gone).
+    func anchorEntry(for note: SessionNote) -> TranscriptEntry? {
+        guard let anchorID = note.anchorEntryID else { return nil }
+        return entries.first { $0.id == anchorID }
+    }
+
+    /// Session-relative timestamp for a note (its anchor's offset, else the
+    /// note's creation time relative to the session start).
+    func noteTimestamp(_ note: SessionNote) -> String {
+        if let entry = anchorEntry(for: note) {
+            return TranscriptExporter.mmss(entry.startOffset)
+        }
+        let offset = note.createdAt.timeIntervalSince(session?.startTime ?? note.createdAt)
+        return TranscriptExporter.mmss(max(0, offset))
+    }
+
+    /// Jump to a note's anchor (scroll target consumed by the view).
+    func jumpToAnchor(of note: SessionNote) {
+        guard let entry = anchorEntry(for: note) else { return }
+        pendingScrollTarget = entry.sequenceID
+    }
+
+    func deleteNote(_ note: SessionNote) {
+        guard let environment else { return }
+        try? environment.repository.deleteNote(note)
+        reload()
+    }
+
+    /// Clears a note's anchor (the note itself stays and the change syncs
+    /// through the mutation observer).
+    func detachAnchor(of note: SessionNote) {
+        guard let environment else { return }
+        try? environment.repository.updateNoteAnchor(note, anchorEntryID: nil)
+        reload()
     }
 
     // MARK: - Derived presentation
@@ -247,6 +297,7 @@ final class SessionDetailViewModel {
         return await SessionExport.writeTemporaryFile(
             session: session,
             entries: entries,
+            notes: notes,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
         )

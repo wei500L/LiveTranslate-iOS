@@ -15,9 +15,13 @@ enum SessionExport {
     static func payload(
         session: ClassroomSession,
         entries: [TranscriptEntry],
+        notes: [SessionNote] = [],
         fallbackBackend: ASRBackendKind
     ) -> TranscriptExportData {
         let ordered = entries.sorted { $0.sequenceID < $1.sequenceID }
+        let entriesByID = Dictionary(
+            ordered.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         return TranscriptExportData(
             title: session.title,
             startTime: session.startTime,
@@ -35,6 +39,14 @@ enum SessionExport {
                     originalText: entry.originalText,
                     translatedText: entry.translatedText,
                     createdAt: entry.createdAt
+                )
+            },
+            notes: notes.map { note in
+                ExportNote(
+                    id: note.id,
+                    text: note.text,
+                    createdAt: note.createdAt,
+                    anchorOffset: note.anchorEntryID.flatMap { entriesByID[$0]?.startOffset }
                 )
             }
         )
@@ -54,11 +66,15 @@ enum SessionExport {
     static func writeTemporaryFile(
         session: ClassroomSession,
         entries: [TranscriptEntry],
+        notes: [SessionNote] = [],
         format: ExportFormat,
         fallbackBackend: ASRBackendKind
     ) async -> URL? {
         let data = payload(
-            session: session, entries: entries, fallbackBackend: fallbackBackend
+            session: session,
+            entries: entries,
+            notes: notes,
+            fallbackBackend: fallbackBackend
         )
         return await writeSnapshot(data: data, format: format)
     }

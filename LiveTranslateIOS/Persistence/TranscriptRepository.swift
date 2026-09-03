@@ -28,7 +28,8 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func deleteSessionByID(_ id: UUID) throws
     func deleteEntryByID(_ id: UUID) throws
     /// Snapshot of every locally-stored entity as outbox operations, in
-    /// batches (used by the first-upload flow).
+    /// batches (used by the first-upload flow). Courses are emitted before
+    /// sessions so a session's course reference exists server-side first.
     func syncSnapshots(batchSize: Int, progress: ((Int, Int) -> Void)?) -> [SyncOutboxItem]
 
     // MARK: Guest-data migration support
@@ -38,6 +39,39 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func sessionSummary(id: UUID) -> SessionSummary?
     /// Whether an entry with the given UUID exists locally.
     func entryExists(id: UUID) -> Bool
+
+    // MARK: Courses
+
+    func createCourse(_ draft: CourseDraft) throws -> Course
+    /// Applies every field of the draft to an existing course.
+    func updateCourse(_ course: Course, with draft: CourseDraft) throws
+    /// All courses; archived last (each group by most recent use).
+    func courses() throws -> [Course]
+    func course(id: UUID) throws -> Course?
+    /// Deletes a course. Its sessions stay and become standalone
+    /// (their `courseID` is cleared — the change syncs as session upserts).
+    func deleteCourse(_ course: Course) throws
+    /// Assigns a session to a course (nil = standalone). Sync semantics:
+    /// nil keeps the server value, `UUID.nilSentinel` explicitly clears.
+    func assignCourse(_ courseID: UUID?, to session: ClassroomSession) throws
+    /// Cloud-sync apply for a course record.
+    func applyRemoteCourse(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteCourseByID(_ id: UUID) throws
+
+    // MARK: Session notes
+
+    /// All notes of a session, oldest first. ID-based (not model-based) so
+    /// the live classroom — which only holds the session id — can use it.
+    func notes(forSessionID id: UUID) throws -> [SessionNote]
+    func addNote(_ draft: NoteDraft, toSessionID id: UUID) throws -> SessionNote
+    func updateNote(_ note: SessionNote, text: String) throws
+    /// Clears or replaces a note's anchor (the note text stays). A nil
+    /// anchor pushes the explicit-clear sentinel so the change syncs.
+    func updateNoteAnchor(_ note: SessionNote, anchorEntryID: UUID?) throws
+    func deleteNote(_ note: SessionNote) throws
+    /// Cloud-sync apply for a note record.
+    func applyRemoteNote(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteNoteByID(_ id: UUID) throws
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).
@@ -56,6 +90,7 @@ struct SessionDraft: Sendable {
     var translationModel: String
     var sourceLanguage: String = "ru"
     var targetLanguage: String = "zh-CN"
+    var courseID: UUID? = nil
 }
 
 struct EntryDraft: Sendable {
@@ -66,4 +101,26 @@ struct EntryDraft: Sendable {
     var asrBackend: ASRBackendKind
     var asrLatency: TimeInterval
     var asrRTF: Double
+}
+
+/// Course fields the create/edit form produces.
+struct CourseDraft: Sendable, Equatable {
+    var name: String
+    var teacherName: String = ""
+    var location: String = ""
+    var colorIndex: Int = 0
+    var isArchived: Bool = false
+}
+
+/// A new note (text required; anchor optional).
+struct NoteDraft: Sendable {
+    var text: String
+    var anchorEntryID: UUID? = nil
+}
+
+extension UUID {
+    /// Wire sentinel for "clear this reference" in sync payloads. A nil
+    /// optional payload field means "not specified — keep the server
+    /// value"; this all-zero UUID means "remove it". Mirrors Go's uuid.Nil.
+    static let nilSentinel = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 }

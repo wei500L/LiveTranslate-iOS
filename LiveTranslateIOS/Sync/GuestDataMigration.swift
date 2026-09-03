@@ -172,6 +172,13 @@ final class GuestDataMigration {
         // guest store (Sendable values only), copy it, persist the batch
         // boundary, then continue. Nothing loads the whole library.
         do {
+            // Courses first (add-only union, like bookmarks: an account row
+            // with the same id always wins) so session course references
+            // resolve during the copy.
+            mergeGuestCourses()
+            // Notes are session-scoped; collect their ids for the copy
+            // after the sessions exist.
+            let guestNotes = reader.noteSnapshots()
             let sessionIDs = try reader.sessionIDs(excluding: Set(record.copiedSessionIDs))
             record.totalSessions = record.copiedCount + sessionIDs.count
             record.phase = .moving
@@ -204,6 +211,7 @@ final class GuestDataMigration {
                 persist()
                 index += batchIDs.count
             }
+            copyGuestNotes(guestNotes)
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -264,9 +272,10 @@ final class GuestDataMigration {
         return .copied
     }
 
-    /// Inserts the session and its entries through the repository's
+    /// Copies the session and its entries through the repository's
     /// remote-apply path (it preserves ids) with serverVersion 0, so the
-    /// sync layer treats them as fresh local data.
+    /// sync layer treats them as fresh local data. The course reference is
+    /// carried verbatim.
     private func copySession(_ session: GuestLibraryReader.SessionSnapshot) throws {
         let sessionRecord = SyncServerRecordDTO(
             id: session.id,
@@ -276,6 +285,7 @@ final class GuestDataMigration {
             duration: session.duration,
             sessionStatus: session.endTime == nil ? "active" : "finished",
             abnormalTermination: session.abnormalTermination,
+            courseId: session.courseID,
             serverVersion: 0
         )
         try repository.applyRemoteSession(record: sessionRecord, serverVersion: 0)
@@ -294,6 +304,41 @@ final class GuestDataMigration {
                 serverVersion: 0
             )
             try repository.applyRemoteEntry(record: entryRecord, serverVersion: 0)
+        }
+    }
+
+    /// Copies guest courses into the account store (add-only union — an
+    /// existing account row with the same id always wins, mirroring the
+    /// bookmark merge; locally generated UUIDs make a real collision
+    /// practically impossible).
+    private func mergeGuestCourses() {
+        for course in reader.courseSnapshots() {
+            guard (try? repository.course(id: course.id)) ?? nil == nil else { continue }
+            let record = SyncServerRecordDTO(
+                id: course.id,
+                title: course.name,
+                teacher: course.teacherName,
+                location: course.location,
+                colorIndex: course.colorIndex,
+                isArchived: course.isArchived,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteCourse(record: record, serverVersion: 0)
+        }
+    }
+
+    /// Copies guest notes whose session now exists in the account store.
+    /// The remote-apply path preserves ids and serverVersion 0.
+    private func copyGuestNotes(_ notes: [GuestLibraryReader.NoteSnapshot]) {
+        for note in notes {
+            let noteRecord = SyncServerRecordDTO(
+                id: note.id,
+                sessionId: note.sessionID,
+                noteText: note.text,
+                anchorEntryId: note.anchorEntryID,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteNote(record: noteRecord, serverVersion: 0)
         }
     }
 
@@ -381,24 +426,67 @@ struct GuestLibraryReader {
         var endTime: Date?
         var duration: TimeInterval
         var abnormalTermination: Bool
+        var courseID: UUID?
         var entries: [Entry]
     }
 
-    private static let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
+    /// Sendable snapshot of one guest course.
+    struct CourseSnapshot: Sendable {
+        var id: UUID
+        var name: String
+        var teacherName: String
+        var location: String
+        var colorIndex: Int
+        var isArchived: Bool
+    }
+
+    /// Sendable snapshot of one guest note.
+    struct NoteSnapshot: Sendable {
+        var id: UUID
+        var sessionID: UUID
+        var anchorEntryID: UUID?
+        var text: String
+    }
+
+    private static let schema = Schema([
+        ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+    ])
 
     private var guestURL: URL { AccountScope.guestDatabaseURL }
 
     /// Opens the guest store read-only. Returns nil when the guest store
     /// does not exist (never signed in / already deleted).
+    ///
+    /// Upgrade path: a store written by an older app version lacks newer
+    /// tables (courses / notes). A read-only open of such a store fails
+    /// (lightweight migration cannot run without save), so on that — and
+    /// only that — failure the store is brought forward ONCE through a
+    /// normal container: the migration adds the missing tables and columns
+    /// without touching any row content, after which the read-only open
+    /// is retried.
     private func containerIfPresent() throws -> ModelContainer? {
         guard FileManager.default.fileExists(atPath: guestURL.path) else { return nil }
-        let config = ModelConfiguration(
-            "LiveTranslate",
-            schema: Self.schema,
-            url: guestURL,
-            allowsSave: false
+        if let container = try? Self.readOnlyContainer(url: guestURL) {
+            return container
+        }
+        _ = try ModelContainer(
+            for: Self.schema,
+            configurations: [
+                ModelConfiguration("LiveTranslate", schema: Self.schema, url: guestURL)
+            ]
         )
-        return try ModelContainer(for: Self.schema, configurations: [config])
+        return try Self.readOnlyContainer(url: guestURL)
+    }
+
+    private static func readOnlyContainer(url: URL) throws -> ModelContainer {
+        try ModelContainer(
+            for: Self.schema,
+            configurations: [
+                ModelConfiguration(
+                    "LiveTranslate", schema: Self.schema, url: url, allowsSave: false
+                )
+            ]
+        )
     }
 
     /// Session count in the guest store (cheap; used for prompts/banners).
@@ -444,9 +532,37 @@ struct GuestLibraryReader {
             out.append(SessionSnapshot(
                 id: s.id, title: s.title, startTime: s.startTime, endTime: s.endTime,
                 duration: s.duration, abnormalTermination: s.abnormalTermination,
-                entries: entries
+                courseID: s.courseID, entries: entries
             ))
         }
         return out
+    }
+
+    /// All guest courses, values only.
+    func courseSnapshots() -> [CourseSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let courses = (try? context.fetch(FetchDescriptor<Course>())) ?? []
+        return courses.map { c in
+            CourseSnapshot(
+                id: c.id, name: c.name, teacherName: c.teacherName,
+                location: c.location, colorIndex: c.colorIndex, isArchived: c.isArchived
+            )
+        }
+    }
+
+    /// All guest notes, values only (copied after the sessions exist).
+    func noteSnapshots() -> [NoteSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let notes = (try? context.fetch(FetchDescriptor<SessionNote>())) ?? []
+        return notes.map { n in
+            NoteSnapshot(
+                id: n.id, sessionID: n.sessionID,
+                anchorEntryID: n.anchorEntryID, text: n.text
+            )
+        }
     }
 }

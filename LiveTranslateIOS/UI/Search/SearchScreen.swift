@@ -15,8 +15,13 @@ struct SearchScreen: View {
 
     /// One matched session with its best snippet.
     struct SessionHit: Identifiable {
+        enum MatchKind {
+            case note, transcript, title
+        }
+
         let session: ClassroomSession
         let snippet: String
+        let matchKind: MatchKind
 
         var id: UUID { session.id }
     }
@@ -34,7 +39,7 @@ struct SearchScreen: View {
                             LTEmptyState(
                                 symbol: "magnifyingglass",
                                 title: "搜索全部课堂",
-                                message: "支持课堂名称、中文翻译与俄语原文"
+                                message: "支持课堂名称、笔记、中文翻译与俄语原文"
                             )
                         }
                     }
@@ -59,7 +64,7 @@ struct SearchScreen: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15))
                 .foregroundStyle(LTColors.textTertiary)
-            TextField("课堂名称 / 中文翻译 / 俄语原文", text: $query)
+            TextField("课堂名称 / 笔记 / 中文翻译 / 俄语原文", text: $query)
                 .font(.subheadline)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
@@ -96,7 +101,7 @@ struct SearchScreen: View {
             LTEmptyState(
                 symbol: "questionmark.circle",
                 title: "换个关键词试试",
-                message: "搜索会覆盖课堂名称与全部双语文本"
+                message: "搜索会覆盖课堂名称、笔记与全部双语文本"
             )
         } else {
             VStack(spacing: LTSpacing.s) {
@@ -121,10 +126,17 @@ struct SearchScreen: View {
                     size: 34
                 )
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(hit.session.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(LTColors.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: LTSpacing.xs) {
+                        Text(hit.session.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(LTColors.textPrimary)
+                            .lineLimit(1)
+                        if hit.matchKind == .note {
+                            Label("笔记", systemImage: "pencil.line")
+                                .font(LTTypography.timestamp)
+                                .foregroundStyle(LTColors.warning.opacity(0.9))
+                        }
+                    }
                     Text("\(Format.date(hit.session.startTime)) · \(Format.clock(hit.session.duration))")
                         .font(LTTypography.timestamp)
                         .foregroundStyle(LTColors.textTertiary)
@@ -164,25 +176,34 @@ struct SearchScreen: View {
     private func runSearch(_ query: String) async {
         isSearching = true
         defer { isSearching = false }
-        // The repository query already searches titles + both texts.
+        // The repository query already searches titles, both texts and
+        // note text.
         let sessions = (try? environment.repository.sessions(matching: query)) ?? []
         results = sessions.map { session in
-            SessionHit(session: session, snippet: snippet(for: session, query: query))
+            let match = bestMatch(for: session, query: query)
+            return SessionHit(session: session, snippet: match.snippet, matchKind: match.kind)
         }
         appliedQuery = query
     }
 
-    /// First matching entry's text as a snippet.
-    private func snippet(for session: ClassroomSession, query: String) -> String {
+    /// Where a session matched: note text wins the snippet (the user's own
+    /// words are the strongest hit), then the first matching transcript
+    /// entry, then the title.
+    private func bestMatch(
+        for session: ClassroomSession, query: String
+    ) -> (snippet: String, kind: SessionHit.MatchKind) {
+        let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
+        if let note = notes.first(where: { $0.text.localizedCaseInsensitiveContains(query) }) {
+            return ("✎ \(note.text)", .note)
+        }
         let entries = (try? environment.repository.entries(for: session)) ?? []
-        let hit = entries.first {
+        if let hit = entries.first({
             $0.originalText.localizedCaseInsensitiveContains(query)
                 || ($0.translatedText ?? "").localizedCaseInsensitiveContains(query)
-        }
-        if let hit {
+        }) {
             let translated = (hit.translatedText ?? "").isEmpty ? "" : "\(hit.translatedText!) · "
-            return "\(translated)\(hit.originalText)"
+            return ("\(translated)\(hit.originalText)", .transcript)
         }
-        return session.title
+        return (session.title, .title)
     }
 }

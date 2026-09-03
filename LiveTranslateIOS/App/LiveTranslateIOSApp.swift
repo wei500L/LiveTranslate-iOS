@@ -97,7 +97,9 @@ final class AppEnvironment {
         let settings = SettingsStore.shared
         let modelContainer: ModelContainer
         do {
-            let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
+            let schema = Schema([
+                ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+            ])
             let config = ModelConfiguration(
                 "LiveTranslate",
                 schema: schema,
@@ -110,7 +112,9 @@ final class AppEnvironment {
             // crash-looping on launch.
             assertionFailure("ModelContainer failed: \(error)")
             modelContainer = try! ModelContainer(
-                for: Schema([ClassroomSession.self, TranscriptEntry.self])
+                for: Schema([
+                    ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+                ])
             )
         }
         let engineManager = ASREngineManager(settings: settings)

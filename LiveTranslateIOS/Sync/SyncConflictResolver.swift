@@ -35,6 +35,17 @@ enum SyncConflictResolver {
             }
         case .bookmark, .favorite:
             break // boolean states: local intent wins on equal versions
+        case .course:
+            // Course fields are small user-edited strings; local intent
+            // wins, with an empty local name falling back to the server's.
+            if (merged.title ?? "").isEmpty, let serverName = server.title {
+                merged.title = serverName
+            }
+        case .note:
+            // Note text merges like chineseText: local wins when non-empty.
+            if (merged.noteText ?? "").isEmpty, let serverText = server.noteText {
+                merged.noteText = serverText
+            }
         }
         return merged
     }

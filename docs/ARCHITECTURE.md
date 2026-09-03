@@ -67,10 +67,13 @@ UI 双语字幕 + 持久化更新 + 导出 (Markdown/TXT×3/JSON/SRT)
 
 ## 持久化
 
-SwiftData（`Application Support/LiveTranslate.sqlite`）：
+SwiftData（`Application Support/LiveTranslate.sqlite`，按账号分目录，见 `AccountScope`）：
 
-- `ClassroomSession`：每场课堂一行，记录实际使用的后端、模型版本、计算单元、翻译模型、时长、是否异常终止（App 被杀后下次启动标记）。
+- `ClassroomSession`：每场课堂一行，记录实际使用的后端、模型版本、计算单元、翻译模型、时长、是否异常终止（App 被杀后下次启动标记）、所属课程（`courseID`，可空）。
 - `TranscriptEntry`：每条话轮一行（`sequenceID`、时间偏移、俄语原文、译文、翻译状态、ASR 延迟/RTF、翻译延迟）。
+- `Course`：一门可复用的课程（名称、教师、地点、调色板颜色、归档状态、最近使用时间）；删除课程时其课堂保留并变为独立课堂。
+- `SessionNote`：用户输入的课堂笔记，可锚定到某条转录段落（`anchorEntryID`）；随课堂删除而删除，段落消失时仅清除锚定。
+- 书签与收藏仍是 UserDefaults 中的 ID 记录（`BookmarkStore`）；原始录音（可选开启）写入 `Application Support/Sessions/<session-id>/`，随课堂删除一并清理。
 
 ## Core ML 编译缓存
 

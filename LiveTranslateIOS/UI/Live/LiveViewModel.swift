@@ -81,6 +81,11 @@ final class LiveViewModel {
         environment?.coordinator.activeSessionID
     }
 
+    /// The course the active classroom belongs to (nil = standalone).
+    var activeSessionCourseID: UUID? {
+        environment?.coordinator.activeSessionCourseID
+    }
+
     var isRunning: Bool {
         environment?.coordinator.isRunning ?? false
     }
@@ -241,6 +246,75 @@ final class LiveViewModel {
         environment?.bookmarks.removeBookmark(bookmark)
     }
 
+    // MARK: - Notes (this session)
+
+    /// The classroom's real notes (persisted through the repository —
+    /// never view-only state).
+    private(set) var sessionNotes: [SessionNote] = []
+
+    func reloadNotes() {
+        guard let environment, let sessionID = activeSessionID else {
+            sessionNotes = []
+            return
+        }
+        sessionNotes = (try? environment.repository.notes(forSessionID: sessionID)) ?? []
+    }
+
+    /// The entry the current focus points at (what "现在讲的" means for a
+    /// note taken right now).
+    private var currentAnchoredEntry: LiveTranscriptItem? {
+        entries.last { $0.sequenceID == currentSequenceID }
+    }
+
+    /// Timestamp label of the entry a new note would anchor to (empty when
+    /// nothing has landed yet).
+    var currentAnchorLabel: String {
+        currentAnchoredEntry?.timestamp ?? ""
+    }
+
+    /// Quick note from the composer. When `anchorToCurrent` is on (and a
+    /// persisted entry exists) the note anchors to the current transcript
+    /// line, so it can jump back there during review.
+    @discardableResult
+    func addNote(_ rawText: String, anchorToCurrent: Bool) -> Bool {
+        guard let environment, let sessionID = activeSessionID else { return false }
+        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let anchorEntryID = anchorToCurrent ? currentAnchoredEntry?.entryID : nil
+        do {
+            _ = try environment.repository.addNote(
+                NoteDraft(text: trimmed, anchorEntryID: anchorEntryID),
+                toSessionID: sessionID
+            )
+            reloadNotes()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func deleteNote(_ note: SessionNote) {
+        try? environment?.repository.deleteNote(note)
+        reloadNotes()
+    }
+
+    /// Timestamp shown for a note in class: the anchored entry's offset
+    /// when anchored, else the wall-clock time the note was taken.
+    func noteTimestamp(_ note: SessionNote) -> String {
+        if let anchorID = note.anchorEntryID,
+           let entry = entries.first(where: { $0.entryID == anchorID }) {
+            return entry.timestamp
+        }
+        return Format.time(note.createdAt)
+    }
+
+    /// The live transcript line a note is anchored to (nil = unanchored or
+    /// the entry has not landed yet).
+    func anchorEntry(for note: SessionNote) -> LiveTranscriptItem? {
+        guard let anchorID = note.anchorEntryID else { return nil }
+        return entries.first { $0.entryID == anchorID }
+    }
+
     // MARK: - Session control (thin pass-throughs to the coordinator)
 
     func pause() {
@@ -317,9 +391,10 @@ final class LiveViewModel {
 
     /// Retry starting with the currently preferred backend (after an error
     /// left the classroom unusable). Never switches backends implicitly —
-    /// the banner's 切换后端 action is the only path for that.
+    /// the banner's 切换后端 action is the only path for that. The
+    /// classroom's course assignment survives the restart.
     func restartSession() async {
-        await environment?.coordinator.start(title: sessionTitle)
+        await environment?.coordinator.start(title: sessionTitle, courseID: activeSessionCourseID)
     }
 
     /// Switch to the other backend and restart listening. Bound to a
@@ -333,6 +408,6 @@ final class LiveViewModel {
             return
         }
         environment.settings.preferredBackend = other
-        await environment.coordinator.start(title: sessionTitle)
+        await environment.coordinator.start(title: sessionTitle, courseID: activeSessionCourseID)
     }
 }

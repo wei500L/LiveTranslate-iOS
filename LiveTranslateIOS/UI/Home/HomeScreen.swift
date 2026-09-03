@@ -7,6 +7,9 @@ struct HomeScreen: View {
     @State private var viewModel = HomeViewModel()
     @State private var showNewSessionSheet = false
     @State private var showModelManagement = false
+    /// Course to preselect in the new-classroom sheet (quick start fall-
+    /// back when the one-tap path is not safe).
+    @State private var pendingCourse: Course?
 
     var body: some View {
         NavigationStack {
@@ -18,6 +21,7 @@ struct HomeScreen: View {
                             ongoingBanner
                         }
                         startCard
+                        quickStartSection
                         statusSection
                         recentSection
                         statsSection
@@ -28,8 +32,9 @@ struct HomeScreen: View {
                 }
             }
             .sheet(isPresented: $showNewSessionSheet) {
-                NewSessionSheet()
+                NewSessionSheet(preselectedCourse: pendingCourse)
                     .environment(environment)
+                    .onDisappear { pendingCourse = nil }
             }
             .navigationDestination(isPresented: $showModelManagement) {
                 ModelManagementScreen()
@@ -184,6 +189,67 @@ struct HomeScreen: View {
             )
             .overlay(Circle().strokeBorder(LTColors.accentGreen.opacity(0.35), lineWidth: 0.5))
             .shadow(color: LTColors.accentGreen.opacity(0.30), radius: 9)
+    }
+
+    // MARK: - Quick start (courses)
+
+    /// Recurring courses, one tap away. Only rendered when the user has
+    /// actually created courses — a fresh install sees nothing new here.
+    @ViewBuilder
+    private var quickStartSection: some View {
+        if !viewModel.quickStartCourses.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                LTSectionHeader(title: "快捷开课")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: LTSpacing.s) {
+                        ForEach(viewModel.quickStartCourses, id: \.id) { course in
+                            quickStartChip(course)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+        }
+    }
+
+    private func quickStartChip(_ course: Course) -> some View {
+        Button {
+            Task {
+                if let fallback = await viewModel.quickStart(course) {
+                    pendingCourse = fallback
+                    showNewSessionSheet = true
+                }
+            }
+        } label: {
+            HStack(spacing: LTSpacing.s) {
+                LTIconBadge(
+                    symbol: LTIconography.symbol(for: course.name),
+                    tint: LTCoursePalette.color(course.colorIndex),
+                    size: 34
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(course.name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(LTColors.textPrimary)
+                        .lineLimit(1)
+                    if !course.teacherName.isEmpty {
+                        Text(course.teacherName)
+                            .font(LTTypography.timestamp)
+                            .foregroundStyle(LTColors.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(LTColors.accentGreen.opacity(0.85))
+            }
+            .padding(LTSpacing.m)
+            .background(RoundedRectangle(cornerRadius: LTRadius.medium).fill(LTColors.surfacePrimary.opacity(0.85)))
+            .overlay(RoundedRectangle(cornerRadius: LTRadius.medium).strokeBorder(LTColors.border, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("开始\(course.name)课堂"))
+        .accessibilityHint(Text("双击直接开始这堂课"))
     }
 
     // MARK: - Status

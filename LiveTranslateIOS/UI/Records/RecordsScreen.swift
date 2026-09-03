@@ -23,6 +23,9 @@ struct RecordsScreen: View {
                     VStack(spacing: LTSpacing.l) {
                         searchField
                         filterChips
+                        if !viewModel.courses.isEmpty {
+                            courseChips
+                        }
                         sessionList
                     }
                     .padding(.horizontal, LTSpacing.screenPadding)
@@ -160,6 +163,46 @@ struct RecordsScreen: View {
         }
     }
 
+    // MARK: - Course chips
+
+    /// Course navigation row: tapping opens the course detail (its
+    /// classroom history, stats and quick start). Archived courses ride at
+    /// the end, dimmed. Hidden entirely until the first course exists.
+    private var courseChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: LTSpacing.s) {
+                ForEach(viewModel.courses, id: \.id) { course in
+                    NavigationLink {
+                        CourseDetailView(courseID: course.id)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(LTCoursePalette.color(course.colorIndex))
+                                .frame(width: 7, height: 7)
+                            Text(course.name)
+                                .font(.footnote.weight(.medium))
+                                .lineLimit(1)
+                            if course.isArchived {
+                                Text("已归档")
+                                    .font(LTTypography.timestamp)
+                                    .foregroundStyle(LTColors.textTertiary)
+                            }
+                        }
+                        .foregroundStyle(LTColors.textSecondary)
+                        .padding(.horizontal, LTSpacing.m)
+                        .padding(.vertical, LTSpacing.xs + 1)
+                        .background(Capsule().fill(LTColors.surfacePrimary))
+                        .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
+                        .opacity(course.isArchived ? 0.55 : 1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("课程 \(course.name)"))
+                }
+            }
+            .padding(.vertical, 1)
+        }
+    }
+
     // MARK: - List
 
     @ViewBuilder
@@ -207,6 +250,10 @@ struct RecordsScreen: View {
                             session: session,
                             stats: viewModel.stats(for: session.id),
                             badge: viewModel.translationBadge(for: session.id),
+                            courseName: viewModel.course(for: session)?.name,
+                            courseTint: viewModel.course(for: session).map {
+                                LTCoursePalette.color($0.colorIndex)
+                            },
                             isFavorite: viewModel.isFavorite(session.id),
                             onToggleFavorite: { viewModel.toggleFavorite(session.id) },
                             onExport: { format in
@@ -248,9 +295,11 @@ struct RecordsScreen: View {
 
     private func exportSession(_ session: ClassroomSession, format: ExportFormat) async {
         let entries = (try? environment.repository.entries(for: session)) ?? []
+        let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
         guard let url = await SessionExport.writeTemporaryFile(
             session: session,
             entries: entries,
+            notes: notes,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
         ) else {
@@ -267,21 +316,25 @@ struct RecordsScreen: View {
 
 /// One classroom card (reference image 4): stable course icon derived from
 /// the title, title/date/duration, translation status, favorite star and
-/// a more-actions menu.
+/// a more-actions menu. When the session belongs to a course, a colored
+/// tag shows it (the course's own color — not a title hash).
 struct SessionCard: View {
     let session: ClassroomSession
     let stats: RecordsViewModel.SessionStats
     let badge: (text: String, tint: Color)
-    let isFavorite: Bool
-    let onToggleFavorite: () -> Void
-    let onExport: (ExportFormat) -> Void
-    let onDelete: () -> Void
+    var courseName: String? = nil
+    var courseTint: Color? = nil
+    var isFavorite: Bool = false
+    var onToggleFavorite: () -> Void = {}
+    var onExport: (ExportFormat) -> Void = { _ in }
+    var onDelete: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: LTSpacing.m) {
             LTIconBadge(
-                symbol: LTIconography.symbol(for: session.title),
-                tint: LTIconography.tint(for: session.title)
+                symbol: courseName.map { _ in "book.fill" }
+                    ?? LTIconography.symbol(for: session.title),
+                tint: courseTint ?? LTIconography.tint(for: session.title)
             )
 
             VStack(alignment: .leading, spacing: 5) {
@@ -301,6 +354,16 @@ struct SessionCard: View {
                 }
 
                 HStack(spacing: LTSpacing.s) {
+                    if let courseName {
+                        HStack(spacing: 3) {
+                            if let courseTint {
+                                Circle()
+                                    .fill(courseTint)
+                                    .frame(width: 5, height: 5)
+                            }
+                            Text(courseName)
+                        }
+                    }
                     Text(Format.date(session.startTime))
                     Text(Format.clock(session.duration))
                     Text("\(stats.totalEntries) 段")

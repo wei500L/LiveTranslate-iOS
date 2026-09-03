@@ -268,27 +268,45 @@ struct LiveLyricRow: View {
 
 // MARK: - Notes tab
 
-/// 课堂笔记: the saved bilingual content of this classroom, in order. There
-/// is no separate note/AI-summary capability, so this is the real stored
-/// transcript — presented read-only with copy support (no fabricated
-/// summaries).
+/// 课堂笔记: the user's own notes for THIS classroom, written through the
+/// repository (real persistence — they survive the classroom ending and
+/// sync like any other entity). A composer at the bottom keeps one-handed
+/// mid-class capture; a toggle anchors the note to the transcript line
+/// currently being spoken about.
 struct LiveNotesTab: View {
     let viewModel: LiveViewModel
 
+    @State private var noteDraft = ""
+    @State private var anchorToCurrent = true
+    @FocusState private var composerFocused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
-            noteHeader
-            if viewModel.entries.isEmpty {
-                LTEmptyState(
-                    symbol: "note.text",
-                    title: "还没有内容",
-                    message: "课堂上识别到的内容会自动出现在这里"
-                )
+            noteList
+            composer
+        }
+        .onAppear {
+            viewModel.reloadNotes()
+        }
+    }
+
+    private var noteList: some View {
+        Group {
+            if viewModel.sessionNotes.isEmpty {
+                VStack {
+                    LTEmptyState(
+                        symbol: "note.text",
+                        title: "还没有笔记",
+                        message: "在下方输入框随手记下老师讲的重点"
+                    )
+                    Spacer()
+                }
+                .padding(.top, LTSpacing.xl)
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: LTSpacing.m) {
-                        ForEach(viewModel.entries, id: \.sequenceID) { entry in
-                            noteRow(entry)
+                    LazyVStack(alignment: .leading, spacing: LTSpacing.s) {
+                        ForEach(viewModel.sessionNotes, id: \.id) { note in
+                            noteRow(note)
                         }
                     }
                     .padding(LTSpacing.screenPadding)
@@ -297,38 +315,110 @@ struct LiveNotesTab: View {
         }
     }
 
-    private var noteHeader: some View {
-        Text("这里是本堂课已保存的双语内容 · 课后可在课堂记录中查看与导出")
-            .font(LTTypography.caption)
-            .foregroundStyle(LTColors.textTertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, LTSpacing.screenPadding)
-            .padding(.top, LTSpacing.s)
-    }
-
-    private func noteRow(_ entry: LiveTranscriptItem) -> some View {
+    private func noteRow(_ note: SessionNote) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(TranscriptFeed.timestamp(for: entry.startOffset))
-                .font(LTTypography.timestamp)
-                .foregroundStyle(LTColors.textTertiary)
-            if let translated = entry.translatedText, !translated.isEmpty {
-                Text(translated)
-                    .font(.subheadline)
-                    .foregroundStyle(LTColors.textPrimary)
-                    .textSelection(.enabled)
+            HStack(spacing: LTSpacing.xs) {
+                Text(viewModel.noteTimestamp(note))
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+                if viewModel.anchorEntry(for: note) != nil {
+                    Label("锚定段落", systemImage: "text.bubble")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.warning.opacity(0.85))
+                }
+                Spacer()
             }
-            Text(entry.originalText)
-                .font(.footnote)
-                .foregroundStyle(LTColors.textSecondary)
+            Text(note.text)
+                .font(.subheadline)
+                .foregroundStyle(LTColors.textPrimary)
                 .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, LTSpacing.m)
-        .padding(.vertical, LTSpacing.s)
+        .padding(LTSpacing.m)
         .background(
             RoundedRectangle(cornerRadius: LTRadius.small)
                 .fill(LTColors.surfacePrimary.opacity(0.6))
         )
+        .contextMenu {
+            Button("删除笔记", role: .destructive) {
+                viewModel.deleteNote(note)
+                LTHaptics.tap()
+            }
+        }
+    }
+
+    /// Bottom composer: text field + anchor toggle. Notes are persisted on
+    /// send — there is no draft state kept anywhere beyond this view.
+    private var composer: some View {
+        VStack(spacing: LTSpacing.xs) {
+            if !viewModel.entries.isEmpty {
+                Button {
+                    anchorToCurrent.toggle()
+                    LTHaptics.tap()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: anchorToCurrent ? "link.circle.fill" : "link.circle")
+                        Text(
+                            anchorToCurrent
+                                ? "将锚定到当前段落（\(currentAnchorLabel)）"
+                                : "不锚定段落"
+                        )
+                    }
+                    .font(LTTypography.caption)
+                    .foregroundStyle(anchorToCurrent ? LTColors.warning : LTColors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(anchorToCurrent ? "笔记将锚定到当前段落" : "笔记不锚定段落"))
+            }
+            HStack(spacing: LTSpacing.s) {
+                TextField("记点什么…", text: $noteDraft, axis: .vertical)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .lineLimit(1...4)
+                    .padding(LTSpacing.s)
+                    .background(
+                        RoundedRectangle(cornerRadius: LTRadius.small)
+                            .fill(LTColors.surfacePrimary)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: LTRadius.small)
+                            .strokeBorder(LTColors.border, lineWidth: 0.5)
+                    )
+                    .focused($composerFocused)
+                    .onSubmit(sendNote)
+
+                Button(action: sendNote) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(
+                            trimmedDraft.isEmpty ? LTColors.textTertiary : LTColors.accentGreen
+                        )
+                }
+                .disabled(trimmedDraft.isEmpty)
+                .accessibilityLabel(Text("保存笔记"))
+            }
+        }
+        .padding(.horizontal, LTSpacing.screenPadding)
+        .padding(.top, LTSpacing.s)
+        .padding(.bottom, LTSpacing.m)
+        .background(.ultraThinMaterial)
+        .environment(\.colorScheme, .dark)
+    }
+
+    private var trimmedDraft: String {
+        noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The timestamp of the entry a new note would anchor to (informational
+    /// label on the toggle).
+    private var currentAnchorLabel: String {
+        viewModel.currentAnchorLabel
+    }
+
+    private func sendNote() {
+        guard viewModel.addNote(noteDraft, anchorToCurrent: anchorToCurrent) else { return }
+        noteDraft = ""
+        LTHaptics.success()
     }
 }
 

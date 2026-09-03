@@ -386,6 +386,32 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    private func enqueueCourseUpsert(_ course: Course) {
+        let item = SyncOutboxItem(
+            entityType: .course,
+            entityID: course.id,
+            operation: .upsert,
+            baseServerVersion: course.serverVersion,
+            payload: Self.payload(for: course)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueNoteUpsert(_ note: SessionNote) {
+        var payload = Self.payload(for: note)
+        payload.sessionId = note.sessionID
+        let item = SyncOutboxItem(
+            entityType: .note,
+            entityID: note.id,
+            operation: .upsert,
+            baseServerVersion: note.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -691,7 +717,7 @@ final class CloudSyncService: AuthenticationService {
         entityType: SyncEntityType, entityID: UUID, version: Int
     ) {
         switch entityType {
-        case .session, .entry:
+        case .session, .entry, .course, .note:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -732,6 +758,10 @@ final class CloudSyncService: AuthenticationService {
             )
         case .favorite:
             bookmarks.applyRemoteFavorite(sessionID: entityID, isFavorite: false, version: 0)
+        case .course:
+            try? repository.deleteCourseByID(entityID)
+        case .note:
+            try? repository.deleteNoteByID(entityID)
         }
     }
 
@@ -760,6 +790,10 @@ final class CloudSyncService: AuthenticationService {
                     version: serverVersion
                 )
             }
+        case .course:
+            try? repository.applyRemoteCourse(record: record, serverVersion: serverVersion)
+        case .note:
+            try? repository.applyRemoteNote(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -862,7 +896,12 @@ final class CloudSyncService: AuthenticationService {
             sessionStatus: session.endTime == nil ? "active" : (session.abnormalTermination ? "abnormal" : "finished"),
             abnormalTermination: session.abnormalTermination,
             sourceLanguage: session.sourceLanguage,
-            targetLanguage: session.targetLanguage
+            targetLanguage: session.targetLanguage,
+            // Full desired state: an assigned course rides as its id, a
+            // standalone session rides as the explicit-clear sentinel (nil
+            // would mean "keep the server value" and never propagate an
+            // unassignment). The server treats the sentinel as "no course".
+            courseId: session.courseID ?? .nilSentinel
         )
     }
 
@@ -874,6 +913,25 @@ final class CloudSyncService: AuthenticationService {
             russianText: entry.originalText,
             chineseText: entry.translatedText,
             translationStatus: entry.translationStatus
+        )
+    }
+
+    static func payload(for course: Course) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: course.name,
+            teacher: course.teacherName,
+            location: course.location,
+            colorIndex: course.colorIndex,
+            isArchived: course.isArchived
+        )
+    }
+
+    static func payload(for note: SessionNote) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            noteText: note.text,
+            // Same sentinel rule as the session→course reference: an
+            // unanchored note explicitly clears the anchor server-side.
+            anchorEntryId: note.anchorEntryID ?? .nilSentinel
         )
     }
 }
@@ -890,6 +948,12 @@ protocol TranscriptMutationObserving: AnyObject {
     func sessionDeleted(id: UUID)
     func entryCreated(_ entry: TranscriptEntry)
     func entryUpdated(_ entry: TranscriptEntry)
+    func courseCreated(_ course: Course)
+    func courseUpdated(_ course: Course)
+    func courseDeleted(id: UUID)
+    func noteCreated(_ note: SessionNote)
+    func noteUpdated(_ note: SessionNote)
+    func noteDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -911,5 +975,29 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func entryUpdated(_ entry: TranscriptEntry) {
         enqueueEntryUpsert(entry)
+    }
+
+    func courseCreated(_ course: Course) {
+        enqueueCourseUpsert(course)
+    }
+
+    func courseUpdated(_ course: Course) {
+        enqueueCourseUpsert(course)
+    }
+
+    func courseDeleted(id: UUID) {
+        enqueueDelete(entityType: .course, entityID: id)
+    }
+
+    func noteCreated(_ note: SessionNote) {
+        enqueueNoteUpsert(note)
+    }
+
+    func noteUpdated(_ note: SessionNote) {
+        enqueueNoteUpsert(note)
+    }
+
+    func noteDeleted(id: UUID) {
+        enqueueDelete(entityType: .note, entityID: id)
     }
 }

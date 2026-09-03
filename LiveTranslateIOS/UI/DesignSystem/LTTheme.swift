@@ -191,6 +191,20 @@ enum LTIconography {
     }
 }
 
+/// Fixed course color palette. `Course.colorIndex` (synced as a plain int)
+/// indexes into this; unknown indices fall back to the first color so a
+/// future palette change never renders a course colorless.
+enum LTCoursePalette {
+    static let colors: [Color] = [
+        .cyan, .mint, .orange, .indigo, .pink, .yellow, .teal, .purple,
+    ]
+
+    static func color(_ index: Int) -> Color {
+        guard !colors.isEmpty else { return .cyan }
+        return colors[abs(index) % colors.count]
+    }
+}
+
 // MARK: - Haptics
 
 /// Central wrapper so haptic usage stays discoverable and testable.

@@ -66,7 +66,9 @@ extension AppEnvironment {
         UserDefaults.standard.removePersistentDomain(forName: suiteName)
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
 
-        let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
+        let schema = Schema([
+            ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+        ])
         let configuration = ModelConfiguration(
             "ui-demo", schema: schema, isStoredInMemoryOnly: true
         )
@@ -278,11 +280,12 @@ final class DemoLiveCoordinator: LiveTranslationCoordinating {
 
     var activeSessionID: UUID? { sessionID }
     var activeSessionTitle: String? { sessionTitleValue }
+    var activeSessionCourseID: UUID? { nil }
     var isRunning: Bool {
         sessionID != nil && state.phase != .finished
     }
 
-    func start(title: String? = nil) async {
+    func start(title: String? = nil, courseID: UUID? = nil) async {
         guard !isRunning else { return }
         sessionID = UUID()
         sessionTitleValue = title ?? "演示课堂"
@@ -446,10 +449,11 @@ final class DemoLiveCoordinator: LiveTranslationCoordinating {
 // MARK: - Demo seed data
 
 /// Seeds the in-memory demo store: study statistics (今日 2 小时 15 分,
-/// 本周 8 节), the records list (six spec courses plus the home recents)
-/// with the required status coverage, the detail timeline (8 entries with
-/// math symbols, a skipped translation, a failed one, bookmarks and long
-/// text) and demo favorites.
+/// 本周 8 节), three demo courses (quick-start chips + course grouping),
+/// the records list (six spec courses plus the home recents) with the
+/// required status coverage, the detail timeline (8 entries with math
+/// symbols, a skipped translation, a failed one, bookmarks, long text and
+/// three notes — two anchored) and demo favorites.
 enum DemoSeed {
     @MainActor
     static func populate(
@@ -625,6 +629,35 @@ enum DemoSeed {
 
         var detailSessionID: UUID?
         var bookmarkTargets: [(sessionID: UUID, entryID: UUID)] = []
+        // Demo courses — the quick-start chips and course grouping have
+        // real data behind them.
+        let courseByName: [String: Course] = {
+            let drafts: [(name: String, teacher: String, location: String, color: Int)] = [
+                ("高等数学 II", "Иванова М.А.", "主楼 304", 0),
+                ("现代俄语精读", "Петров С.Н.", "语言楼 210", 2),
+                ("量子力学导论", "Смирнов А.В.", "", 5),
+            ]
+            var map: [String: Course] = [:]
+            for draft in drafts {
+                let course = Course(
+                    name: draft.name,
+                    teacherName: draft.teacher,
+                    location: draft.location,
+                    colorIndex: draft.color
+                )
+                context.insert(course)
+                map[draft.name] = course
+            }
+            return map
+        }()
+
+        func courseID(forTitle title: String) -> UUID? {
+            for (name, course) in courseByName where title.hasPrefix(name) {
+                return course.id
+            }
+            return nil
+        }
+
         for spec in specs {
             let session = ClassroomSession(
                 title: spec.title,
@@ -636,9 +669,11 @@ enum DemoSeed {
                 computePreference: "cpuAndGPU",
                 translationModel: "demo-translator",
                 entryCount: spec.entries.count,
-                abnormalTermination: spec.abnormal
+                abnormalTermination: spec.abnormal,
+                courseID: courseID(forTitle: spec.title)
             )
             context.insert(session)
+            var detailEntryIDs: [UUID] = []
             var offset: TimeInterval = 0
             for (index, row) in spec.entries.enumerated() {
                 let entry = TranscriptEntry(
@@ -653,15 +688,40 @@ enum DemoSeed {
                 )
                 entry.session = session
                 context.insert(entry)
-                // The first and the long fourth line of today's math course
-                // carry the demo bookmarks.
-                if spec.title.hasPrefix("高等数学"), index == 0 || index == 3 {
-                    bookmarkTargets.append((session.id, entry.id))
+                if spec.title.hasPrefix("高等数学") {
+                    detailEntryIDs.append(entry.id)
+                    // The first and the long fourth line of today's math
+                    // course carry the demo bookmarks.
+                    if index == 0 || index == 3 {
+                        bookmarkTargets.append((session.id, entry.id))
+                    }
                 }
                 offset += 18
             }
             if spec.title.hasPrefix("高等数学") {
                 detailSessionID = session.id
+                // Demo notes: one anchored to the definition line, one to
+                // the long formula line, one unanchored.
+                if detailEntryIDs.count > 3 {
+                    for note in [
+                        SessionNote(
+                            sessionID: session.id,
+                            anchorEntryID: detailEntryIDs[0],
+                            text: "ε−δ 定义必考，课后把三个例题重推一遍"
+                        ),
+                        SessionNote(
+                            sessionID: session.id,
+                            anchorEntryID: detailEntryIDs[3],
+                            text: "偏导数极限的定义：其余变量固定不变——老师强调了两遍"
+                        ),
+                        SessionNote(
+                            sessionID: session.id,
+                            text: "下次课带《习题集》第 4 章，助教要检查作业"
+                        ),
+                    ] {
+                        context.insert(note)
+                    }
+                }
             }
             if spec.favorite {
                 _ = bookmarks.toggleFavorite(session.id)

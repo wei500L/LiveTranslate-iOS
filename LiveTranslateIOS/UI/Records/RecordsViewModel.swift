@@ -69,6 +69,9 @@ final class RecordsViewModel {
     var sessions: [ClassroomSession] = []
     var statsBySessionID: [UUID: SessionStats] = [:]
     var storageBytes = 0
+    /// All courses (active first, most recently used first) — drives the
+    /// course chips row; empty until the user creates a course.
+    var courses: [Course] = []
 
     var searchQuery = ""
     var filter: Filter = .all
@@ -87,6 +90,7 @@ final class RecordsViewModel {
     func reload() {
         guard let environment else { return }
         sessions = (try? environment.repository.sessions(matching: "")) ?? []
+        courses = (try? environment.repository.courses()) ?? []
         storageBytes = environment.repository.storageBytes()
 
         // Aggregate translation outcomes per session (needed for the
@@ -176,6 +180,13 @@ final class RecordsViewModel {
 
     func stats(for sessionID: UUID) -> SessionStats {
         statsBySessionID[sessionID] ?? SessionStats()
+    }
+
+    /// The course of a session, for the card's course tag (nil when the
+    /// session is standalone or its course was deleted).
+    func course(for session: ClassroomSession) -> Course? {
+        guard let id = session.courseID else { return nil }
+        return courses.first { $0.id == id }
     }
 
     /// The translated-status badge text for a session card. 部分失败 is

@@ -6,6 +6,37 @@ import SwiftData
 /// All access is MainActor-isolated: SwiftData models are not Sendable, so
 /// every read and write happens on the main actor, matching how the UI
 /// consumes them.
+enum RepositoryError: Error {
+    /// The session a write targets does not exist locally.
+    case sessionMissing
+}
+
+/// Raw-recording storage (written by the live coordinator while 保存原始
+/// 录音 is on). Deleting a session removes its recording directory too —
+/// the audio is session data and nothing else can reach it once the
+/// session is gone (there is no playback path).
+enum SessionRecordings {
+    static var rootDirectory: URL {
+        let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        return support.appendingPathComponent("Sessions", isDirectory: true)
+    }
+
+    static func directory(for sessionID: UUID) -> URL {
+        rootDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+    }
+
+    /// Best-effort removal; missing directories are not an error.
+    static func remove(for sessionID: UUID) {
+        try? FileManager.default.removeItem(at: directory(for: sessionID))
+    }
+
+    static func removeAll() {
+        try? FileManager.default.removeItem(at: rootDirectory)
+    }
+}
+
 @MainActor
 final class TranscriptRepository: ClassroomRepositoryProtocol {
     private let container: ModelContainer
@@ -38,9 +69,17 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             asrBackend: draft.backend.rawValue,
             modelVersion: draft.modelVersion,
             computePreference: draft.computePreference,
-            translationModel: draft.translationModel
+            translationModel: draft.translationModel,
+            courseID: draft.courseID
         )
         context.insert(session)
+        // Keep the course's quick-start ordering honest (most recently
+        // used first on the home screen).
+        if let courseID = draft.courseID,
+           let course = try? course(id: courseID) {
+            course.lastUsedAt = session.startTime
+            course.updatedAt = .now
+        }
         try context.save()
         mutationObserver?.sessionCreated(session)
         return session
@@ -119,7 +158,15 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         ))
         guard !trimmed.isEmpty else { return all }
         let needle = trimmed.lowercased()
+        // Note text participates in search: a session matches when any of
+        // its notes contains the query (the user's own words are often the
+        // fastest path back to a classroom).
+        let notes = try context.fetch(FetchDescriptor<SessionNote>())
+        let sessionsWithNoteHit = Set(
+            notes.filter { $0.text.lowercased().contains(needle) }.map(\.sessionID)
+        )
         return all.filter { session in
+            if sessionsWithNoteHit.contains(session.id) { return true }
             if session.title.lowercased().contains(needle) { return true }
             return session.entries.contains { entry in
                 entry.originalText.lowercased().contains(needle)
@@ -144,8 +191,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
 
     func deleteSession(_ session: ClassroomSession) throws {
         let sessionID = session.id
+        // Notes are session-scoped with no SwiftData relationship — delete
+        // them explicitly alongside the cascade-deleted entries. Raw
+        // recordings (保存原始录音) are session data too.
+        let noteDescriptor = FetchDescriptor<SessionNote>(
+            predicate: #Predicate { $0.sessionID == sessionID }
+        )
+        for note in try context.fetch(noteDescriptor) {
+            context.delete(note)
+        }
         context.delete(session)
         try context.save()
+        SessionRecordings.remove(for: sessionID)
         mutationObserver?.sessionDeleted(id: sessionID)
     }
 
@@ -153,7 +210,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         let sessions = try context.fetch(FetchDescriptor<ClassroomSession>())
         let ids = sessions.map(\.id)
         try context.delete(model: ClassroomSession.self)
+        try context.delete(model: SessionNote.self)
         try context.save()
+        SessionRecordings.removeAll()
         for id in ids {
             mutationObserver?.sessionDeleted(id: id)
         }
@@ -211,6 +270,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let entry = try context.fetch(descriptor).first else { return }
             entry.serverVersion = max(entry.serverVersion, version)
+        case .course:
+            let descriptor = FetchDescriptor<Course>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let course = try context.fetch(descriptor).first else { return }
+            course.serverVersion = max(course.serverVersion, version)
+        case .note:
+            let descriptor = FetchDescriptor<SessionNote>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let note = try context.fetch(descriptor).first else { return }
+            note.serverVersion = max(note.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -237,7 +308,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 id: recordID,
                 title: record.title ?? "",
                 startTime: record.startedAt ?? .now,
-                asrBackend: "cloud"
+                asrBackend: "cloud",
+                courseID: record.courseId
             )
             context.insert(session)
         }
@@ -250,6 +322,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             session.endTime = session.endTime ?? session.updatedAt
         }
         session.abnormalTermination = session.abnormalTermination || (record.abnormalTermination ?? false)
+        // Course reference is full row state: a record without courseId
+        // means the session is standalone server-side.
+        session.courseID = record.courseId
         session.serverVersion = serverVersion
         try context.save()
     }
@@ -316,8 +391,15 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             predicate: #Predicate { $0.id == id }
         )
         guard let session = try context.fetch(descriptor).first else { return }
+        let noteDescriptor = FetchDescriptor<SessionNote>(
+            predicate: #Predicate { $0.sessionID == id }
+        )
+        for note in try context.fetch(noteDescriptor) {
+            context.delete(note)
+        }
         try context.delete(session)
         try context.save()
+        SessionRecordings.remove(for: id)
     }
 
     func deleteEntryByID(_ id: UUID) throws {
@@ -327,6 +409,15 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         guard let entry = try context.fetch(descriptor).first else { return }
         if let session = entry.session, session.entryCount > 0 {
             session.entryCount -= 1
+        }
+        // Notes anchored to the removed entry keep their text — the anchor
+        // is metadata and is simply dropped.
+        let noteDescriptor = FetchDescriptor<SessionNote>(
+            predicate: #Predicate { $0.anchorEntryID == id }
+        )
+        for note in try context.fetch(noteDescriptor) {
+            note.anchorEntryID = nil
+            note.updatedAt = .now
         }
         try context.delete(entry)
         try context.save()
@@ -354,14 +445,27 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         return ((try? context.fetchCount(descriptor)) ?? 0) > 0
     }
 
-    /// First-upload snapshot: every session and entry becomes an outbox
-    /// upsert (favorites are enqueued by the sync service from
-    /// BookmarkStore). Runs in batches on the main actor so the UI is
-    /// never blocked for long; the outbox makes it resumable.
+    /// First-upload snapshot: every course, session, entry and note becomes
+    /// an outbox upsert (favorites are enqueued by the sync service from
+    /// BookmarkStore). Order matters: courses before sessions (so a
+    /// session's course reference resolves), notes last (the server
+    /// validates a note's parent session exists). Runs in batches on the
+    /// main actor so the UI is never blocked for long; the outbox makes it
+    /// resumable.
     func syncSnapshots(
         batchSize: Int, progress: ((Int, Int) -> Void)?
     ) -> [SyncOutboxItem] {
         var items: [SyncOutboxItem] = []
+        let courses = (try? context.fetch(FetchDescriptor<Course>())) ?? []
+        for course in courses {
+            items.append(SyncOutboxItem(
+                entityType: .course,
+                entityID: course.id,
+                operation: .upsert,
+                baseServerVersion: course.serverVersion,
+                payload: CloudSyncService.payload(for: course)
+            ))
+        }
         let sessions = (try? context.fetch(FetchDescriptor<ClassroomSession>())) ?? []
         for (index, session) in sessions.enumerated() {
             items.append(SyncOutboxItem(
@@ -383,11 +487,234 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                     payload: payload
                 ))
             }
+            let notes = (try? notes(forSessionID: session.id)) ?? []
+            for note in notes {
+                var payload = CloudSyncService.payload(for: note)
+                payload.sessionId = note.sessionID
+                items.append(SyncOutboxItem(
+                    entityType: .note,
+                    entityID: note.id,
+                    operation: .upsert,
+                    baseServerVersion: note.serverVersion,
+                    payload: payload
+                ))
+            }
             if batchSize > 0, (index + 1) % batchSize == 0 {
                 progress?(index + 1, sessions.count)
             }
         }
         progress?(sessions.count, sessions.count)
         return items
+    }
+
+    // MARK: - Courses
+
+    func createCourse(_ draft: CourseDraft) throws -> Course {
+        let course = Course(
+            name: draft.name,
+            teacherName: draft.teacherName,
+            location: draft.location,
+            colorIndex: draft.colorIndex,
+            isArchived: draft.isArchived
+        )
+        context.insert(course)
+        try context.save()
+        mutationObserver?.courseCreated(course)
+        return course
+    }
+
+    func updateCourse(_ course: Course, with draft: CourseDraft) throws {
+        course.name = draft.name
+        course.teacherName = draft.teacherName
+        course.location = draft.location
+        course.colorIndex = draft.colorIndex
+        course.isArchived = draft.isArchived
+        course.updatedAt = .now
+        try context.save()
+        mutationObserver?.courseUpdated(course)
+    }
+
+    func courses() throws -> [Course] {
+        let all = try context.fetch(FetchDescriptor<Course>())
+        // Active courses first (most recently used), archived behind.
+        return all.sorted { lhs, rhs in
+            switch (lhs.isArchived, rhs.isArchived) {
+            case (false, true): return true
+            case (true, false): return false
+            default:
+                return (lhs.lastUsedAt ?? lhs.createdAt) > (rhs.lastUsedAt ?? rhs.createdAt)
+            }
+        }
+    }
+
+    func course(id: UUID) throws -> Course? {
+        let descriptor = FetchDescriptor<Course>(predicate: #Predicate { $0.id == id })
+        return try context.fetch(descriptor).first
+    }
+
+    func deleteCourse(_ course: Course) throws {
+        let courseID = course.id
+        // Sessions survive: they become standalone (courseID cleared). The
+        // server performs the same nullification when it processes the
+        // course delete; the cleared rows sync through the server-side
+        // cascade, so no per-session outbox operations are needed here.
+        let sessions = try context.fetch(FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for session in sessions {
+            session.courseID = nil
+            session.updatedAt = .now
+        }
+        context.delete(course)
+        try context.save()
+        mutationObserver?.courseDeleted(id: courseID)
+    }
+
+    func assignCourse(_ courseID: UUID?, to session: ClassroomSession) throws {
+        guard session.courseID != courseID else { return }
+        session.courseID = courseID
+        session.updatedAt = .now
+        if let courseID, let course = try? course(id: courseID) {
+            course.lastUsedAt = max(course.lastUsedAt ?? .distantPast, session.startTime)
+            course.updatedAt = .now
+        }
+        try context.save()
+        mutationObserver?.sessionUpdated(session)
+    }
+
+    func applyRemoteCourse(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id else { return }
+        let descriptor = FetchDescriptor<Course>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let course: Course
+        if let existing {
+            course = existing
+        } else {
+            course = Course(
+                id: recordID,
+                name: record.title ?? ""
+            )
+            context.insert(course)
+        }
+        if let name = record.title, !name.isEmpty { course.name = name }
+        if let teacher = record.teacher { course.teacherName = teacher }
+        if let location = record.location { course.location = location }
+        if let colorIndex = record.colorIndex { course.colorIndex = colorIndex }
+        if let isArchived = record.isArchived { course.isArchived = isArchived }
+        course.serverVersion = serverVersion
+        try context.save()
+    }
+
+    func deleteCourseByID(_ id: UUID) throws {
+        // Mirror the server cascade: sessions of the deleted course become
+        // standalone. No mutation-observer notifications — this is the
+        // remote-applied side of a delete.
+        let sessions = try context.fetch(FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for session in sessions {
+            session.courseID = nil
+        }
+        let descriptor = FetchDescriptor<Course>(predicate: #Predicate { $0.id == id })
+        guard let course = try context.fetch(descriptor).first else {
+            try context.save()
+            return
+        }
+        context.delete(course)
+        try context.save()
+    }
+
+    // MARK: - Session notes
+
+    func notes(forSessionID id: UUID) throws -> [SessionNote] {
+        let descriptor = FetchDescriptor<SessionNote>(
+            predicate: #Predicate { $0.sessionID == id },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func addNote(_ draft: NoteDraft, toSessionID id: UUID) throws -> SessionNote {
+        // The session must exist — notes are session-scoped.
+        let sessionDescriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard try context.fetch(sessionDescriptor).first != nil else {
+            throw RepositoryError.sessionMissing
+        }
+        let note = SessionNote(
+            sessionID: id,
+            anchorEntryID: draft.anchorEntryID,
+            text: draft.text
+        )
+        context.insert(note)
+        try context.save()
+        mutationObserver?.noteCreated(note)
+        return note
+    }
+
+    func updateNote(_ note: SessionNote, text: String) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, note.text != trimmed else { return }
+        note.text = trimmed
+        note.updatedAt = .now
+        try context.save()
+        mutationObserver?.noteUpdated(note)
+    }
+
+    func updateNoteAnchor(_ note: SessionNote, anchorEntryID: UUID?) throws {
+        guard note.anchorEntryID != anchorEntryID else { return }
+        note.anchorEntryID = anchorEntryID
+        note.updatedAt = .now
+        try context.save()
+        mutationObserver?.noteUpdated(note)
+    }
+
+    func deleteNote(_ note: SessionNote) throws {
+        let noteID = note.id
+        context.delete(note)
+        try context.save()
+        mutationObserver?.noteDeleted(id: noteID)
+    }
+
+    func applyRemoteNote(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id, let sessionID = record.sessionId else { return }
+        let descriptor = FetchDescriptor<SessionNote>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let note: SessionNote
+        if let existing {
+            note = existing
+        } else {
+            note = SessionNote(
+                id: recordID,
+                sessionID: sessionID,
+                anchorEntryID: record.anchorEntryId,
+                text: record.noteText ?? ""
+            )
+            context.insert(note)
+        }
+        if let text = record.noteText, !text.isEmpty { note.text = text }
+        // Full row state: a record without an anchor means the note is
+        // unanchored server-side.
+        note.anchorEntryID = record.anchorEntryId
+        note.serverVersion = serverVersion
+        try context.save()
+    }
+
+    func deleteNoteByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<SessionNote>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let note = try context.fetch(descriptor).first else { return }
+        context.delete(note)
+        try context.save()
     }
 }

@@ -129,11 +129,13 @@ final class LiveTranslationCoordinator {
     /// classroom needs the persisted session's stable ID and title).
     var activeSessionID: UUID? { session?.id }
     var activeSessionTitle: String? { session?.title }
+    var activeSessionCourseID: UUID? { session?.courseID }
 
     /// Start a classroom session. The optional `title` comes from the
     /// new-classroom form; when nil the previous behavior (date-derived
-    /// default title) applies unchanged.
-    func start(title: String? = nil) async {
+    /// default title) applies unchanged. `courseID` assigns the session to
+    /// a course (nil = standalone).
+    func start(title: String? = nil, courseID: UUID? = nil) async {
         guard state.phase == .idle || state.phase == .finished || state.phase == .backendError else {
             return
         }
@@ -223,7 +225,8 @@ final class LiveTranslationCoordinator {
                 backend: settings.preferredBackend,
                 modelVersion: "gigaam-v3-e2e-rnnt",
                 computePreference: compute,
-                translationModel: settings.translationModel
+                translationModel: settings.translationModel,
+                courseID: courseID
             )
             session = try? repository.createSession(draft)
         }
@@ -739,10 +742,9 @@ final class LiveTranslationCoordinator {
     }
 
     private static func sessionsDirectory() -> URL {
-        let support = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        return support.appendingPathComponent("Sessions", isDirectory: true)
+        // Shared with the repository (which deletes recordings together
+        // with their session) — see SessionRecordings.
+        SessionRecordings.rootDirectory
     }
 }
 

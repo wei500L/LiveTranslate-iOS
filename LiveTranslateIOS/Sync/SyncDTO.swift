@@ -12,6 +12,8 @@ enum SyncEntityType: String, Codable, Sendable {
     case entry
     case bookmark
     case favorite
+    case course
+    case note
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -185,6 +187,18 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var entryId: UUID?
     var isBookmarked: Bool?
     var isFavorite: Bool?
+    // session → course reference. Absent (nil) keeps the server value;
+    // `UUID.nilSentinel` explicitly clears it (see the repository's
+    // sentinel documentation).
+    var courseId: UUID?
+    // course (name rides on title)
+    var teacher: String?
+    var location: String?
+    var colorIndex: Int?
+    var isArchived: Bool?
+    // note
+    var noteText: String?
+    var anchorEntryId: UUID?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -231,6 +245,13 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var entryId: UUID?
     var isBookmarked: Bool?
     var isFavorite: Bool?
+    var courseId: UUID?
+    var teacher: String?
+    var location: String?
+    var colorIndex: Int?
+    var isArchived: Bool?
+    var noteText: String?
+    var anchorEntryId: UUID?
     var serverVersion: Int
     var deleted: Bool
 
@@ -254,6 +275,13 @@ struct SyncServerRecordDTO: Codable, Sendable {
         entryId: UUID? = nil,
         isBookmarked: Bool? = nil,
         isFavorite: Bool? = nil,
+        courseId: UUID? = nil,
+        teacher: String? = nil,
+        location: String? = nil,
+        colorIndex: Int? = nil,
+        isArchived: Bool? = nil,
+        noteText: String? = nil,
+        anchorEntryId: UUID? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -274,6 +302,13 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.entryId = entryId
         self.isBookmarked = isBookmarked
         self.isFavorite = isFavorite
+        self.courseId = courseId
+        self.teacher = teacher
+        self.location = location
+        self.colorIndex = colorIndex
+        self.isArchived = isArchived
+        self.noteText = noteText
+        self.anchorEntryId = anchorEntryId
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -297,6 +332,13 @@ struct SyncServerRecordDTO: Codable, Sendable {
         entryId = try container.decodeIfPresent(UUID.self, forKey: .entryId)
         isBookmarked = try container.decodeIfPresent(Bool.self, forKey: .isBookmarked)
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite)
+        courseId = try container.decodeIfPresent(UUID.self, forKey: .courseId)
+        teacher = try container.decodeIfPresent(String.self, forKey: .teacher)
+        location = try container.decodeIfPresent(String.self, forKey: .location)
+        colorIndex = try container.decodeIfPresent(Int.self, forKey: .colorIndex)
+        isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived)
+        noteText = try container.decodeIfPresent(String.self, forKey: .noteText)
+        anchorEntryId = try container.decodeIfPresent(UUID.self, forKey: .anchorEntryId)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -339,4 +381,6 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var changeLogTail: Int
     var sessionCount: Int
     var entryCount: Int
+    var courseCount: Int?
+    var noteCount: Int?
 }

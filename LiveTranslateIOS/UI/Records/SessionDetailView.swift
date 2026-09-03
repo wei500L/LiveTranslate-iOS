@@ -13,9 +13,21 @@ struct SessionDetailView: View {
     @State private var shareItem: SharedFile?
     @State private var exportFailed = false
     @State private var renameDraft: String?
+    /// Note editor presentation: creating (optionally anchored) or editing.
+    @State private var noteEditor: NoteEditorContext?
     @FocusState private var searchFocused: Bool
 
     let sessionID: UUID
+
+    /// What the note editor sheet is editing (Identifiable so it can drive
+    /// `sheet(item:)`).
+    struct NoteEditorContext: Identifiable {
+        let note: SessionNote?
+        let anchorEntry: TranscriptEntry?
+        var id: String {
+            note?.id.uuidString ?? "new-\(anchorEntry?.id.uuidString ?? "unanchored")"
+        }
+    }
 
     var body: some View {
         LTPage {
@@ -55,6 +67,17 @@ struct SessionDetailView: View {
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
         }
+        .sheet(item: $noteEditor) { context in
+            if let session = viewModel.session {
+                NoteEditorView(
+                    session: session,
+                    note: context.note,
+                    anchorEntry: context.anchorEntry
+                )
+                .environment(environment)
+                .onDisappear { viewModel.reload() }
+            }
+        }
         .alert("导出失败", isPresented: $exportFailed) {
             Button("好", role: .cancel) {}
         } message: {
@@ -70,6 +93,7 @@ struct SessionDetailView: View {
                 ScrollView {
                     VStack(spacing: LTSpacing.l) {
                         headerCard(session)
+                        notesCard
                         searchCard
                         modeChips
                         transcriptList
@@ -80,6 +104,13 @@ struct SessionDetailView: View {
                 }
                 .onChange(of: viewModel.currentMatchIndex) { _, _ in
                     scrollToMatch(proxy)
+                }
+                .onChange(of: viewModel.pendingScrollTarget) { _, target in
+                    guard let target else { return }
+                    withAnimation(LTMotion.resolved(reduceMotion)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                    viewModel.pendingScrollTarget = nil
                 }
             }
             bottomToolbar
@@ -206,6 +237,90 @@ struct SessionDetailView: View {
         ASRBackendKind(rawValue: session.asrBackend)?.userTitle ?? session.asrBackend
     }
 
+    // MARK: - Notes
+
+    /// The classroom's own notes: user-typed, optionally anchored to a
+    /// transcript line. Tapping an anchored note jumps to that line.
+    @ViewBuilder
+    private var notesCard: some View {
+        if !viewModel.notes.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                HStack(spacing: LTSpacing.xs) {
+                    LTSectionHeader(title: "课堂笔记")
+                    Text("\(viewModel.notes.count)")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.textTertiary)
+                    Spacer()
+                    Button {
+                        noteEditor = NoteEditorContext(note: nil, anchorEntry: nil)
+                    } label: {
+                        Label("添加", systemImage: "plus")
+                            .font(LTTypography.caption.weight(.semibold))
+                            .foregroundStyle(LTColors.accentBlue)
+                    }
+                }
+                VStack(spacing: LTSpacing.s) {
+                    ForEach(viewModel.notes, id: \.id) { note in
+                        noteRow(note)
+                    }
+                }
+            }
+        }
+    }
+
+    private func noteRow(_ note: SessionNote) -> some View {
+        HStack(alignment: .top, spacing: LTSpacing.s) {
+            Image(systemName: "pencil.line")
+                .font(.caption)
+                .foregroundStyle(LTColors.warning)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(viewModel.noteTimestamp(note))
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+                Text(note.text)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(LTSpacing.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: LTRadius.small)
+                .fill(LTColors.surfacePrimary.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LTRadius.small)
+                .strokeBorder(LTColors.warning.opacity(0.18), lineWidth: 0.5)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if viewModel.anchorEntry(for: note) != nil {
+                viewModel.jumpToAnchor(of: note)
+                LTHaptics.tap()
+            }
+        }
+        .contextMenu {
+            Button("编辑笔记") {
+                noteEditor = NoteEditorContext(note: note, anchorEntry: nil)
+            }
+            if viewModel.anchorEntry(for: note) != nil {
+                Button("跳到对应段落") {
+                    viewModel.jumpToAnchor(of: note)
+                }
+                Button("取消锚定") {
+                    viewModel.detachAnchor(of: note)
+                }
+            }
+            Button("删除笔记", role: .destructive) {
+                viewModel.deleteNote(note)
+            }
+        }
+        .accessibilityHint(Text(viewModel.anchorEntry(for: note) != nil ? "双击跳到对应段落" : ""))
+    }
+
     // MARK: - Search
 
     private var searchCard: some View {
@@ -322,11 +437,27 @@ struct SessionDetailView: View {
                             isMatch: viewModel.isMatch(entry),
                             isMatchFocused: viewModel.isMatchFocused(entry),
                             isBookmarked: viewModel.isBookmarked(entry),
-                            onToggleBookmark: { _ = viewModel.toggleBookmark(entry) }
+                            anchoredNotes: viewModel.notes(anchoredTo: entry),
+                            onToggleBookmark: { _ = viewModel.toggleBookmark(entry) },
+                            onAddNote: {
+                                noteEditor = NoteEditorContext(note: nil, anchorEntry: entry)
+                            }
                         )
                         .id(entry.sequenceID)
                     }
                 }
+            }
+            if viewModel.notes.isEmpty {
+                // First-class note entry when no notes exist yet (otherwise
+                // the notes card above carries the 添加 button).
+                Button {
+                    noteEditor = NoteEditorContext(note: nil, anchorEntry: nil)
+                } label: {
+                    Label("添加笔记", systemImage: "square.and.pencil")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(LTColors.accentBlue)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -466,7 +597,8 @@ struct SessionDetailView: View {
 // MARK: - Entry row
 
 /// Chinese first, Russian beneath, timestamp on a left timeline node,
-/// bookmark star on the right, search hits highlighted.
+/// bookmark star on the right, search hits highlighted. Notes anchored to
+/// the entry render inline beneath the text with a note-tinted marker.
 private struct DetailEntryRow: View {
     let entry: TranscriptEntry
     let displayMode: SessionDetailViewModel.DisplayMode
@@ -474,7 +606,9 @@ private struct DetailEntryRow: View {
     let isMatch: Bool
     let isMatchFocused: Bool
     let isBookmarked: Bool
-    let onToggleBookmark: () -> Void
+    var anchoredNotes: [SessionNote] = []
+    var onToggleBookmark: () -> Void = {}
+    var onAddNote: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: LTSpacing.m) {
@@ -502,6 +636,9 @@ private struct DetailEntryRow: View {
                     Text("翻译失败 · 俄语原文已保存，可在“更多”中重试")
                         .font(LTTypography.caption)
                         .foregroundStyle(LTColors.warning.opacity(0.85))
+                }
+                ForEach(anchoredNotes, id: \.id) { note in
+                    inlineNote(note)
                 }
             }
             Spacer(minLength: 0)
@@ -543,7 +680,27 @@ private struct DetailEntryRow: View {
             Button(isBookmarked ? "取消书签" : "标记书签") {
                 onToggleBookmark()
             }
+            Button("添加笔记") {
+                onAddNote()
+            }
         }
+    }
+
+    /// An anchored note shown beneath its transcript line — the review-time
+    /// payoff of taking notes in class.
+    private func inlineNote(_ note: SessionNote) -> some View {
+        HStack(alignment: .top, spacing: LTSpacing.xs) {
+            Rectangle()
+                .fill(LTColors.warning.opacity(0.55))
+                .frame(width: 2)
+            Text(note.text)
+                .font(.footnote)
+                .foregroundStyle(LTColors.warning.opacity(0.95))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.top, 1)
+        .accessibilityLabel(Text("笔记：\(note.text)"))
     }
 
     private var timeline: some View {

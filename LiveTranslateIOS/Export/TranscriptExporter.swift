@@ -44,6 +44,22 @@ struct ExportEntry: Sendable, Identifiable, Equatable {
     var id: Int { sequenceID }
 }
 
+/// One user-typed note. `anchorOffset` is the session-relative timestamp of
+/// the transcript entry the note was taken about (nil = unanchored note).
+struct ExportNote: Sendable, Identifiable, Equatable {
+    let id: UUID
+    let text: String
+    let createdAt: Date
+    let anchorOffset: TimeInterval?
+
+    init(id: UUID, text: String, createdAt: Date, anchorOffset: TimeInterval?) {
+        self.id = id
+        self.text = text
+        self.createdAt = createdAt
+        self.anchorOffset = anchorOffset
+    }
+}
+
 /// Everything a session export needs. Plain values only — exports must
 /// never contain API keys, auth headers, internal paths or raw stacks.
 struct TranscriptExportData: Sendable, Equatable {
@@ -57,6 +73,32 @@ struct TranscriptExportData: Sendable, Equatable {
     let computeDescription: String
     let translationModel: String
     let entries: [ExportEntry]
+    /// The user's own classroom notes (empty when none were taken).
+    var notes: [ExportNote] = []
+
+    init(
+        title: String,
+        startTime: Date,
+        endTime: Date?,
+        duration: TimeInterval,
+        backend: ASRBackendKind,
+        modelVersion: String,
+        computeDescription: String,
+        translationModel: String,
+        entries: [ExportEntry],
+        notes: [ExportNote] = []
+    ) {
+        self.title = title
+        self.startTime = startTime
+        self.endTime = endTime
+        self.duration = duration
+        self.backend = backend
+        self.modelVersion = modelVersion
+        self.computeDescription = computeDescription
+        self.translationModel = translationModel
+        self.entries = entries
+        self.notes = notes
+    }
 }
 
 enum TranscriptExporter {
@@ -120,6 +162,17 @@ enum TranscriptExporter {
             lines.append("- \(String(localized: "Translation model")): \(data.translationModel)")
         }
         lines.append("")
+        // The user's own notes come first — they are the shortest path back
+        // into the material when reviewing.
+        if !data.notes.isEmpty {
+            lines.append("## \(String(localized: "Class notes"))")
+            lines.append("")
+            for note in data.notes {
+                let stamp = note.anchorOffset.map { "[\(mmss($0))] " } ?? ""
+                lines.append("- \(stamp)\(note.text)")
+            }
+            lines.append("")
+        }
         lines.append("---")
         lines.append("")
         for entry in data.entries {
@@ -144,6 +197,15 @@ enum TranscriptExporter {
             lines.append("[\(mmss(entry.startOffset))] \(entry.originalText)")
             if let translated = entry.translatedText, !translated.isEmpty {
                 lines.append("→ \(translated)")
+            }
+            lines.append("")
+        }
+        if !data.notes.isEmpty {
+            lines.append("— \(String(localized: "Class notes")) —")
+            lines.append("")
+            for note in data.notes {
+                let stamp = note.anchorOffset.map { "[\(mmss($0))] " } ?? ""
+                lines.append("✎ \(stamp)\(note.text)")
             }
             lines.append("")
         }
@@ -217,6 +279,18 @@ enum TranscriptExporter {
         }
         if !data.translationModel.isEmpty {
             object["translationModel"] = data.translationModel
+        }
+        if !data.notes.isEmpty {
+            object["notes"] = data.notes.map { note in
+                var item: [String: Any] = [
+                    "text": note.text,
+                    "createdAt": isoFormatter.string(from: note.createdAt),
+                ]
+                if let offset = note.anchorOffset {
+                    item["anchorOffset"] = offset
+                }
+                return item
+            }
         }
         let jsonData = (try? JSONSerialization.data(
             withJSONObject: object, options: [.prettyPrinted, .sortedKeys]

@@ -2,11 +2,16 @@ import SwiftUI
 import AVFoundation
 
 /// New-classroom form (reference image 2). Presented as a sheet from the
-/// home start card; on 开始课堂 it validates, starts the real pipeline
+/// home start card (optionally with a preselected course — quick start /
+/// course detail); on 开始课堂 it validates, starts the real pipeline
 /// coordinator and hands over to the full-screen classroom.
 struct NewSessionSheet: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.dismiss) private var dismiss
+
+    /// Course preselected by the caller (home quick start / course detail).
+    /// The user can still switch or clear it in the form.
+    private let preselectedCourse: Course?
 
     @State private var name = ""
     @State private var isStarting = false
@@ -18,6 +23,12 @@ struct NewSessionSheet: View {
     @State private var preferredBackendInstalled = true
     @State private var isRequestingPermission = false
     @State private var showModelManagement = false
+    @State private var showCourseForm = false
+    /// Courses loaded from the repository; refreshed on appear so a newly
+    /// created course appears immediately.
+    @State private var courses: [Course] = []
+    /// The course this classroom belongs to (nil = standalone).
+    @State private var selectedCourseID: UUID?
     /// Set only after a successful coordinator start; the classroom is
     /// presented from onDisappear, once this sheet has fully animated out.
     @State private var shouldOpenLive = false
@@ -25,12 +36,17 @@ struct NewSessionSheet: View {
 
     private let nameLimit = 60
 
+    init(preselectedCourse: Course? = nil) {
+        self.preselectedCourse = preselectedCourse
+    }
+
     var body: some View {
         NavigationStack {
             LTPage {
                 ScrollView {
                     VStack(alignment: .leading, spacing: LTSpacing.l) {
                         titleBlock
+                        courseSection
                         nameSection
                         directionSection
                         liveSettingsSection
@@ -45,6 +61,10 @@ struct NewSessionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showModelManagement) {
                 ModelManagementScreen()
+            }
+            .sheet(isPresented: $showCourseForm) {
+                CourseFormView()
+                    .environment(environment)
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -91,6 +111,10 @@ struct NewSessionSheet: View {
                 name = prefill
             }
             #endif
+            loadCourses()
+            if selectedCourseID == nil, let course = preselectedCourse {
+                selectCourse(course, prefillName: name.isEmpty)
+            }
             // The demo environment short-circuits real permission state so
             // the sheet never depends on (or prompts) the microphone.
             if environment.capabilities.assumesMicrophoneAuthorized {
@@ -101,6 +125,12 @@ struct NewSessionSheet: View {
             preferredBackendInstalled = await environment.engineManager.isInstalled(
                 environment.settings.preferredBackend
             )
+        }
+        .onChange(of: showCourseForm) { _, showing in
+            if !showing {
+                // A course may have just been created — refresh the chips.
+                loadCourses()
+            }
         }
     }
 
@@ -114,6 +144,111 @@ struct NewSessionSheet: View {
             Text("俄语授课将被实时转写并翻译成中文，全程自动保存")
                 .font(LTTypography.caption)
                 .foregroundStyle(LTColors.textSecondary)
+        }
+    }
+
+    // MARK: - Course
+
+    /// Course picker: chips of the user's courses plus standalone and a
+    /// create entry. Selecting a course pre-fills the session name (still
+    /// editable) — repeated weekly classes need zero typing.
+    private var courseSection: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.xs) {
+            Text("所属课程")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(LTColors.textSecondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: LTSpacing.s) {
+                    courseChip(
+                        title: "不归属课程",
+                        tint: LTColors.textTertiary,
+                        isSelected: selectedCourseID == nil
+                    ) {
+                        selectedCourseID = nil
+                    }
+                    ForEach(courses, id: \.id) { course in
+                        courseChip(
+                            title: course.name,
+                            tint: LTCoursePalette.color(course.colorIndex),
+                            isSelected: selectedCourseID == course.id,
+                            isArchived: course.isArchived
+                        ) {
+                            selectCourse(course, prefillName: false)
+                        }
+                    }
+                    Button {
+                        showCourseForm = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                            Text("新建课程")
+                        }
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(LTColors.accentBlue)
+                        .padding(.horizontal, LTSpacing.m)
+                        .padding(.vertical, LTSpacing.xs + 1)
+                        .background(Capsule().strokeBorder(LTColors.accentBlue.opacity(0.4), lineWidth: 0.8))
+                    }
+                    .accessibilityLabel(Text("新建课程"))
+                }
+                .padding(.vertical, 1)
+            }
+        }
+    }
+
+    private func courseChip(
+        title: String,
+        tint: Color,
+        isSelected: Bool,
+        isArchived: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            withAnimation(LTMotion.quick) { action() }
+            LTHaptics.tap()
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 7, height: 7)
+                Text(title)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isSelected ? LTColors.textPrimary : LTColors.textSecondary)
+            .padding(.horizontal, LTSpacing.m)
+            .padding(.vertical, LTSpacing.xs + 1)
+            .background(Capsule().fill(isSelected ? tint.opacity(0.16) : LTColors.surfacePrimary))
+            .overlay(Capsule().strokeBorder(isSelected ? tint.opacity(0.5) : LTColors.border, lineWidth: 0.6))
+            .opacity(isArchived && !isSelected ? 0.55 : 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    /// Selecting a course pre-fills an empty name field with the course
+    /// name and the date (a per-class default the user can still edit).
+    private func selectCourse(_ course: Course, prefillName: Bool) {
+        selectedCourseID = course.id
+        if prefillName || name.isEmpty {
+            name = Self.defaultSessionTitle(for: course)
+            nameError = nil
+        }
+    }
+
+    private static func defaultSessionTitle(for course: Course) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日"
+        return "\(course.name) · \(formatter.string(from: .now))"
+    }
+
+    private func loadCourses() {
+        courses = (try? environment.repository.courses()) ?? []
+        // A preselected course that no longer exists (deleted elsewhere)
+        // falls back to standalone.
+        if let id = selectedCourseID, !courses.contains(where: { $0.id == id }) {
+            selectedCourseID = nil
         }
     }
 
@@ -431,7 +566,7 @@ struct NewSessionSheet: View {
         // up with a retryable error — the button is never left dead.
         isStarting = true
         LTHaptics.success()
-        await environment.coordinator.start(title: trimmedName)
+        await environment.coordinator.start(title: trimmedName, courseID: selectedCourseID)
         isStarting = false
 
         if environment.coordinator.isRunning {
