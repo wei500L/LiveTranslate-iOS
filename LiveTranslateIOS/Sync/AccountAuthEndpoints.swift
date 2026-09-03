@@ -21,18 +21,25 @@ extension SyncAPIClient {
 
     /// POST /auth/register — always answers 200 with a generic body
     /// (anti-enumeration); no tokens are issued until the email is verified.
+    /// `invitationCode` is required when the server runs invite_only.
     func emailRegister(
-        email: String, password: String, displayName: String, device: SyncDeviceDTO?
+        email: String, password: String, displayName: String,
+        invitationCode: String = "", device: SyncDeviceDTO?
     ) async throws {
         struct Body: Encodable {
             let email: String
             let password: String
             let displayName: String
+            let invitationCode: String?
             let device: SyncDeviceDTO?
         }
         _ = try await post(
             "auth/register",
-            body: Body(email: email, password: password, displayName: displayName, device: device)
+            body: Body(
+                email: email, password: password, displayName: displayName,
+                invitationCode: invitationCode.isEmpty ? nil : invitationCode,
+                device: device
+            )
         ) as GenericAck
     }
 
@@ -119,7 +126,86 @@ extension SyncAPIClient {
     func logoutAll(accessToken: String) async throws {
         _ = try await request("auth/logout-all", method: "POST", accessToken: accessToken)
     }
+
+    // MARK: - Server capabilities
+
+    /// GET /auth/capabilities — public registration/sign-in posture. Falls
+    /// back to a safe "disabled" at the CALLER's discretion on failure;
+    /// this method only throws on network problems.
+    func capabilities() async throws -> SyncCapabilitiesDTO {
+        try await getPublic("auth/capabilities")
+    }
+
+    // MARK: - Account profile (账号与安全)
+
+    /// GET /me — the enriched profile (email, verification state, sign-in
+    /// methods, device/session counts).
+    func meProfile(accessToken: String) async throws -> SyncMeProfileDTO {
+        try await get("me", accessToken: accessToken)
+    }
+
+    /// PATCH /me — update the display name ONLY (the server rejects any
+    /// role/status/userId attempt structurally; the request body here
+    /// carries displayName alone). Returns the updated public user.
+    func updateDisplayName(_ displayName: String, accessToken: String) async throws -> SyncPublicUserDTO {
+        struct Body: Encodable { let displayName: String }
+        return try await patch("me", body: Body(displayName: displayName), accessToken: accessToken)
+    }
+
+    /// POST /me/email/change — step 1 of the login-email change: re-auth
+    /// with the current password; a verification code goes to the NEW
+    /// address. The response names the target address + expiry.
+    func requestEmailChange(
+        currentPassword: String, newEmail: String, accessToken: String
+    ) async throws -> EmailChangeStateDTO {
+        struct Body: Encodable {
+            let currentPassword: String
+            let newEmail: String
+        }
+        return try await post("me/email/change", body: Body(currentPassword: currentPassword, newEmail: newEmail), accessToken: accessToken)
+    }
+
+    /// POST /me/email/verify — step 2: consume the code. The server swaps
+    /// the email atomically, signs out every OTHER device and returns a
+    /// FRESH token pair for this device.
+    func verifyEmailChange(code: String, device: SyncDeviceDTO, accessToken: String) async throws -> SyncTokenPairDTO {
+        struct Body: Encodable {
+            let code: String
+            let device: SyncDeviceDTO
+        }
+        return try await post("me/email/verify", body: Body(code: code, device: device), accessToken: accessToken)
+    }
+
+    /// POST /me/apple/bind — link the verified Apple identity to the
+    /// signed-in account.
+    func bindApple(identityToken: String, accessToken: String) async throws {
+        struct Body: Encodable { let identityToken: String }
+        struct Ack: Decodable { let bound: Bool? }
+        _ = try await post("me/apple/bind", body: Body(identityToken: identityToken), accessToken: accessToken) as Ack
+    }
+
+    /// DELETE /me/apple — unbind the Apple sign-in method (password
+    /// re-verification; the server refuses when it is the last method).
+    func unbindApple(currentPassword: String, accessToken: String) async throws {
+        struct Body: Encodable { let currentPassword: String }
+        // request() already rejects non-2xx with the mapped error; the 200
+        // body is an {"bound": false} ack we do not need to read.
+        _ = try await request(
+            "me/apple", method: "DELETE",
+            body: Body(currentPassword: currentPassword), accessToken: accessToken
+        )
+    }
 }
+
+/// Target/expiry of a pending email change (POST /me/email/change).
+struct EmailChangeStateDTO: Decodable, Sendable {
+    var sent: Bool?
+    var targetEmail: String?
+    var expiresAt: Date?
+}
+
+/// A 200 body with nothing we need to read.
+struct EmptyAck: Decodable {}
 
 /// One device session of the signed-in account (GET /me/devices).
 struct SyncDeviceSessionDTO: Decodable, Sendable, Identifiable {

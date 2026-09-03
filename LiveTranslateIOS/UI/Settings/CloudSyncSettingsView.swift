@@ -76,6 +76,9 @@ struct CloudSyncSettingsView: View {
     @State private var showDeleteCloudConfirm = false
     @State private var showDeleteAccountConfirm = false
     @State private var showAddAccount = false
+    @State private var switchBlockedText: String?
+    @State private var showGuestMigrationChoice = false
+    @State private var showDeleteGuestCopyConfirm = false
     #if DEBUG
     @State private var devName = ""
     #endif
@@ -85,6 +88,7 @@ struct CloudSyncSettingsView: View {
             if let sync = environment.cloudSync {
                 accountSection(sync)
                 accountSwitcherSection
+                guestMigrationSection
                 syncSection(sync)
                 scopeSection
                 dangerSection(sync)
@@ -99,6 +103,26 @@ struct CloudSyncSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(LTBackground())
+        .onAppear {
+            // First sign-in with guest data present → the choice prompt.
+            if let migration = environment.guestMigration, migration.needsPrompt {
+                showGuestMigrationChoice = true
+            }
+        }
+        .sheet(isPresented: $showGuestMigrationChoice) {
+            guestMigrationChoiceSheet
+        }
+        .alert(
+            String(localized: "暂时无法切换账号"),
+            isPresented: Binding(
+                get: { switchBlockedText != nil },
+                set: { if !$0 { switchBlockedText = nil } }
+            )
+        ) {
+            Button(String(localized: "好"), role: .cancel) { switchBlockedText = nil }
+        } message: {
+            Text(switchBlockedText ?? "")
+        }
     }
 
     // MARK: - Account
@@ -112,13 +136,16 @@ struct CloudSyncSettingsView: View {
                         .font(.system(size: 34))
                         .foregroundStyle(LTColors.accentBlue)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(sync.accountLabel ?? String(localized: "已登录"))
+                        Text(currentAccountTitle)
                             .font(.headline)
                         Text(providerCaption)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                }
+                NavigationLink(String(localized: "账号与安全")) {
+                    AccountSecurityView()
                 }
                 NavigationLink(String(localized: "登录设备")) {
                     DeviceManagementView()
@@ -188,6 +215,20 @@ struct CloudSyncSettingsView: View {
         return nil
     }
 
+    /// Title for the signed-in header: the account's display name when set,
+    /// else the label the sync service fetched.
+    private var currentAccountTitle: String {
+        if case .account(let account) = session.accounts.activeProfile,
+           let name = account.displayName, !name.isEmpty {
+            return name
+        }
+        return syncTitleFallback
+    }
+
+    private var syncTitleFallback: String {
+        environment.cloudSync?.accountLabel ?? String(localized: "已登录")
+    }
+
     private var providerCaption: String {
         switch currentProvider {
         case "email": return String(localized: "邮箱账号 · 私人云端")
@@ -227,7 +268,8 @@ struct CloudSyncSettingsView: View {
     // MARK: - Account switcher (multi-account isolation)
 
     /// 本机模式 (guest) 与所有本地账号。切换会整体重建数据视图：各账号
-    /// 的记录、书签、待上传队列与游标完全隔离。
+    /// 的记录、书签、待上传队列与游标完全隔离。课堂进行中或访客数据
+    /// 迁移进行中时切换被阻止并说明原因。
     private var accountSwitcherSection: some View {
         Section {
             if session.accounts.accounts.isEmpty {
@@ -241,7 +283,7 @@ struct CloudSyncSettingsView: View {
             }
             if session.accounts.activeAccountID != nil {
                 Button(String(localized: "切换到本机模式（不登录）")) {
-                    session.switchToGuest()
+                    attemptSwitch { session.switchToGuest() }
                 }
             }
             Button {
@@ -256,21 +298,38 @@ struct CloudSyncSettingsView: View {
         }
     }
 
+    /// Guarded switch wrapper: a live classroom or in-flight guest
+    /// migration blocks the switch with an explanation instead of a silent
+    /// no-op.
+    private func attemptSwitch(_ action: () -> Bool) {
+        if action() { return }
+        switch session.switchBlocker() {
+        case .classroomActive:
+            switchBlockedText = String(localized: "课堂正在进行中，无法切换账号。请先结束当前课堂再切换。")
+        case .guestMigrationInProgress:
+            switchBlockedText = String(localized: "本机数据迁移正在进行中，请等待完成后再切换账号。")
+        case nil:
+            break
+        }
+    }
+
     @ViewBuilder
     private func accountRow(_ account: LocalAccount) -> some View {
         let isActive = session.accounts.activeAccountID == account.id
         Button {
             if !isActive {
-                session.switchToAccount(account.id)
+                attemptSwitch { session.switchToAccount(account.id) }
             }
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(account.label)
+                    Text(account.displayTitle)
                         .foregroundStyle(.primary)
                     Text(account.provider == "email"
                         ? String(localized: "邮箱账号")
-                        : String(localized: "Apple 账号"))
+                        : account.provider == "apple"
+                            ? String(localized: "Apple 账号")
+                            : String(localized: "开发者账号"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -288,6 +347,134 @@ struct CloudSyncSettingsView: View {
                 Label(String(localized: "移除"), systemImage: "trash")
             }
         }
+    }
+
+    // MARK: - Guest data migration (本机记录待归属)
+
+    /// The signed-in account's guest-migration status. Hidden entirely for
+    /// the guest profile (nothing to migrate into itself).
+    @ViewBuilder
+    private var guestMigrationSection: some View {
+        if let migration = environment.guestMigration {
+            switch migration.record.phase {
+            case .waiting, .preparing, .moving, .partiallyFailed:
+                Section {
+                    if migration.isRunning {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text(migration.statusText)
+                        }
+                    } else {
+                        Text(String(localized: "本机还有 \(migration.guestSessionCount()) 节未归属的访客记录。"))
+                            .font(.subheadline)
+                        Button(String(localized: "处理本机记录…")) {
+                            if migration.needsPrompt {
+                                showGuestMigrationChoice = true
+                            } else {
+                                migration.reopen()
+                                showGuestMigrationChoice = true
+                            }
+                        }
+                        if migration.record.phase == .partiallyFailed {
+                            Text(String(localized: "上次迁移部分失败：已复制 \(migration.record.movedSessions) 节，其余保留在本机。可重试。"))
+                                .font(.caption)
+                                .foregroundStyle(LTColors.warning)
+                        }
+                    }
+                } header: {
+                    Text(String(localized: "本机数据"))
+                } footer: {
+                    Text(String(localized: "登录前的本机记录不会被自动上传；由你决定是否并入当前账号。"))
+                }
+            case .queuedForUpload:
+                Section {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(migration.statusText)
+                    }
+                } header: {
+                    Text(String(localized: "本机数据"))
+                }
+            case .completed:
+                Section {
+                    Label(
+                        String(localized: "本机记录已并入当前账号。"),
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(LTColors.accentGreen)
+                    Button(String(localized: "删除本机（访客）副本"), role: .destructive) {
+                        showDeleteGuestCopyConfirm = true
+                    }
+                } header: {
+                    Text(String(localized: "本机数据"))
+                } footer: {
+                    Text(String(localized: "副本已上传到云端并保存在当前账号中；删除本机副本不影响云端与当前账号数据。"))
+                }
+                .confirmationDialog(
+                    String(localized: "删除本机的访客记录副本？此操作不可撤销，云端与当前账号数据不受影响。"),
+                    isPresented: $showDeleteGuestCopyConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button(String(localized: "删除本机副本"), role: .destructive) {
+                        migration.deleteGuestCopy()
+                    }
+                }
+            case .declined:
+                EmptyView()
+            }
+        }
+    }
+
+    /// The first-login choice: upload & join / keep local-only / later.
+    private var guestMigrationChoiceSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(String(localized: "检测到登录前的本机课堂记录。要如何处理？"))
+                        .font(.subheadline)
+                    if let migration = environment.guestMigration {
+                        Button {
+                            showGuestMigrationChoice = false
+                            migration.beginMigration()
+                        } label: {
+                            Label(
+                                String(localized: "上传并加入当前账号"),
+                                systemImage: "icloud.and.arrow.up"
+                            )
+                        }
+                        Button {
+                            showGuestMigrationChoice = false
+                            migration.decline()
+                        } label: {
+                            Label(
+                                String(localized: "继续仅保存在本机"),
+                                systemImage: "iphone"
+                            )
+                        }
+                        Button {
+                            showGuestMigrationChoice = false
+                        } label: {
+                            Label(
+                                String(localized: "稍后处理"),
+                                systemImage: "clock"
+                            )
+                        }
+                    }
+                } footer: {
+                    Text(String(localized: "上传会保留原始记录并沿用原编号，随时可以在「本机数据」中重试；不会自动删除本机记录。"))
+                }
+            }
+            .navigationTitle(String(localized: "本机记录"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "稍后处理")) { showGuestMigrationChoice = false }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(LTBackground())
+        }
+        .presentationDetents([.medium])
     }
 
     // MARK: - Sync status & controls
@@ -325,6 +512,12 @@ struct CloudSyncSettingsView: View {
                 LabeledRow(
                     label: String(localized: "待上传记录"),
                     value: "\(sync.pendingUploadCount)"
+                )
+            }
+            if sync.remoteUpdatesPending {
+                LabeledRow(
+                    label: String(localized: "云端有新内容"),
+                    value: String(localized: "待下载")
                 )
             }
             if let host = ServerConfiguration.baseURL?.host {

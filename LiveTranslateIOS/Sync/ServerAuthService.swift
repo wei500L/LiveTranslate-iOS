@@ -138,9 +138,13 @@ actor ServerAuthSession {
 
     /// Register a pending account (no tokens until verified). The server's
     /// response is deliberately uniform for fresh and taken emails.
-    func register(email: String, password: String, displayName: String) async throws {
+    /// `invitationCode` is required when the server runs invite_only.
+    func register(
+        email: String, password: String, displayName: String, invitationCode: String = ""
+    ) async throws {
         try await api.emailRegister(
-            email: email, password: password, displayName: displayName, device: makeDevice()
+            email: email, password: password, displayName: displayName,
+            invitationCode: invitationCode, device: makeDevice()
         )
     }
 
@@ -189,6 +193,17 @@ actor ServerAuthSession {
         try? keychain.delete(forKey: refreshTokenKey)
         try? keychain.delete(forKey: userIdKeyValue)
         try? keychain.delete(forKey: scoped(Self.accountLabelKey))
+    }
+
+    /// Adopt a token pair issued by a profile flow (the verified email
+    /// change): the server already revoked the old pair, so replace it.
+    /// A carried email also refreshes the scoped label key.
+    func adopt(pair: SyncTokenPairDTO) {
+        store(pair: pair)
+        if let email = pair.user?.email {
+            try? keychain.set(email, forKey: scoped(Self.accountLabelKey))
+        }
+        Self.logger.info("token pair adopted after profile change, user=\(pair.userId.uuidString, privacy: .public)")
     }
 
     private func store(pair: SyncTokenPairDTO) {

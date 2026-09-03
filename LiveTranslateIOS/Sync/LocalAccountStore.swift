@@ -8,17 +8,21 @@ struct LocalAccount: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     /// Display label: email for email accounts, "apple:…" style label else.
     var label: String
-    /// "email" | "apple" — drives which settings rows make sense.
+    /// Server-side display name (PATCH /v1/me). Optional — accounts from
+    /// before the profile feature carry none.
+    var displayName: String?
+    /// "email" | "apple" | "dev" — drives which settings rows make sense.
     var provider: String
     var addedAt: Date
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, provider, addedAt
+        case id, label, displayName, provider, addedAt
     }
 
-    init(id: UUID, label: String, provider: String, addedAt: Date = .now) {
+    init(id: UUID, label: String, displayName: String? = nil, provider: String, addedAt: Date = .now) {
         self.id = id
         self.label = label
+        self.displayName = displayName
         self.provider = provider
         self.addedAt = addedAt
     }
@@ -27,8 +31,16 @@ struct LocalAccount: Codable, Identifiable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         label = try container.decode(String.self, forKey: .label)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         provider = try container.decode(String.self, forKey: .provider)
         addedAt = try container.decodeIfPresent(Date.self, forKey: .addedAt) ?? .now
+    }
+
+    /// What the account switcher shows: the display name when set, else the
+    /// email label.
+    var displayTitle: String {
+        if let displayName, !displayName.isEmpty { return displayName }
+        return label
     }
 }
 
@@ -96,6 +108,12 @@ final class AccountStore {
     func updateLabel(id: UUID, label: String) {
         guard let index = accounts.firstIndex(where: { $0.id == id }) else { return }
         accounts[index].label = label
+        persist()
+    }
+
+    func updateDisplayName(id: UUID, displayName: String) {
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        accounts[index].displayName = displayName
         persist()
     }
 

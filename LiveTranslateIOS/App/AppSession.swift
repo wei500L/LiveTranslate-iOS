@@ -25,6 +25,40 @@ final class AppSession {
 
     private let keychain: KeychainStore
 
+    // MARK: - Deep links (App Link router)
+
+    /// A password-reset token received via a Universal Link / custom
+    /// scheme. IN-MEMORY ONLY: never persisted, never logged — the
+    /// destination sheet consumes it and clears it. Non-nil means "present
+    /// the reset flow with this token".
+    private(set) var pendingResetToken: String?
+
+    /// UserDefaults key holding a registration whose verification step was
+    /// interrupted (App closed mid-flow). Only the EMAIL is stored — codes
+    /// and passwords never touch persistence.
+    private static let pendingVerificationKey = "auth.pendingVerificationEmail"
+
+    // MARK: - Profile switching
+
+    /// Reasons a profile switch may be refused. The UI surfaces these as a
+    /// plain explanation instead of silently doing nothing.
+    enum SwitchBlock: Equatable {
+        case classroomActive
+        case guestMigrationInProgress
+    }
+
+    /// Whether switching profiles is currently allowed (a live classroom or
+    /// an in-flight guest-data migration blocks it).
+    func switchBlocker() -> SwitchBlock? {
+        if environment.coordinator.isRunning || environment.liveViewModel != nil {
+            return .classroomActive
+        }
+        if environment.guestMigration?.isRunning == true {
+            return .guestMigrationInProgress
+        }
+        return nil
+    }
+
     /// Stable identity for `.id()` view resets.
     var profileKey: String {
         isDemoMode ? "demo" : accounts.activeProfile.key
@@ -52,9 +86,21 @@ final class AppSession {
     // MARK: - Profile switching
 
     /// Switch to a known local account (or back to the guest/local-only
-    /// profile). Rebuilds the environment; the view tree resets.
-    func switchTo(profile: LocalProfile) {
-        guard !isDemoMode else { return }
+    /// profile). Rebuilds the environment; the view tree resets. Refused
+    /// (returns false) while a classroom is running or a guest-data
+    /// migration is in flight — the caller surfaces the reason.
+    @discardableResult
+    func switchTo(profile: LocalProfile) -> Bool {
+        guard !isDemoMode else { return false }
+        if let blocker = switchBlocker() {
+            switch blocker {
+            case .classroomActive:
+                Self.logger.info("profile switch refused: classroom active")
+            case .guestMigrationInProgress:
+                Self.logger.info("profile switch refused: guest migration in progress")
+            }
+            return false
+        }
         environment.cloudSync?.shutdown()
         switch profile {
         case .guest:
@@ -64,15 +110,18 @@ final class AppSession {
         }
         environment = AppEnvironment(profile: profile)
         Self.logger.info("profile switched: \(profile.key, privacy: .public)")
+        return true
     }
 
-    func switchToGuest() {
+    @discardableResult
+    func switchToGuest() -> Bool {
         switchTo(profile: .guest)
     }
 
-    func switchToAccount(_ id: UUID) {
-        guard let account = accounts.account(id: id) else { return }
-        switchTo(profile: .account(account))
+    @discardableResult
+    func switchToAccount(_ id: UUID) -> Bool {
+        guard let account = accounts.account(id: id) else { return false }
+        return switchTo(profile: .account(account))
     }
 
     /// Sign the CURRENT account out server-side; its local data stays so
@@ -163,15 +212,32 @@ final class AppSession {
 
     /// Register a pending account (no tokens yet — nothing is handed off,
     /// no profile switch). The verify step performs the actual sign-in.
+    /// The email is remembered so an interrupted registration can resume at
+    /// the verification step the next time the sheet opens.
     func register(
-        email: String, password: String, displayName: String
+        email: String, password: String, displayName: String, invitationCode: String = ""
     ) async throws {
         guard let baseURL = ServerConfiguration.baseURL else {
             throw SyncAPIError.notConfigured
         }
         let api = SyncAPIClient(baseURL: baseURL)
         let session = ServerAuthSession(api: api, keychain: keychain)
-        try await session.register(email: email, password: password, displayName: displayName)
+        try await session.register(
+            email: email, password: password, displayName: displayName,
+            invitationCode: invitationCode
+        )
+        UserDefaults.standard.set(email, forKey: Self.pendingVerificationKey)
+    }
+
+    /// Explicit alias for the UI's register path (carries the invitation
+    /// code); keeps call sites self-describing.
+    func registerWithInvitation(
+        email: String, password: String, displayName: String, invitationCode: String
+    ) async throws {
+        try await register(
+            email: email, password: password, displayName: displayName,
+            invitationCode: invitationCode
+        )
     }
 
     /// Request a new verification code for a pending registration.
@@ -182,6 +248,46 @@ final class AppSession {
         let api = SyncAPIClient(baseURL: baseURL)
         let session = ServerAuthSession(api: api, keychain: keychain)
         try await session.resendVerificationCode(email: email)
+    }
+
+    // MARK: - Interrupted-registration resume (email only, never codes)
+
+    /// The email of a registration awaiting verification, when the flow was
+    /// interrupted (sheet closed / app terminated). nil when none.
+    var pendingVerificationEmail: String? {
+        UserDefaults.standard.string(forKey: Self.pendingVerificationKey)
+    }
+
+    /// Called when verification SUCCEEDED (account activated — the flow is
+    /// over) or the user explicitly abandons the registration.
+    func clearPendingVerification() {
+        UserDefaults.standard.removeObject(forKey: Self.pendingVerificationKey)
+    }
+
+    // MARK: - Deep links
+
+    /// Entry point for `.onOpenURL`. Parses the link, and for a password
+    /// reset parks the token in memory for the UI to present. The token is
+    /// never logged and never persisted; `consumeResetToken()` clears it.
+    func handleDeepLink(_ url: URL) {
+        guard let link = AppLinkRouter.parse(url) else {
+            Self.logger.info("unrecognized app link ignored")
+            return
+        }
+        switch link {
+        case .passwordReset(let token):
+            pendingResetToken = token
+            Self.logger.info("password-reset link received")
+            // Steer the user to the settings tab where the reset sheet can
+            // present; the sheet itself lives in RootTabView.
+            environment.flow.selectedTab = .profile
+        }
+    }
+
+    /// The reset flow consumed the token (or the user dismissed it) — clear
+    /// it from memory immediately.
+    func consumeResetToken() {
+        pendingResetToken = nil
     }
 
     // MARK: - Rebuild

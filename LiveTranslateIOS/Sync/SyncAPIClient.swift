@@ -206,11 +206,29 @@ actor SyncAPIClient {
         return try decode(data: data, response: response)
     }
 
+    /// GET without credentials — for the PUBLIC endpoints
+    /// (GET /v1/auth/capabilities). Never attaches an Authorization header.
+    func getPublic<Body: Decodable>(_ path: String) async throws -> Body {
+        let (data, response) = try await request(
+            path, method: "GET", body: Optional<Never>.none, accessToken: nil
+        )
+        return try decode(data: data, response: response)
+    }
+
     func post<Body: Decodable, Payload: Encodable>(
         _ path: String, body: Payload, accessToken: String? = nil
     ) async throws -> Body {
         let (data, response) = try await request(
             path, method: "POST", body: body, accessToken: accessToken
+        )
+        return try decode(data: data, response: response)
+    }
+
+    func patch<Body: Decodable, Payload: Encodable>(
+        _ path: String, body: Payload, accessToken: String
+    ) async throws -> Body {
+        let (data, response) = try await request(
+            path, method: "PATCH", body: body, accessToken: accessToken
         )
         return try decode(data: data, response: response)
     }

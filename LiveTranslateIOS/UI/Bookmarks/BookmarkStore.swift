@@ -347,6 +347,37 @@ final class BookmarkStore {
         return newState
     }
 
+    // MARK: - Guest-data migration (add-only union)
+
+    /// Adds a favorite only when absent (guest-data migration merge).
+    /// Existing account state always wins; a NEW addition fires the sync
+    /// observer like a user toggle so it uploads.
+    @discardableResult
+    func addFavoriteIfMissing(sessionID: UUID) -> Bool {
+        guard !favoriteSessionIDs.contains(sessionID) else { return false }
+        favoriteSessionIDs.insert(sessionID)
+        persist()
+        syncObserver?(.favorite(
+            sessionID: sessionID, isFavorite: true,
+            version: favoriteVersions[sessionID] ?? 0
+        ))
+        return true
+    }
+
+    /// Adds an entry bookmark only when absent (guest-data migration).
+    @discardableResult
+    func addBookmarkIfMissing(sessionID: UUID, entryID: UUID) -> Bool {
+        guard !entryBookmarks.contains(where: { $0.entryID == entryID }) else { return false }
+        entryBookmarks.append(EntryBookmark(sessionID: sessionID, entryID: entryID))
+        entryBookmarks.sort { $0.createdAt < $1.createdAt }
+        persist()
+        syncObserver?(.bookmark(
+            sessionID: sessionID, entryID: entryID,
+            isBookmarked: true, version: bookmarkVersions[entryID] ?? 0
+        ))
+        return true
+    }
+
     // MARK: - Cloud sync (remote apply + version bookkeeping)
 
     /// Applies a remotely-synced bookmark state. Guarded by

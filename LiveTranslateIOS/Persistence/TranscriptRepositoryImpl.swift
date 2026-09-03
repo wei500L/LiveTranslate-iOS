@@ -332,6 +332,22 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         try context.save()
     }
 
+    // MARK: - Guest-data migration support
+
+    func sessionExists(id: UUID) -> Bool {
+        let descriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == id }
+        )
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
+
+    func entryExists(id: UUID) -> Bool {
+        let descriptor = FetchDescriptor<TranscriptEntry>(
+            predicate: #Predicate { $0.id == id }
+        )
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
+
     /// First-upload snapshot: every session and entry becomes an outbox
     /// upsert (favorites are enqueued by the sync service from
     /// BookmarkStore). Runs in batches on the main actor so the UI is

@@ -34,9 +34,12 @@ struct SyncTokenPairDTO: Codable, Sendable, Equatable {
     var expiresIn: Int
     var userId: UUID
     var isNewUser: Bool?
+    /// The public user projection (present on login/verify responses from
+    /// the Go server; carries the email after an email change).
+    var user: SyncPublicUserDTO?
 
     enum CodingKeys: String, CodingKey {
-        case accessToken, refreshToken, tokenType, expiresIn, userId, isNewUser
+        case accessToken, refreshToken, tokenType, expiresIn, userId, isNewUser, user
     }
 
     init(from decoder: Decoder) throws {
@@ -47,22 +50,115 @@ struct SyncTokenPairDTO: Codable, Sendable, Equatable {
         expiresIn = try container.decodeIfPresent(Int.self, forKey: .expiresIn) ?? 900
         userId = try container.decode(UUID.self, forKey: .userId)
         isNewUser = try container.decodeIfPresent(Bool.self, forKey: .isNewUser)
+        user = try container.decodeIfPresent(SyncPublicUserDTO.self, forKey: .user)
     }
 
     init(accessToken: String, refreshToken: String, tokenType: String = "Bearer",
-         expiresIn: Int = 900, userId: UUID, isNewUser: Bool? = nil) {
+         expiresIn: Int = 900, userId: UUID, isNewUser: Bool? = nil,
+         user: SyncPublicUserDTO? = nil) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.tokenType = tokenType
         self.expiresIn = expiresIn
         self.userId = userId
         self.isNewUser = isNewUser
+        self.user = user
     }
 }
 
 struct SyncMeDTO: Codable, Sendable, Equatable {
     var userId: UUID
     var displayLabel: String
+}
+
+// MARK: - Server capabilities (GET /v1/auth/capabilities)
+
+/// The server's PUBLIC registration/sign-in posture. Drives the auth UI:
+/// whether the 注册 tab exists, whether an invitation code is required.
+/// Never trusts a locally hardcoded "registration is open".
+struct SyncCapabilitiesDTO: Decodable, Sendable, Equatable {
+    var registration: String
+    var requiresInvitation: Bool
+    var passwordLogin: Bool
+    var appleLogin: Bool
+    var maintenance: Bool
+    var minClientSchemaVersion: Int?
+    var maxClientSchemaVersion: Int?
+
+    /// Parsed registration mode with a safe default.
+    var registrationMode: RegistrationMode {
+        RegistrationMode(rawValue: registration) ?? .disabled
+    }
+}
+
+enum RegistrationMode: String, Sendable {
+    case open
+    case inviteOnly = "invite_only"
+    case disabled
+}
+
+/// The public user projection (PATCH /v1/me and the login payloads).
+/// Everything except userId decodes optionally.
+struct SyncPublicUserDTO: Decodable, Sendable {
+    var userId: UUID
+    var email: String?
+    var displayName: String?
+    var status: String?
+    var emailVerified: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case userId, email, displayName, status, emailVerified
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try c.decode(UUID.self, forKey: .userId)
+        email = try c.decodeIfPresent(String.self, forKey: .email)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        emailVerified = try c.decodeIfPresent(Bool.self, forKey: .emailVerified)
+    }
+}
+
+// MARK: - Account profile (GET /v1/me)
+
+/// The enriched 账号与安全 payload. Every field except userId decodes
+/// optionally so an older server (or the Python service) still works.
+struct SyncMeProfileDTO: Decodable, Sendable {
+    var userId: UUID
+    var displayLabel: String
+    var displayName: String?
+    var email: String?
+    var emailVerified: Bool?
+    var providers: [String]?
+    var hasPassword: Bool?
+    var appleBound: Bool?
+    var createdAt: Date?
+    var lastLoginAt: Date?
+    var deviceCount: Int?
+    var liveSessions: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case userId, displayLabel, displayName, email, emailVerified
+        case providers, hasPassword, appleBound, createdAt, lastLoginAt
+        case deviceCount, liveSessions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try c.decode(UUID.self, forKey: .userId)
+        displayLabel = try c.decode(String.self, forKey: .displayLabel)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        email = try c.decodeIfPresent(String.self, forKey: .email)
+        emailVerified = try c.decodeIfPresent(Bool.self, forKey: .emailVerified)
+        providers = try c.decodeIfPresent([String].self, forKey: .providers)
+        hasPassword = try c.decodeIfPresent(Bool.self, forKey: .hasPassword)
+        appleBound = try c.decodeIfPresent(Bool.self, forKey: .appleBound)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
+        lastLoginAt = try c.decodeIfPresent(Date.self, forKey: .lastLoginAt)
+        deviceCount = try c.decodeIfPresent(Int.self, forKey: .deviceCount)
+        liveSessions = try c.decodeIfPresent(Int.self, forKey: .liveSessions)
+    }
 }
 
 // MARK: - Push
@@ -114,7 +210,9 @@ enum SyncPushStatus: String, Codable, Sendable {
 }
 
 /// The server's current record, attached to `conflict` results so the
-/// client can merge and re-submit with a fresh base version.
+/// client can merge and re-submit with a fresh base version. Also used as
+/// the local carrier for the guest-data migration (rows copied from the
+/// guest store travel as records with serverVersion 0).
 struct SyncServerRecordDTO: Codable, Sendable {
     var id: UUID?
     var title: String?
@@ -135,6 +233,50 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var isFavorite: Bool?
     var serverVersion: Int
     var deleted: Bool
+
+    /// Memberwise initializer (the Decodable conformance below suppresses
+    /// the automatic one).
+    init(
+        id: UUID? = nil,
+        title: String? = nil,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil,
+        duration: Double? = nil,
+        sessionStatus: String? = nil,
+        abnormalTermination: Bool? = nil,
+        sessionId: UUID? = nil,
+        sequenceId: Int? = nil,
+        startOffset: Double? = nil,
+        endOffset: Double? = nil,
+        russianText: String? = nil,
+        chineseText: String? = nil,
+        translationStatus: String? = nil,
+        entryId: UUID? = nil,
+        isBookmarked: Bool? = nil,
+        isFavorite: Bool? = nil,
+        serverVersion: Int = 0,
+        deleted: Bool = false
+    ) {
+        self.id = id
+        self.title = title
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.duration = duration
+        self.sessionStatus = sessionStatus
+        self.abnormalTermination = abnormalTermination
+        self.sessionId = sessionId
+        self.sequenceId = sequenceId
+        self.startOffset = startOffset
+        self.endOffset = endOffset
+        self.russianText = russianText
+        self.chineseText = chineseText
+        self.translationStatus = translationStatus
+        self.entryId = entryId
+        self.isBookmarked = isBookmarked
+        self.isFavorite = isFavorite
+        self.serverVersion = serverVersion
+        self.deleted = deleted
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

@@ -49,6 +49,9 @@ final class CloudSyncService: AuthenticationService {
     private(set) var lastSuccessfulSync: Date?
     private(set) var lastError: String?
     private(set) var isNetworkAvailable = true
+    /// True when the server's change log is AHEAD of the local pull cursor
+    /// (远端有待下载) — updated after every completed sync via /sync/status.
+    private(set) var remoteUpdatesPending = false
 
     var isServerConfigured: Bool { true }
 
@@ -181,6 +184,66 @@ final class CloudSyncService: AuthenticationService {
         }
     }
 
+    // MARK: - Account profile (账号与安全)
+
+    /// The enriched profile (email, verification, sign-in methods, counts).
+    func meProfile() async throws -> SyncMeProfileDTO {
+        try await authSession.authorize { [api] token in
+            try await api.meProfile(accessToken: token)
+        }
+    }
+
+    /// Update the display name server-side (PATCH /v1/me). The caller (the
+    /// account UI) updates the local account entry from the response.
+    func updateDisplayName(_ name: String) async throws -> SyncPublicUserDTO {
+        try await authSession.authorize { [api] token in
+            try await api.updateDisplayName(name, accessToken: token)
+        }
+    }
+
+    /// Step 1 of the login-email change: re-auth + code to the NEW address.
+    func requestEmailChange(currentPassword: String, newEmail: String) async throws -> EmailChangeStateDTO {
+        try await authSession.authorize { [api] token in
+            try await api.requestEmailChange(
+                currentPassword: currentPassword, newEmail: newEmail, accessToken: token
+            )
+        }
+    }
+
+    /// Step 2: consume the code. The server swaps the email, signs out every
+    /// OTHER device and returns a FRESH token pair for this device, which we
+    /// adopt immediately (the old pair is invalid).
+    func verifyEmailChange(code: String) async throws {
+        let pair = try await authSession.authorize { [api] token in
+            try await api.verifyEmailChange(
+                code: code,
+                device: SyncDeviceDTO(
+                    clientDeviceId: ServerConfiguration.clientDeviceId(),
+                    displayName: ServerConfiguration.deviceDisplayName,
+                    appVersion: ServerConfiguration.appVersion
+                ),
+                accessToken: token
+            )
+        }
+        await authSession.adopt(pair: pair)
+        accountLabel = pair.user?.email ?? accountLabel
+    }
+
+    /// Bind a verified Apple identity (the caller obtains the identity
+    /// token through SignInWithAppleButton).
+    func bindApple(identityToken: String) async throws {
+        try await authSession.authorize { [api] token in
+            try await api.bindApple(identityToken: identityToken, accessToken: token)
+        }
+    }
+
+    /// Unbind the Apple sign-in method (password re-verification required).
+    func unbindApple(currentPassword: String) async throws {
+        try await authSession.authorize { [api] token in
+            try await api.unbindApple(currentPassword: currentPassword, accessToken: token)
+        }
+    }
+
     /// Revoke another device's sessions.
     func revokeDevice(_ id: UUID) async throws {
         try await authSession.authorize { [api] token in
@@ -227,6 +290,19 @@ final class CloudSyncService: AuthenticationService {
     /// 立即同步 (user action).
     func syncNow() {
         scheduleSync(after: 0)
+    }
+
+    // MARK: - Guest-data migration handoff
+
+    /// Called by `GuestDataMigration` after rows were copied into THIS
+    /// account's store: reset the first-upload flag and snapshot the store
+    /// (the migrated rows carry serverVersion 0 and have no outbox ops of
+    /// their own), then push.
+    func prepareForGuestMigrationUpload() {
+        guard isSignedIn, cursorStore.isSyncEnabled, !cloudDeletedRecently else { return }
+        defaults.set(false, forKey: initialUploadKey)
+        scheduleInitialUploadIfNeeded()
+        scheduleSync(after: 0.5)
     }
 
     // MARK: - Lifecycle triggers
@@ -502,6 +578,13 @@ final class CloudSyncService: AuthenticationService {
         cursorStore.lastSuccessfulSync = .now
         lastSuccessfulSync = cursorStore.lastSuccessfulSync
         refreshPendingCount()
+        // 远端待下载探针: compare the server's change-log tail with our
+        // cursor. Non-fatal — a failed probe just leaves the flag as-is.
+        if let status = try? await authSession.authorize({ [api] token in
+            try await api.status(accessToken: token)
+        }) {
+            remoteUpdatesPending = status.changeLogTail > cursorStore.pullCursor
+        }
         let remaining = await outbox.pendingCount
         if hadPermanentFailure {
             phase = .partialFailure

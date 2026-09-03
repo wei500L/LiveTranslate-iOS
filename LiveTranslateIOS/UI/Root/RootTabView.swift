@@ -9,6 +9,7 @@ import SwiftUI
 /// (转写 / 笔记 / 书签 / 搜索).
 struct RootTabView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(AppSession.self) private var session
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -52,6 +53,14 @@ struct RootTabView: View {
             LiveScreen(viewModel: environment.acquireLiveViewModel())
                 .environment(environment)
         }
+        // Password-reset deep link (Universal Link / livetranslate://
+        // scheme). The token lives only in AppSession memory + this view's
+        // sheet state; dismissed or completed, it is cleared immediately.
+        .sheet(isPresented: resetBinding) {
+            NavigationStack {
+                PasswordRecoveryView(prefilledToken: session.pendingResetToken)
+            }
+        }
         .task {
             environment.reconcileAbnormalTerminations()
             environment.modelManager.refreshStates()
@@ -67,6 +76,19 @@ struct RootTabView: View {
                 environment.cloudSync?.syncNow()
             }
         }
+    }
+
+    /// Presents while a reset token is parked; clearing the token (dismiss
+    /// or completion) closes the sheet.
+    private var resetBinding: Binding<Bool> {
+        Binding(
+            get: { session.pendingResetToken != nil },
+            set: { presented in
+                if !presented {
+                    session.consumeResetToken()
+                }
+            }
+        )
     }
 
     private var tabBinding: Binding<LTTab> {

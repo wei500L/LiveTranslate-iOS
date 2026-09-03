@@ -18,6 +18,12 @@ struct LiveTranslateIOSApp: App {
                 // navigation) so no screen leaks the previous account's
                 // data.
                 .id(session.profileKey)
+                // App Links: password-reset deep links (Universal Link with
+                // the AASA configured, or the livetranslate:// scheme). The
+                // token stays in memory; RootTabView presents the flow.
+                .onOpenURL { url in
+                    session.handleDeepLink(url)
+                }
         }
         .modelContainer(session.environment.modelContainer)
     }
@@ -61,6 +67,9 @@ final class AppEnvironment {
     /// URL (and always nil in the Debug demo environment — demo mode never
     /// touches the production server). One instance per app lifetime.
     let cloudSync: CloudSyncService?
+    /// Guest-data migration for the signed-in account (nil for the guest
+    /// profile itself and demo mode). Owns the 本机记录待归属 flow.
+    let guestMigration: GuestDataMigration?
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -165,6 +174,19 @@ final class AppEnvironment {
         } else {
             cloudSync = nil
         }
+        // Guest-data migration exists only for a signed-in account (the
+        // guest profile IS the source; it cannot migrate into itself).
+        let guestMigration: GuestDataMigration?
+        if let accountID, let cloudSync {
+            guestMigration = GuestDataMigration(
+                accountID: accountID,
+                repository: repository,
+                bookmarks: bookmarks,
+                sync: cloudSync
+            )
+        } else {
+            guestMigration = nil
+        }
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -178,7 +200,8 @@ final class AppEnvironment {
             translationService: service,
             translationServiceBox: box,
             bookmarks: bookmarks,
-            cloudSync: cloudSync
+            cloudSync: cloudSync,
+            guestMigration: guestMigration
         )
     }
 
@@ -197,7 +220,8 @@ final class AppEnvironment {
         translationService: any TranslationService,
         translationServiceBox: TranslationServiceBox,
         bookmarks: BookmarkStore,
-        cloudSync: CloudSyncService?
+        cloudSync: CloudSyncService?,
+        guestMigration: GuestDataMigration? = nil
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -212,6 +236,7 @@ final class AppEnvironment {
         self.translationServiceBox = translationServiceBox
         self.bookmarks = bookmarks
         self.cloudSync = cloudSync
+        self.guestMigration = guestMigration
     }
 
     /// Guest: the legacy global store. Accounts: their isolated store

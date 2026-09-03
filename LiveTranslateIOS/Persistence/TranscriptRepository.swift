@@ -30,6 +30,15 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Snapshot of every locally-stored entity as outbox operations, in
     /// batches (used by the first-upload flow).
     func syncSnapshots(batchSize: Int, progress: ((Int, Int) -> Void)?) -> [SyncOutboxItem]
+
+    // MARK: Guest-data migration support
+
+    /// Whether a session with the given UUID exists locally (migration
+    /// idempotency — copied rows keep their ORIGINAL ids and must not be
+    /// duplicated on re-run).
+    func sessionExists(id: UUID) -> Bool
+    /// Whether an entry with the given UUID exists locally.
+    func entryExists(id: UUID) -> Bool
 }
 
 struct SessionDraft: Sendable {

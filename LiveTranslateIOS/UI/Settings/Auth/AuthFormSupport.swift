@@ -42,6 +42,22 @@ enum AuthForm {
         return pw == confirm ? nil : String(localized: "两次输入的密码不一致")
     }
 
+    /// Local mirror of the server's common-password blocklist (a subset is
+    /// enough for the LIVE hint — the server remains the authority and
+    /// re-checks on submit).
+    private static let commonPasswords: Set<String> = [
+        "password", "123456", "123456789", "12345678", "111111", "1234567",
+        "password123", "qwerty123", "qwertyuiop", "iloveyou", "admin123",
+        "letmein123", "livetranslate", "пароль", "пароль123", "11111111",
+        "000000", "abc123456",
+    ]
+
+    /// Live-hint check only; nil-safety: empty counts as not-common so the
+    /// hint row just stays neutral.
+    static func isCommonPassword(_ raw: String) -> Bool {
+        commonPasswords.contains(raw.lowercased())
+    }
+
     // MARK: - Server error mapping (Go server detail texts → Chinese)
 
     /// Maps any thrown error to a user-presentable Chinese line.

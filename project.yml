@@ -38,6 +38,14 @@ targets:
         CFBundleDisplayName: LiveTranslate
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        # Custom URL scheme for the password-reset deep link (the web
+        # fallback page bridges to it). Universal Links additionally need
+        # the associated-domains entitlement (applinks:<api-domain>) plus
+        # the server's AASA — see Server-Go/docs/ENVIRONMENTS.md; the
+        # entitlement is deliberately NOT added with a placeholder domain.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.livetranslate.ios
+            CFBundleURLSchemes: [livetranslate]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
