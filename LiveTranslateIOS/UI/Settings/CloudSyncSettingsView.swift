@@ -69,11 +69,13 @@ extension CloudSyncPhase {
 /// nothing here fabricates a status.
 struct CloudSyncSettingsView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(AppSession.self) private var session
 
     @State private var loginError: String?
     @State private var isSigningIn = false
     @State private var showDeleteCloudConfirm = false
     @State private var showDeleteAccountConfirm = false
+    @State private var showAddAccount = false
     #if DEBUG
     @State private var devName = ""
     #endif
@@ -82,6 +84,7 @@ struct CloudSyncSettingsView: View {
         Form {
             if let sync = environment.cloudSync {
                 accountSection(sync)
+                accountSwitcherSection
                 syncSection(sync)
                 scopeSection
                 dangerSection(sync)
@@ -111,23 +114,42 @@ struct CloudSyncSettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(sync.accountLabel ?? String(localized: "已登录"))
                             .font(.headline)
-                        Text(String(localized: "通过 Apple 登录你的私人云端"))
+                        Text(providerCaption)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                 }
+                NavigationLink(String(localized: "登录设备")) {
+                    DeviceManagementView()
+                }
+                if currentProvider == "email" {
+                    NavigationLink(String(localized: "修改密码")) {
+                        ChangePasswordView()
+                    }
+                }
                 Button(String(localized: "退出登录"), role: .destructive) {
-                    Task { await sync.signOut() }
+                    Task { await session.signOutCurrentAccount() }
                 }
             } else {
                 SignInWithAppleButton(.signIn) { request in
                     request.requestedScopes = [.fullName]
                 } onCompletion: { result in
-                    handleAppleSignIn(result, service: sync)
+                    handleAppleSignIn(result)
                 }
                 .signInWithAppleButtonStyle(.white)
                 .frame(height: 44)
+                .disabled(isSigningIn)
+                Button {
+                    showAddAccount = true
+                } label: {
+                    VStack(spacing: 4) {
+                        Text(String(localized: "使用邮箱登录 / 注册"))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                    }
+                }
+                .buttonStyle(.bordered)
                 .disabled(isSigningIn)
                 if isSigningIn {
                     HStack(spacing: 6) {
@@ -137,7 +159,7 @@ struct CloudSyncSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
-                Text(String(localized: "使用 Apple 账号登录你的云端服务器。App 不收集邮箱，也不上传任何 Apple 个人信息。"))
+                Text(String(localized: "支持多个账号：各账号的记录、书签与云端数据完全隔离，可随时在下方切换。App 不保存密码。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -154,11 +176,27 @@ struct CloudSyncSettingsView: View {
         } header: {
             Text(String(localized: "Account"))
         }
+        .sheet(isPresented: $showAddAccount) {
+            AccountAuthView()
+        }
     }
 
-    private func handleAppleSignIn(
-        _ result: Result<ASAuthorization, Error>, service: CloudSyncService
-    ) {
+    private var currentProvider: String? {
+        if case .account(let account) = session.accounts.activeProfile {
+            return account.provider
+        }
+        return nil
+    }
+
+    private var providerCaption: String {
+        switch currentProvider {
+        case "email": return String(localized: "邮箱账号 · 私人云端")
+        case "apple": return String(localized: "通过 Apple 登录你的私人云端")
+        default: return String(localized: "私人云端")
+        }
+    }
+
+    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {
         switch result {
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
@@ -171,17 +209,84 @@ struct CloudSyncSettingsView: View {
             Task {
                 defer { isSigningIn = false }
                 do {
-                    try await service.signInWithApple(identityToken: token)
+                    try await session.signIn(label: "Apple 账号", provider: "apple") {
+                        try await $0.signInWithApple(identityToken: token)
+                    }
                     loginError = nil
                 } catch {
-                    loginError = (error as? SyncAPIError)?.localizedDescription
-                        ?? String(localized: "登录失败")
+                    loginError = AuthForm.message(for: error)
                 }
             }
         case .failure(let error):
             // ASAuthorization errors (cancelled, not entitled…) — shown as
             // given; the token never existed.
             loginError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Account switcher (multi-account isolation)
+
+    /// 本机模式 (guest) 与所有本地账号。切换会整体重建数据视图：各账号
+    /// 的记录、书签、待上传队列与游标完全隔离。
+    private var accountSwitcherSection: some View {
+        Section {
+            if session.accounts.accounts.isEmpty {
+                Text(String(localized: "当前为本机模式：记录仅保存在这台设备上。登录后可建立独立云端空间。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(session.accounts.accounts) { account in
+                    accountRow(account)
+                }
+            }
+            if session.accounts.activeAccountID != nil {
+                Button(String(localized: "切换到本机模式（不登录）")) {
+                    session.switchToGuest()
+                }
+            }
+            Button {
+                showAddAccount = true
+            } label: {
+                Label(String(localized: "添加账号"), systemImage: "plus.circle")
+            }
+        } header: {
+            Text(String(localized: "账号"))
+        } footer: {
+            Text(String(localized: "每个账号的数据相互独立且互不可见；移除账号只清掉它在本机的数据，云端数据不受影响。"))
+        }
+    }
+
+    @ViewBuilder
+    private func accountRow(_ account: LocalAccount) -> some View {
+        let isActive = session.accounts.activeAccountID == account.id
+        Button {
+            if !isActive {
+                session.switchToAccount(account.id)
+            }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(account.label)
+                        .foregroundStyle(.primary)
+                    Text(account.provider == "email"
+                        ? String(localized: "邮箱账号")
+                        : String(localized: "Apple 账号"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(LTColors.accentGreen)
+                }
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                Task { await session.removeAccount(account.id, revokeTokens: true) }
+            } label: {
+                Label(String(localized: "移除"), systemImage: "trash")
+            }
         }
     }
 
@@ -322,7 +427,11 @@ struct CloudSyncSettingsView: View {
             titleVisibility: .visible
         ) {
             Button(String(localized: "删除账号"), role: .destructive) {
-                Task { await sync.deleteAccount() }
+                Task {
+                    if await sync.deleteAccount() {
+                        await session.handleServerAccountDeleted()
+                    }
+                }
             }
         }
     }
@@ -361,11 +470,13 @@ struct CloudSyncSettingsView: View {
             Button(String(localized: "开发登录")) {
                 Task {
                     do {
-                        try await sync.devSignIn(devName: devName)
+                        let name = devName.trimmingCharacters(in: .whitespaces)
+                        try await session.signIn(label: "dev:\(name)", provider: "dev") {
+                            try await $0.devSignIn(devName: name)
+                        }
                         loginError = nil
                     } catch {
-                        loginError = (error as? SyncAPIError)?.localizedDescription
-                            ?? String(localized: "开发登录失败")
+                        loginError = AuthForm.message(for: error)
                     }
                 }
             }

@@ -117,7 +117,9 @@ final class BookmarkStore {
         let createdAt: Date?
     }
 
-    private static let storeKey = "ui.bookmarks.v2"
+    /// Guest keeps the legacy key; each signed-in account gets its own
+    /// (see `AccountStore.bookmarkKey`).
+    private let storeKey: String
     // v1 keys — TEMPORARY: kept intact (not deleted) until a verified
     // release confirms the v2 migration, so a downgrade never loses data.
     private static let legacyBookmarksKey = "ui.bookmarks.entries"
@@ -154,17 +156,19 @@ final class BookmarkStore {
 
     init(
         defaults: UserDefaults = .standard,
-        repository: (any ClassroomRepositoryProtocol)? = nil
+        repository: (any ClassroomRepositoryProtocol)? = nil,
+        storageKey: String = "ui.bookmarks.v2"
     ) {
         self.defaults = defaults
         self.repository = repository
+        self.storeKey = storageKey
         load()
     }
 
     // MARK: - Loading / migration
 
     private func load() {
-        if let data = defaults.data(forKey: Self.storeKey),
+        if let data = defaults.data(forKey: storeKey),
            let record = try? JSONDecoder().decode(StoreRecord.self, from: data) {
             entryBookmarks = record.entryBookmarks
             favoriteSessionIDs = Set(record.favoriteSessionIDs)
@@ -439,7 +443,7 @@ final class BookmarkStore {
             )
         )
         if let data = try? JSONEncoder().encode(record) {
-            defaults.set(data, forKey: Self.storeKey)
+            defaults.set(data, forKey: storeKey)
         }
     }
 }

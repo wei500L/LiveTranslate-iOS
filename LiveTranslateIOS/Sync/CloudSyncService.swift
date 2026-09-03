@@ -69,16 +69,24 @@ final class CloudSyncService: AuthenticationService {
 
     // MARK: - Init
 
+    /// The local account this service syncs for. Nil = the guest/local-only
+    /// profile (sign-in state then lives in the legacy unscoped keys, only
+    /// used by the one-time migration).
+    let accountID: UUID?
+
     init(
         baseURL: URL,
         keychain: any KeychainStoring,
         repository: any ClassroomRepositoryProtocol,
         bookmarks: BookmarkStore,
         defaults: UserDefaults = .standard,
-        outboxFileURL: URL? = nil
+        outboxFileURL: URL? = nil,
+        accountID: UUID? = nil
     ) {
+        self.accountID = accountID
+        let scope = accountID.map { "cloudsync.account.\($0.uuidString)" } ?? ""
         self.api = SyncAPIClient(baseURL: baseURL)
-        self.authSession = ServerAuthSession(api: api, keychain: keychain)
+        self.authSession = ServerAuthSession(api: api, keychain: keychain, scope: scope)
         self.outbox = SyncOutboxStore(fileURL: outboxFileURL)
         self.cursorStore = SyncCursorStore(defaults: defaults)
         self.repository = repository
@@ -101,25 +109,38 @@ final class CloudSyncService: AuthenticationService {
         pathMonitor.cancel()
     }
 
-    // MARK: - AuthenticationService
-
-    func signInWithApple(identityToken: String) async throws {
-        _ = try await authSession.signInWithApple(identityToken: identityToken)
-        await finishSignIn()
+    /// Tears the service down before an account switch releases it: stop
+    /// timers, detach observers. After this the service is inert.
+    func shutdown() {
+        periodicTask?.cancel()
+        periodicTask = nil
+        debounceTask?.cancel()
+        debounceTask = nil
+        syncTask?.cancel()
+        syncTask = nil
+        pathMonitor.cancel()
+        repository.mutationObserver = nil
+        bookmarks.syncObserver = nil
     }
+
+    // MARK: - AuthenticationService
+    // (Fresh sign-ins — Apple, email, register+verify — run through
+    // AppSession's transient session so tokens land in the right account
+    // scope; this service only manages the CURRENT profile's session.)
 
     #if DEBUG
     /// Debug-only development login against a DEV_LOGIN_ENABLED server.
     /// Never compiled into Release; cannot serve as production auth.
     func devSignIn(devName: String) async throws {
         _ = try await authSession.devSignIn(devName: devName)
-        await finishSignIn()
+        await completeSignIn()
     }
     #endif
 
     /// Shared post-sign-in flow: refresh observable state, fetch the
-    /// account label and kick off the first sync.
-    private func finishSignIn() async {
+    /// account label and kick off the first sync. Also called by
+    /// `AppSession` after a profile rebuild following a fresh sign-in.
+    func completeSignIn() async {
         await refreshSignInState()
         cursorStore.cloudDeletedAt = nil
         cloudDeletedRecently = false
@@ -143,6 +164,39 @@ final class CloudSyncService: AuthenticationService {
         await refreshSignInState()
         phase = .signedOut
         pendingUploadCount = await outbox.pendingCount
+    }
+
+    // MARK: - Account management (current profile)
+
+    /// Change the current account's password. Requires the current one;
+    /// the server signs out every OTHER device.
+    func changePassword(current: String, new: String) async throws {
+        try await authSession.changePassword(current: current, new: new)
+    }
+
+    /// The current account's device sessions (this device marked current).
+    func listDevices() async throws -> [SyncDeviceSessionDTO] {
+        try await authSession.authorize { [api] token in
+            try await api.listDevices(accessToken: token)
+        }
+    }
+
+    /// Revoke another device's sessions.
+    func revokeDevice(_ id: UUID) async throws {
+        try await authSession.authorize { [api] token in
+            try await api.revokeDevice(id: id, accessToken: token)
+        }
+    }
+
+    /// Sign out EVERY device of the account (lost-phone path).
+    func logoutAllDevices() async throws {
+        try await authSession.authorize { [api] token in
+            try await api.logoutAll(accessToken: token)
+        }
+        // This device's refresh chain is gone too.
+        await authSession.clear()
+        await refreshSignInState()
+        phase = .signedOut
     }
 
     private func refreshSignInState() async {
@@ -648,7 +702,9 @@ final class CloudSyncService: AuthenticationService {
     }
 
     /// 删除账号: revoke tokens + delete server account + cloud data.
-    func deleteAccount() async {
+    /// Returns false (with `lastError` set) when the server refused.
+    @discardableResult
+    func deleteAccount() async -> Bool {
         do {
             try await authSession.authorize { [api] token in
                 try await api.deleteAccount(accessToken: token)
@@ -656,7 +712,7 @@ final class CloudSyncService: AuthenticationService {
         } catch {
             lastError = (error as? SyncAPIError)?.localizedDescription
                 ?? String(localized: "删除账号失败")
-            return
+            return false
         }
         await authSession.clear()
         await outbox.removeAll()
@@ -666,6 +722,7 @@ final class CloudSyncService: AuthenticationService {
         defaults.set(false, forKey: initialUploadKey)
         await refreshSignInState()
         phase = .signedOut
+        return true
     }
 
     // MARK: - Derived state

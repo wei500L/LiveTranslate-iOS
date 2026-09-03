@@ -67,11 +67,37 @@ actor SyncAPIClient {
         config.waitsForConnectivity = false
         self.session = URLSession(configuration: config)
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // The server (Python reference and Go alike) emits RFC 3339 with
+        // fractional seconds ("2026-09-03T08:12:57.635064Z"); the stock
+        // .iso8601 strategy rejects those. Parse both forms.
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = SyncAPIClient.parseServerDate(raw) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "unparseable server date: \(raw)"
+            )
+        }
         self.decoder = decoder
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         self.encoder = encoder
+    }
+
+    private nonisolated(unsafe) static let fractionalDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private nonisolated(unsafe) static let plainDateFormatter = ISO8601DateFormatter()
+
+    /// Accepts RFC 3339 with and without fractional seconds.
+    nonisolated static func parseServerDate(_ raw: String) -> Date? {
+        fractionalDateFormatter.date(from: raw) ?? plainDateFormatter.date(from: raw)
     }
 
     // MARK: - Public endpoints
@@ -157,11 +183,21 @@ actor SyncAPIClient {
 
     // MARK: - Plumbing
 
+    /// Builds the request URL. `path` may carry a query string
+    /// ("sync/pull?cursor=…&limit=…") — appendingPathComponent would
+    /// percent-escape the "?" and turn the query into a 404 path.
     private func endpoint(_ path: String) -> URL {
-        baseURL.appendingPathComponent(path)
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        if let queryStart = path.firstIndex(of: "?") {
+            components.path += "/" + String(path[..<queryStart])
+            components.percentEncodedQuery = String(path[path.index(after: queryStart)...])
+        } else {
+            components.path += "/" + path
+        }
+        return components.url!
     }
 
-    private func get<Body: Decodable>(
+    func get<Body: Decodable>(
         _ path: String, accessToken: String
     ) async throws -> Body {
         let (data, response) = try await request(
@@ -170,7 +206,7 @@ actor SyncAPIClient {
         return try decode(data: data, response: response)
     }
 
-    private func post<Body: Decodable, Payload: Encodable>(
+    func post<Body: Decodable, Payload: Encodable>(
         _ path: String, body: Payload, accessToken: String? = nil
     ) async throws -> Body {
         let (data, response) = try await request(
@@ -185,7 +221,7 @@ actor SyncAPIClient {
         _ = try await request(path, method: "POST", body: body)
     }
 
-    private func request<Payload: Encodable>(
+    func request<Payload: Encodable>(
         _ path: String, method: String, body: Payload? = nil, accessToken: String? = nil
     ) async throws -> (Data, HTTPURLResponse) {
         var urlRequest = URLRequest(url: endpoint(path))
@@ -232,7 +268,7 @@ actor SyncAPIClient {
         }
     }
 
-    private func request(
+    func request(
         _ path: String, method: String, accessToken: String
     ) async throws -> (Data, HTTPURLResponse) {
         try await request(path, method: method, body: Optional<Never>.none, accessToken: accessToken)

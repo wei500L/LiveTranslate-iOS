@@ -3,22 +3,23 @@ import SwiftData
 
 @main
 struct LiveTranslateIOSApp: App {
-    #if DEBUG
-    /// Debug builds consult launch arguments (`--ui-demo --demo-screen …`)
-    /// and may assemble the isolated demo environment instead of the real
-    /// one (see `App/DemoMode.swift`). Release builds have no demo path
-    /// compiled in at all.
-    let environment: AppEnvironment = AppEnvironment.makeForLaunch()
-    #else
-    let environment = AppEnvironment()
-    #endif
+    /// Account-scoped session: owns the environment and rebuilds it on
+    /// account switches (multi-profile isolation). In the Debug UI-demo
+    /// mode the demo environment is assembled once and never switched.
+    @State private var session = AppSession()
 
     var body: some Scene {
         WindowGroup {
             RootTabView()
-                .environment(environment)
+                .environment(session)
+                .environment(session.environment)
+                // Identity tied to the active profile: switching accounts
+                // tears the whole view tree down (fresh @State, fresh
+                // navigation) so no screen leaks the previous account's
+                // data.
+                .id(session.profileKey)
         }
-        .modelContainer(environment.modelContainer)
+        .modelContainer(session.environment.modelContainer)
     }
 }
 
@@ -80,8 +81,10 @@ final class AppEnvironment {
     private(set) var liveViewModel: LiveViewModel?
     private var liveViewModelSessionID: UUID?
 
-    /// Production assembly.
-    convenience init() {
+    /// Production assembly for the given profile: the guest (local-only)
+    /// store or one account's isolated store.
+    convenience init(profile: LocalProfile = .guest) {
+        let accountID: UUID? = if case .account(let account) = profile { account.id } else { nil }
         let settings = SettingsStore.shared
         let modelContainer: ModelContainer
         do {
@@ -89,7 +92,7 @@ final class AppEnvironment {
             let config = ModelConfiguration(
                 "LiveTranslate",
                 schema: schema,
-                url: AppEnvironment.databaseURL()
+                url: AppEnvironment.databaseURL(accountID: accountID)
             )
             modelContainer = try ModelContainer(for: schema, configurations: [config])
         } catch {
@@ -136,14 +139,28 @@ final class AppEnvironment {
         // Cloud sync only when this build carries a server URL (Debug →
         // local/LAN server, Release → the HTTPS production domain). The
         // service observes repository + bookmark mutations from here on.
-        let bookmarks = BookmarkStore(repository: repository)
+        // Per-account isolation: the SwiftData store, the outbox file, the
+        // cursor/bookmark defaults and the keychain scope all live in the
+        // account's namespace; the guest keeps the legacy global paths.
+        let syncDefaults = accountID.map(AccountStore.defaultsSuite(accountID:)) ?? .standard
+        let bookmarks = BookmarkStore(
+            defaults: syncDefaults,
+            repository: repository,
+            storageKey: AccountStore.bookmarkKey(accountID: accountID)
+        )
         let cloudSync: CloudSyncService?
         if let baseURL = ServerConfiguration.baseURL {
             cloudSync = CloudSyncService(
                 baseURL: baseURL,
                 keychain: keychain,
                 repository: repository,
-                bookmarks: bookmarks
+                bookmarks: bookmarks,
+                defaults: syncDefaults,
+                outboxFileURL: accountID.map {
+                    AccountStore.accountDirectory(accountID: $0)
+                        .appendingPathComponent("SyncOutbox.json")
+                },
+                accountID: accountID
             )
         } else {
             cloudSync = nil
@@ -197,11 +214,17 @@ final class AppEnvironment {
         self.cloudSync = cloudSync
     }
 
-    static func databaseURL() -> URL {
-        let support = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        return support.appendingPathComponent("LiveTranslate.sqlite")
+    /// Guest: the legacy global store. Accounts: their isolated store
+    /// under Accounts/<uuid>/.
+    static func databaseURL(accountID: UUID? = nil) -> URL {
+        guard let accountID else {
+            let support = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first!
+            return support.appendingPathComponent("LiveTranslate.sqlite")
+        }
+        return AccountStore.accountDirectory(accountID: accountID)
+            .appendingPathComponent("LiveTranslate.sqlite")
     }
 
     // MARK: - Translation configuration (single source of truth)
