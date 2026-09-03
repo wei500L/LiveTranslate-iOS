@@ -272,7 +272,8 @@ struct LiveLyricRow: View {
 /// repository (real persistence — they survive the classroom ending and
 /// sync like any other entity). A composer at the bottom keeps one-handed
 /// mid-class capture; a toggle anchors the note to the transcript line
-/// currently being spoken about.
+/// currently being spoken about. Captured classroom images appear as a
+/// compact strip above the notes (same 学习记录 surface, no extra tab).
 struct LiveNotesTab: View {
     let viewModel: LiveViewModel
 
@@ -282,11 +283,43 @@ struct LiveNotesTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            attachmentStrip
             noteList
             composer
         }
         .onAppear {
             viewModel.reloadNotes()
+            viewModel.reloadAttachments()
+        }
+    }
+
+    /// 本堂图片: horizontal thumbnails of the classroom's images. Tap
+    /// opens the full-size preview; delete via context menu. Full editing
+    /// (classify, caption, analyze) lives in the session detail after class.
+    @ViewBuilder
+    private var attachmentStrip: some View {
+        if !viewModel.sessionAttachments.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.xs) {
+                HStack(spacing: LTSpacing.xs) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                    Text("本堂图片 · \(viewModel.sessionAttachments.count)")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: LTSpacing.s) {
+                        ForEach(viewModel.sessionAttachments, id: \.id) { attachment in
+                            LiveAttachmentThumbnail(attachment: attachment) {
+                                viewModel.deleteAttachment(attachment)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, LTSpacing.screenPadding)
+                }
+            }
+            .padding(.top, LTSpacing.s)
         }
     }
 

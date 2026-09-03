@@ -28,6 +28,7 @@ struct StudyReviewContent: Codable, Sendable, Equatable {
         var title = ""
         var detail = ""
         var refEntryIDs: [UUID] = []
+        var refAttachmentIDs: [UUID] = []
         var children: [OutlineNode] = []
     }
 
@@ -35,6 +36,7 @@ struct StudyReviewContent: Codable, Sendable, Equatable {
         var id = UUID()
         var text = ""
         var refEntryIDs: [UUID] = []
+        var refAttachmentIDs: [UUID] = []
     }
 
     struct TermItem: Codable, Sendable, Equatable, Identifiable {
@@ -43,18 +45,21 @@ struct StudyReviewContent: Codable, Sendable, Equatable {
         var chinese = ""
         var explanation = ""
         var refEntryIDs: [UUID] = []
+        var refAttachmentIDs: [UUID] = []
     }
 
     struct AssignmentItem: Codable, Sendable, Equatable, Identifiable {
         var id = UUID()
         var text = ""
         var refEntryIDs: [UUID] = []
+        var refAttachmentIDs: [UUID] = []
     }
 
     struct UncertaintyItem: Codable, Sendable, Equatable, Identifiable {
         var id = UUID()
         var text = ""
         var refEntryIDs: [UUID] = []
+        var refAttachmentIDs: [UUID] = []
     }
 
     struct UserAddition: Codable, Sendable, Equatable, Identifiable {

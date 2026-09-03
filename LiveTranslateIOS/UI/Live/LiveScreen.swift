@@ -14,6 +14,7 @@ struct LiveScreen: View {
     /// ends. Already attached to the environment when handed in.
     private let viewModel: LiveViewModel
     @State private var showEndConfirmation = false
+    @State private var showAttachmentCapture = false
 
     init(viewModel: LiveViewModel) {
         self.viewModel = viewModel
@@ -34,6 +35,17 @@ struct LiveScreen: View {
         }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(viewModel.isRunning)
+        .sheet(isPresented: $showAttachmentCapture) {
+            if let sessionID = viewModel.sessionID {
+                AttachmentCaptureSheet(
+                    sessionID: sessionID,
+                    defaultAnchorEntryID: viewModel.currentAnchorEntryID,
+                    showsAnchorHint: true,
+                    onImported: { viewModel.reloadAttachments() },
+                    isPresented: $showAttachmentCapture
+                )
+            }
+        }
         .task(id: viewModel.state.phase) {
             // The error banner's 切换到另一后端 button must reflect a real
             // disk-backed install check, refreshed whenever the phase
@@ -245,6 +257,24 @@ struct LiveScreen: View {
                     .overlay(Circle().strokeBorder(LTColors.border, lineWidth: 0.5))
             }
             .accessibilityLabel(Text("标记当前内容为书签"))
+
+            // 课堂图片: capture a blackboard / import a photo. The image
+            // anchors to the current transcript entry by default; recording
+            // and translation continue untouched.
+            Button {
+                showAttachmentCapture = true
+                LTHaptics.tap()
+            } label: {
+                Image(systemName: "camera")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(LTColors.textSecondary)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(LTColors.surfacePrimary))
+                    .overlay(Circle().strokeBorder(LTColors.border, lineWidth: 0.5))
+            }
+            .disabled(!viewModel.isRunning)
+            .opacity(viewModel.isRunning ? 1 : 0.35)
+            .accessibilityLabel(Text("拍摄或导入课堂图片"))
 
             controlSpacer
 

@@ -596,7 +596,7 @@ struct CloudSyncSettingsView: View {
                 )
                 scopePoint(
                     icon: "nosign", tint: LTColors.destructive,
-                    text: String(localized: "不上传：语音音频、识别模型、翻译 API 密钥、导出文件。")
+                    text: String(localized: "不上传：语音音频、识别模型、翻译 API 密钥、导出文件。课堂图片的原图与缩略图会上传到你自己的服务器。")
                 )
                 scopePoint(
                     icon: "lock.shield", tint: LTColors.textSecondary,

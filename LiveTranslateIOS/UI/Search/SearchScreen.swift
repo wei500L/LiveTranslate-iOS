@@ -16,7 +16,7 @@ struct SearchScreen: View {
     /// One matched session with its best snippet.
     struct SessionHit: Identifiable {
         enum MatchKind {
-            case review, note, transcript, title
+            case review, note, attachment, transcript, title
         }
 
         let session: ClassroomSession
@@ -109,7 +109,8 @@ struct SearchScreen: View {
                     NavigationLink {
                         SessionDetailView(
                             sessionID: hit.session.id,
-                            openReviewOnLoad: hit.matchKind == .review
+                            openReviewOnLoad: hit.matchKind == .review,
+                            openAttachmentsOnLoad: hit.matchKind == .attachment
                         )
                     } label: {
                         searchResultRow(hit)
@@ -143,6 +144,11 @@ struct SearchScreen: View {
                             Label("学习整理", systemImage: "sparkles")
                                 .font(LTTypography.timestamp)
                                 .foregroundStyle(LTColors.accentGreen.opacity(0.9))
+                        }
+                        if hit.matchKind == .attachment {
+                            Label("课堂图片", systemImage: "photo")
+                                .font(LTTypography.timestamp)
+                                .foregroundStyle(LTColors.accentCyan.opacity(0.9))
                         }
                     }
                     Text("\(Format.date(hit.session.startTime)) · \(Format.clock(hit.session.duration))")
@@ -194,6 +200,26 @@ struct SearchScreen: View {
         appliedQuery = query
     }
 
+    /// First matching line of one attachment's stored text (title/caption,
+    /// OCR, analysis), nil when the image did not match.
+    private func attachmentMatch(
+        _ attachment: SessionAttachment, query: String
+    ) -> String? {
+        var candidates: [String] = [attachment.title, attachment.caption]
+        if !attachment.ocrText.isEmpty { candidates.append(attachment.ocrText) }
+        if let analysis = AttachmentAnalysisResult.decode(attachment.analysisJSON) {
+            if let t = analysis.title { candidates.append(t) }
+            candidates.append(contentsOf: analysis.visibleText ?? [])
+            candidates.append(contentsOf: analysis.formulas ?? [])
+            candidates.append(contentsOf: analysis.codeBlocks ?? [])
+            candidates.append(contentsOf: analysis.keyPoints ?? [])
+            if let e = analysis.explanation { candidates.append(e) }
+        }
+        return candidates.first {
+            !$0.isEmpty && $0.localizedCaseInsensitiveContains(query)
+        }
+    }
+
     /// Where a session matched: the study review wins the snippet (the
     /// most distilled form of the classroom), then note text, then the
     /// first matching transcript entry, then the title.
@@ -213,6 +239,15 @@ struct SearchScreen: View {
                 .first { $0.localizedCaseInsensitiveContains(query) }
             if let itemHit {
                 return (itemHit, .review)
+            }
+        }
+        // Persisted attachment content: titles/captions, local OCR text
+        // and the stored analysis — never a live model call.
+        let attachments = (try? environment.repository.attachments(forSessionID: session.id)) ?? []
+        for attachment in attachments {
+            if let hit = attachmentMatch(attachment, query: query) {
+                let label = attachment.kind.displayName
+                return ("\(label)：\(hit)", .attachment)
             }
         }
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []

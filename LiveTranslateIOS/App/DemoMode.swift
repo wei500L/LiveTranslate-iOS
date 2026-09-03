@@ -68,7 +68,8 @@ extension AppEnvironment {
 
         let schema = Schema([
             ClassroomSession.self, TranscriptEntry.self,
-            Course.self, SessionNote.self, StudyReview.self
+            Course.self, SessionNote.self, StudyReview.self,
+            SessionAttachment.self
         ])
         let configuration = ModelConfiguration(
             "ui-demo", schema: schema, isStoredInMemoryOnly: true
@@ -97,6 +98,15 @@ extension AppEnvironment {
         let studyService = DemoStudyReviewService()
         let studyBox = StudyServiceBox()
         studyBox.set(studyService)
+        // Demo attachment storage: a fresh temp directory per demo run —
+        // never the real per-account store.
+        let demoStoreRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ui-demo-attachments-\(UUID().uuidString)", isDirectory: true)
+        let demoAttachmentStore = AttachmentFileStore(root: demoStoreRoot)
+        AttachmentFileStoreShared.store = demoAttachmentStore
+        let attachmentService = DemoAttachmentAnalysisService()
+        let attachmentBox = AttachmentServiceBox()
+        attachmentBox.set(attachmentService)
         let environment = AppEnvironment(
             capabilities: AppEnvironment.Capabilities(
                 requestsMicrophonePermission: false,
@@ -116,7 +126,10 @@ extension AppEnvironment {
             // Demo mode never touches the production sync server.
             cloudSync: nil,
             studyReviewService: studyService,
-            studyServiceBox: studyBox
+            studyServiceBox: studyBox,
+            attachmentAnalysisService: attachmentService,
+            attachmentServiceBox: attachmentBox,
+            attachmentStore: demoAttachmentStore
         )
 
         environment.flow.demoGreeting = "晚上好，学习者"
@@ -284,6 +297,29 @@ struct DemoStudyReviewService: StudyReviewModelService {
             """
         }
         throw TranslationError.emptyResponse
+    }
+}
+
+// MARK: - Demo attachment analysis service (canned, no network)
+
+/// Debug-only stand-in for the multimodal image-analysis service: the REAL
+/// pipeline (prompt build → parse → persist) runs end to end against a
+/// canned structured response — no network is ever touched, no delay
+/// animation simulates "thinking", and this type does not exist in Release
+/// builds.
+struct DemoAttachmentAnalysisService: AttachmentAnalysisModelService {
+    var isConfiguredNow: Bool { true }
+
+    func complete(
+        systemPrompt: String, userPrompt: String,
+        imageData: Data, imageMIME: String, maxTokens: Int
+    ) async throws -> String {
+        guard systemPrompt == AttachmentAnalysisPrompt.systemPrompt() else {
+            throw TranslationError.emptyResponse
+        }
+        return """
+        {"schemaVersion": 1, "title": "偏导数的定义与几何解释", "visibleText": ["∂z/∂x = lim(Δx→0) [f(x₀+Δx, y₀) − f(x₀, y₀)] / Δx", "z = f(x, y)", "Теорема: если частные производные непрерывны, функция дифференцируема"], "formulas": ["\\frac{\\partial z}{\\partial x} = \\lim_{\\Delta x \\to 0} \\frac{f(x_0+\\Delta x, y_0) - f(x_0, y_0)}{\\Delta x}"], "codeBlocks": [], "keyPoints": ["偏导数的极限定义", "偏导数连续 ⇒ 可微"], "explanation": "这块板书给出偏导数 ∂z/∂x 的形式化定义：固定 y = y₀，让 x 从 x₀ 增加 Δx，函数值的增量与 Δx 之比在 Δx→0 时的极限。结合本堂课上下文，这是从一元导数推广到多元函数的关键一步；右侧定理说明当所有偏导数存在且连续时函数可微。", "uncertainties": ["板书左侧第一行的下标 0 略有反光，无法完全确认是 x₀"], "transcriptReferences": [2]}
+        """
     }
 }
 
@@ -777,6 +813,79 @@ enum DemoSeed {
                         context.insert(review)
                     }
                 }
+                // Demo attachments: a blackboard-formula image and a
+                // handwritten-note image, generated at runtime (no bundled
+                // assets needed), stored through the REAL file store; the
+                // formula board carries a canned analysis result anchored to
+                // the definition entry so the viewer and review reference
+                // chips have genuine data.
+                if detailEntryIDs.count > 3, let demoStore = AttachmentFileStoreShared.store {
+                    let attachmentSpecs: [(kind: AttachmentKind, title: String, anchorIndex: Int, draw: (CGSize) -> UIImage)] = [
+                        (.blackboard, "偏导数定义板书", 1, Self.drawDemoBlackboard),
+                        (.handwriting, "手写笔记 · 作业要求", 6, Self.drawDemoHandwriting),
+                    ]
+                    for (index, spec) in attachmentSpecs.enumerated() {
+                        let image = spec.draw(CGSize(width: 1200, height: 900))
+                        guard let data = image.jpegData(compressionQuality: 0.9) else { continue }
+                        let attachmentID = UUID()
+                        guard let processed = try? demoStore.processImport(data) else { continue }
+                        try? demoStore.write(
+                            original: data, importResult: processed,
+                            attachmentID: attachmentID, sessionID: session.id
+                        )
+                        let attachment = SessionAttachment(
+                            id: attachmentID,
+                            sessionID: session.id,
+                            courseID: courseID(forTitle: spec.title),
+                            anchorEntryID: detailEntryIDs[spec.anchorIndex],
+                            capturedAt: session.startTime.addingTimeInterval(TimeInterval(spec.anchorIndex * 300)),
+                            title: spec.title,
+                            caption: index == 0 ? "第二节黑板，定义和定理" : "下课前记的作业",
+                            kind: spec.kind,
+                            mimeType: processed.mimeType,
+                            pixelWidth: processed.pixelWidth,
+                            pixelHeight: processed.pixelHeight,
+                            fileSize: processed.fileSize,
+                            contentHash: processed.contentHash,
+                            sortIndex: index
+                        )
+                        if index == 0 {
+                            // Canned completed analysis on the board image
+                            // (the demo service would produce the same
+                            // result on demand; seeding it means the detail
+                            // page shows a finished state immediately,
+                            // without fake waiting).
+                            let analysis = AttachmentAnalysisResult(
+                                title: "偏导数的定义与几何解释",
+                                visibleText: [
+                                    "∂z/∂x = lim(Δx→0) [f(x₀+Δx, y₀) − f(x₀, y₀)] / Δx",
+                                    "z = f(x, y)",
+                                    "Теорема: если частные производные непрерывны, функция дифференцируема",
+                                ],
+                                formulas: [
+                                    "\\frac{\\partial z}{\\partial x} = \\lim_{\\Delta x \\to 0} \\frac{f(x_0+\\Delta x, y_0) - f(x_0, y_0)}{\\Delta x}",
+                                ],
+                                codeBlocks: [],
+                                keyPoints: [
+                                    "偏导数的极限定义",
+                                    "偏导数连续 ⇒ 可微",
+                                ],
+                                explanation: "这块板书给出偏导数 ∂z/∂x 的形式化定义：固定 y = y₀，让 x 从 x₀ 增加 Δx，函数增量与 Δx 之比在 Δx→0 时的极限。结合本堂课上下文，这是从一元导数推广到多元函数的关键一步；右侧定理说明当所有偏导数存在且连续时函数可微。",
+                                uncertainties: [
+                                    "板书左侧第一行的下标 0 略有反光，无法完全确认是 x₀",
+                                ],
+                                transcriptReferences: [detailEntryIDs[3]],
+                                analysisModel: "demo-vision-model"
+                            )
+                            attachment.analysisJSON = analysis.encodedJSON() ?? ""
+                            attachment.analysisStatus = .completed
+                            attachment.ocrText = "∂z/∂x = lim … f(x₀+Δx, y₀)\nТеорема: частные производные непрерывны"
+                        } else {
+                            attachment.analysisStatus = .pending
+                        }
+                        context.insert(attachment)
+                    }
+                }
                 // Demo notes: one anchored to the definition line, one to
                 // the long formula line, one unanchored.
                 if detailEntryIDs.count > 3 {
@@ -811,6 +920,69 @@ enum DemoSeed {
         }
 
         flow.demoDetailSessionID = detailSessionID
+    }
+
+    // MARK: - Demo image painters (runtime-generated, no bundled assets)
+
+    /// A dark "blackboard" with white chalk formula lines.
+    private static func drawDemoBlackboard(size: CGSize) -> UIImage {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { ctx in
+            UIColor(red: 0.13, green: 0.16, blue: 0.14, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            let chalk = UIColor(white: 0.94, alpha: 1)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineSpacing = 46
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 40, weight: .medium),
+                .foregroundColor: chalk,
+                .paragraphStyle: paragraph,
+            ]
+            let text = """
+            z = f(x, y)
+
+            ∂z/∂x = lim [f(x₀+Δx, y₀) − f(x₀, y₀)] / Δx
+
+            Теорема: если частные производные
+            непрерывны, функция дифференцируема
+            """
+            (text as NSString).draw(
+                in: CGRect(x: 70, y: 110, width: size.width - 140, height: size.height - 200),
+                withAttributes: attrs
+            )
+        }
+    }
+
+    /// A light "paper" with handwritten-style assignment notes.
+    private static func drawDemoHandwriting(size: CGSize) -> UIImage {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { ctx in
+            UIColor(red: 0.97, green: 0.96, blue: 0.93, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            let ink = UIColor(red: 0.15, green: 0.2, blue: 0.4, alpha: 1)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineSpacing = 52
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 38, weight: .regular),
+                .foregroundColor: ink,
+                .paragraphStyle: paragraph,
+            ]
+            let text = """
+            Домашнее задание:
+
+            Задачник §4, № 1–8
+
+            до пятницы ✏️
+            """
+            (text as NSString).draw(
+                in: CGRect(x: 80, y: 130, width: size.width - 160, height: size.height - 220),
+                withAttributes: attrs
+            )
+        }
     }
 }
 #endif

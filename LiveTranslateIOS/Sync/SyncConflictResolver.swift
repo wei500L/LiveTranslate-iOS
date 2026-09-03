@@ -61,6 +61,29 @@ enum SyncConflictResolver {
                 merged.reviewGeneratedAt = server.reviewGeneratedAt
                 merged.reviewSourceUpdatedAt = server.reviewSourceUpdatedAt
             }
+        case .attachment:
+            // Identity fields (hash, size, dimensions, mime) are immutable
+            // server-side; re-asserting the local copies is harmless. Local
+            // user intent (title, caption, kind, anchor, sort) wins when
+            // non-empty; the analysis result falls back to the server's
+            // when the local run produced none (a failed re-analysis keeps
+            // the remote result instead of blanking it).
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.attachmentCaption ?? "").isEmpty,
+               let serverCaption = server.attachmentCaption, !serverCaption.isEmpty {
+                merged.attachmentCaption = serverCaption
+            }
+            if (merged.attachmentOcrText ?? "").isEmpty,
+               let serverOCR = server.attachmentOcrText, !serverOCR.isEmpty {
+                merged.attachmentOcrText = serverOCR
+            }
+            if (merged.attachmentAnalysis ?? "").isEmpty,
+               let serverAnalysis = server.attachmentAnalysis, !serverAnalysis.isEmpty {
+                merged.attachmentAnalysis = serverAnalysis
+                merged.attachmentAnalysisStatus = server.attachmentAnalysisStatus
+            }
         }
         return merged
     }

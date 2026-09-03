@@ -95,6 +95,50 @@ struct ExportNote: Sendable, Identifiable, Equatable {
     }
 }
 
+/// One classroom image in an export: metadata, the (optional) anchor
+/// position and the persisted analysis digest. Binary files never ride in
+/// the document — they are shared alongside it as separate files.
+struct ExportAttachment: Sendable, Identifiable, Equatable {
+    let id: UUID
+    let kindName: String
+    let title: String
+    let caption: String
+    let capturedOffset: TimeInterval?
+    let anchorOffset: TimeInterval?
+    let mimeType: String
+    let fileSize: Int64
+    let visibleText: [String]
+    let formulas: [String]
+    let codeBlocks: [String]
+    let keyPoints: [String]
+    let explanation: String
+    let ocrText: String
+
+    init(
+        id: UUID, kindName: String, title: String, caption: String,
+        capturedOffset: TimeInterval?, anchorOffset: TimeInterval?,
+        mimeType: String, fileSize: Int64,
+        visibleText: [String] = [], formulas: [String] = [],
+        codeBlocks: [String] = [], keyPoints: [String] = [],
+        explanation: String = "", ocrText: String = ""
+    ) {
+        self.id = id
+        self.kindName = kindName
+        self.title = title
+        self.caption = caption
+        self.capturedOffset = capturedOffset
+        self.anchorOffset = anchorOffset
+        self.mimeType = mimeType
+        self.fileSize = fileSize
+        self.visibleText = visibleText
+        self.formulas = formulas
+        self.codeBlocks = codeBlocks
+        self.keyPoints = keyPoints
+        self.explanation = explanation
+        self.ocrText = ocrText
+    }
+}
+
 /// Everything a session export needs. Plain values only — exports must
 /// never contain API keys, auth headers, internal paths or raw stacks.
 struct TranscriptExportData: Sendable, Equatable {
@@ -112,6 +156,10 @@ struct TranscriptExportData: Sendable, Equatable {
     var notes: [ExportNote] = []
     /// The study review (nil when not part of this export).
     var review: ExportReview? = nil
+    /// Classroom images (empty unless the scope includes them). The
+    /// document carries their metadata + analysis; the image FILES are
+    /// shared alongside (caller-controlled).
+    var attachments: [ExportAttachment] = []
     /// False for a review-only export (no transcript section).
     var includesTranscript: Bool = true
 
@@ -127,6 +175,7 @@ struct TranscriptExportData: Sendable, Equatable {
         entries: [ExportEntry],
         notes: [ExportNote] = [],
         review: ExportReview? = nil,
+        attachments: [ExportAttachment] = [],
         includesTranscript: Bool = true
     ) {
         self.title = title
@@ -140,6 +189,7 @@ struct TranscriptExportData: Sendable, Equatable {
         self.entries = entries
         self.notes = notes
         self.review = review
+        self.attachments = attachments
         self.includesTranscript = includesTranscript
     }
 }
@@ -233,6 +283,44 @@ enum TranscriptExporter {
             for note in data.notes {
                 let stamp = note.anchorOffset.map { "[\(mmss($0))] " } ?? ""
                 lines.append("- \(stamp)\(note.text)")
+            }
+            lines.append("")
+        }
+        if !data.attachments.isEmpty {
+            lines.append("## \(String(localized: "Classroom images"))")
+            lines.append("")
+            for attachment in data.attachments {
+                var head = "- **\(attachment.kindName)**"
+                if !attachment.title.isEmpty { head += " · \(attachment.title)" }
+                if let offset = attachment.anchorOffset ?? attachment.capturedOffset {
+                    head += "（\(mmss(offset))）"
+                }
+                lines.append(head)
+                if !attachment.caption.isEmpty {
+                    lines.append("  - 说明：\(attachment.caption)")
+                }
+                if !attachment.visibleText.isEmpty {
+                    lines.append("  - 可见内容：\(attachment.visibleText.joined(separator: "；"))")
+                }
+                for formula in attachment.formulas {
+                    lines.append("  - 公式：`\(formula)`")
+                }
+                for code in attachment.codeBlocks {
+                    lines.append("  - 代码：")
+                    lines.append("")
+                    lines.append("    ```")
+                    for codeLine in code.split(separator: "\n", omittingEmptySubsequences: false) {
+                        lines.append("    \(codeLine)")
+                    }
+                    lines.append("    ```")
+                    lines.append("")
+                }
+                if !attachment.keyPoints.isEmpty {
+                    lines.append("  - 要点：\(attachment.keyPoints.joined(separator: "；"))")
+                }
+                if !attachment.explanation.isEmpty {
+                    lines.append("  - 解读：\(attachment.explanation)")
+                }
             }
             lines.append("")
         }
@@ -392,6 +480,31 @@ enum TranscriptExporter {
                 reviewObject["content"] = parsed
             }
             object["studyReview"] = reviewObject
+        }
+        if !data.attachments.isEmpty {
+            object["attachments"] = data.attachments.map { attachment in
+                var item: [String: Any] = [
+                    "id": attachment.id.uuidString,
+                    "kind": attachment.kindName,
+                    "title": attachment.title,
+                    "caption": attachment.caption,
+                    "mimeType": attachment.mimeType,
+                    "fileSize": attachment.fileSize,
+                ]
+                if let offset = attachment.capturedOffset {
+                    item["capturedOffset"] = offset
+                }
+                if let offset = attachment.anchorOffset {
+                    item["anchorOffset"] = offset
+                }
+                if !attachment.visibleText.isEmpty { item["visibleText"] = attachment.visibleText }
+                if !attachment.formulas.isEmpty { item["formulas"] = attachment.formulas }
+                if !attachment.codeBlocks.isEmpty { item["codeBlocks"] = attachment.codeBlocks }
+                if !attachment.keyPoints.isEmpty { item["keyPoints"] = attachment.keyPoints }
+                if !attachment.explanation.isEmpty { item["explanation"] = attachment.explanation }
+                if !attachment.ocrText.isEmpty { item["ocrText"] = attachment.ocrText }
+                return item
+            }
         }
         if !data.includesTranscript {
             object.removeValue(forKey: "entries")

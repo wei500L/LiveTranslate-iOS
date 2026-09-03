@@ -27,6 +27,7 @@ final class SessionDetailViewModel {
 
     var entries: [TranscriptEntry] = []
     var notes: [SessionNote] = []
+    var attachments: [SessionAttachment] = []
     private(set) var review: StudyReview?
     var isLoaded = false
     var isRetranslating = false
@@ -54,6 +55,7 @@ final class SessionDetailViewModel {
             self.session = nil
             entries = []
             notes = []
+            attachments = []
             review = nil
             isLoaded = true
             return
@@ -61,6 +63,7 @@ final class SessionDetailViewModel {
         self.session = session
         entries = (try? environment.repository.entries(for: session)) ?? []
         notes = (try? environment.repository.notes(forSessionID: sessionID)) ?? []
+        attachments = (try? environment.repository.attachments(forSessionID: sessionID)) ?? []
         review = try? environment.repository.studyReview(forSessionID: sessionID)
         // Keep bookmark IDs honest: entries deleted upstream drop their
         // bookmarks instead of lingering as orphans.

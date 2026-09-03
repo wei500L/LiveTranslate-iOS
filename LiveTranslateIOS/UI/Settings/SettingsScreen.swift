@@ -26,6 +26,7 @@ struct SettingsScreen: View {
         }
         .task {
             storageBytes = environment.repository.storageBytes()
+            refreshAttachmentStorage()
             apiKeyInput = (try? environment.keychain.get(forKey: AppEnvironment.apiKeychainKey)) ?? ""
         }
         // Keep the live translator in sync with edited settings.
@@ -39,6 +40,7 @@ struct SettingsScreen: View {
         .onChange(of: environment.settings.thinkingStyle) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.customSystemPrompt) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.studyReviewModel) { _, _ in environment.refreshTranslationService() }
+        .onChange(of: environment.settings.attachmentAnalysisModel) { _, _ in environment.refreshTranslationService() }
     }
 
     private var settingsContent: some View {
@@ -48,6 +50,7 @@ struct SettingsScreen: View {
             vadSection
             translationSection
             studyReviewSection
+            attachmentAnalysisSection
             dataSection
             cloudSection
             aboutSection
@@ -65,6 +68,7 @@ struct SettingsScreen: View {
             Button(String(localized: "Delete all"), role: .destructive) {
                 try? environment.repository.deleteAllSessions()
                 storageBytes = environment.repository.storageBytes()
+                refreshAttachmentStorage()
             }
         }
     }
@@ -294,6 +298,33 @@ struct SettingsScreen: View {
         }
     }
 
+    /// 图片理解 (multimodal): inherits the translation API base + key; the
+    /// model falls back to the study-review model, then the translation
+    /// model. The footer is honest about capability: whether a model
+    /// actually accepts images is decided by the server at request time —
+    /// we never claim support we cannot verify.
+    private var attachmentAnalysisSection: some View {
+        Section {
+            TextField(
+                String(localized: "Model (empty = same as review)"),
+                text: attachmentModelBinding
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        } header: {
+            Text(String(localized: "Image understanding"))
+        } footer: {
+            Text("分析课堂图片（板书、课件、手写笔记）时，会将压缩后的图片发送到上方配置的模型服务。请填写支持图片输入的模型；如果不确定，模型会在请求时告诉我们是否支持。")
+        }
+    }
+
+    private var attachmentModelBinding: Binding<String> {
+        Binding(
+            get: { environment.settings.attachmentAnalysisModel },
+            set: { environment.settings.attachmentAnalysisModel = $0 }
+        )
+    }
+
     private var studyModelBinding: Binding<String> {
         Binding(
             get: { environment.settings.studyReviewModel },
@@ -392,10 +423,52 @@ struct SettingsScreen: View {
                 }
             }
             LabeledRow(label: String(localized: "Records storage"), value: Format.bytes(storageBytes))
+            LabeledRow(
+                label: String(localized: "Classroom images"),
+                value: Format.bytes(Int(attachmentBytes))
+            )
+            if attachmentBytes > 0 {
+                Button {
+                    reclaimSyncedAttachmentOriginals()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(localized: "Free up synced image space"))
+                        Text(String(localized: "Removes local ORIGINALS of images already uploaded to your server; thumbnails stay and originals re-download on demand."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(syncedAttachmentIDs.isEmpty)
+            }
             Button(String(localized: "Delete all records"), role: .destructive) {
                 showDeleteAllConfirm = true
             }
         }
+    }
+
+    @State private var attachmentBytes: Int64 = 0
+    @State private var syncedAttachmentIDs: [UUID] = []
+    @State private var sessionIDsByAttachment: [UUID: UUID] = [:]
+
+    /// 删除本地已同步原图 (local reclaim only — the cloud copy is a
+    /// separate, explicit action in 云端同步).
+    private func reclaimSyncedAttachmentOriginals() {
+        guard let store = environment.attachmentStore else { return }
+        _ = store.reclaimOriginals(
+            attachmentIDs: syncedAttachmentIDs, sessionIDs: sessionIDsByAttachment
+        )
+        refreshAttachmentStorage()
+    }
+
+    private func refreshAttachmentStorage() {
+        attachmentBytes = environment.attachmentStore.totalBytes()
+        let all = (try? environment.repository.allAttachments()) ?? []
+        sessionIDsByAttachment = Dictionary(
+            all.map { ($0.id, $0.sessionID) }, uniquingKeysWith: { first, _ in first }
+        )
+        syncedAttachmentIDs = all
+            .filter { $0.serverVersion > 0 }
+            .map(\.id)
     }
 
     private var saveAudioBinding: Binding<Bool> {

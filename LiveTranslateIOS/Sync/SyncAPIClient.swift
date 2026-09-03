@@ -181,6 +181,101 @@ actor SyncAPIClient {
         _ = try await request("account", method: "DELETE", accessToken: accessToken)
     }
 
+    // MARK: - Attachment binary transfer (NOT part of the JSON push)
+
+    /// Uploads one attachment file variant (raw body, hash header — the
+    /// server verifies it against the synced metadata row). Idempotent by
+    /// content hash server-side.
+    func uploadAttachmentFile(
+        attachmentID: UUID, variant: String, data: Data,
+        contentHash: String, accessToken: String
+    ) async throws {
+        var urlRequest = URLRequest(url: endpoint("attachments/\(attachmentID.uuidString)/\(variant)"))
+        urlRequest.httpMethod = "PUT"
+        urlRequest.httpBody = data
+        urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(contentHash, forHTTPHeaderField: "X-Content-Hash")
+        urlRequest.timeoutInterval = 300
+        let response: URLResponse
+        do {
+            response = try await session.data(for: urlRequest).1
+        } catch {
+            throw SyncAPIError.retryable(reason: error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw SyncAPIError.badResponse }
+        switch http.statusCode {
+        case 200..<300:
+            return
+        case 401: throw SyncAPIError.authExpired
+        case 404:
+            // The metadata row has not landed server-side yet (or was
+            // deleted) — retryable: the outbox push will (re)create it.
+            throw SyncAPIError.retryable(reason: "attachment not found on server")
+        case 409:
+            // Hash/size contract violation: the metadata row on the server
+            // describes different bytes. Permanent — re-analyze or re-import
+            // locally; never silently re-push mismatching files.
+            throw SyncAPIError.permanent(code: "hash_mismatch", reason: "file does not match metadata")
+        case 413:
+            throw SyncAPIError.permanent(code: "too_large", reason: "file exceeds server limit")
+        case 429: throw SyncAPIError.rateLimited(retryAfter: http.retryAfter)
+        case 502, 503, 504: throw SyncAPIError.serverUnavailable(retryAfter: http.retryAfter)
+        default:
+            throw SyncAPIError.permanent(code: "\(http.statusCode)", reason: "HTTP \(http.statusCode)")
+        }
+    }
+
+    /// Downloads one attachment file variant. Throws `retryable` on 404 —
+    /// the file may simply not be uploaded yet from any device.
+    func downloadAttachmentFile(
+        attachmentID: UUID, variant: String, accessToken: String
+    ) async throws -> Data {
+        var urlRequest = URLRequest(url: endpoint("attachments/\(attachmentID.uuidString)/\(variant)"))
+        urlRequest.httpMethod = "GET"
+        urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        urlRequest.timeoutInterval = 300
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw SyncAPIError.retryable(reason: error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw SyncAPIError.badResponse }
+        switch http.statusCode {
+        case 200..<300:
+            return data
+        case 401: throw SyncAPIError.authExpired
+        case 404:
+            throw SyncAPIError.retryable(reason: "file not uploaded yet")
+        case 429: throw SyncAPIError.rateLimited(retryAfter: http.retryAfter)
+        case 502, 503, 504: throw SyncAPIError.serverUnavailable(retryAfter: http.retryAfter)
+        default:
+            throw SyncAPIError.permanent(code: "\(http.statusCode)", reason: "HTTP \(http.statusCode)")
+        }
+    }
+
+    /// Whether the server holds one variant (cheap existence probe).
+    func attachmentFileUploaded(
+        attachmentID: UUID, variant: String, accessToken: String
+    ) async throws -> Bool {
+        struct StatusDTO: Decodable { var uploaded: Bool }
+        let dto: StatusDTO = try await get(
+            "attachments/\(attachmentID.uuidString)/\(variant)/status",
+            accessToken: accessToken
+        )
+        return dto.uploaded
+    }
+
+    /// Deletes the server-side FILES of one attachment (the metadata row
+    /// and its tombstone travel through sync/push).
+    func deleteAttachmentFiles(attachmentID: UUID, accessToken: String) async throws {
+        _ = try await request(
+            "attachments/\(attachmentID.uuidString)",
+            method: "DELETE", accessToken: accessToken
+        )
+    }
+
     // MARK: - Plumbing
 
     /// Builds the request URL. `path` may carry a query string

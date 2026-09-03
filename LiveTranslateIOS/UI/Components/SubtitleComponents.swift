@@ -39,9 +39,20 @@ struct LabeledRow: View {
 
 /// URL wrapper so `.sheet(item:)` can present the share sheet.
 /// File-scope (not nested) so BenchmarkScreen can use it too.
+/// `companions` carry extra files of one share action (the 课堂资料包:
+/// document + image files share together).
 struct SharedFile: Identifiable {
     let id = UUID()
     let url: URL
+    var companions: [URL] = []
+
+    init(url: URL, companions: [URL] = []) {
+        self.url = url
+        self.companions = companions
+    }
+
+    /// All URLs of this share (document first).
+    var allURLs: [URL] { [url] + companions }
 }
 
 /// Rolling waveform of recent input levels. Drawn from a bounded ring of

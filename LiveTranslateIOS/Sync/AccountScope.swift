@@ -64,6 +64,7 @@ enum AccountScope {
 
     static let databaseFileName = "LiveTranslate.sqlite"
     static let outboxFileName = "SyncOutbox.json"
+    static let attachmentsDirectoryName = "Attachments"
 
     /// SwiftData store for a profile: the guest global file, or one
     /// account's isolated store.
@@ -78,6 +79,20 @@ enum AccountScope {
         guard let accountID else { return guestOutboxURL }
         return accountDirectory(accountID: accountID)
             .appendingPathComponent(outboxFileName)
+    }
+
+    /// Root directory for a profile's attachment image files. Guest keeps
+    /// the legacy global Sessions sibling; accounts are isolated under
+    /// their own directory (多账号之间不能共享附件目录).
+    static func attachmentsRoot(accountID: UUID?) -> URL {
+        let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        guard let accountID else {
+            return support.appendingPathComponent("Attachments", isDirectory: true)
+        }
+        return accountDirectory(accountID: accountID)
+            .appendingPathComponent(attachmentsDirectoryName, isDirectory: true)
     }
 
     // MARK: - Guest (legacy global) paths

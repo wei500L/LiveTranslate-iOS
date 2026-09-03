@@ -16,6 +16,7 @@ struct StudyReviewView: View {
     @State private var shareItem: SharedFile?
     @State private var exportError = false
     @State private var pendingRegenerate = false
+    @State private var viewedAttachmentID: UUID?
 
     let sessionID: UUID
     /// Pops back to the classroom detail and scrolls to the entry.
@@ -79,6 +80,15 @@ struct StudyReviewView: View {
         .sheet(item: $editor) { context in
             ReviewItemEditor(context: context)
                 .onDisappear { viewModel.reload() }
+        }
+        .sheet(item: $viewedAttachmentID) { attachmentID in
+            if let session = viewModel.session {
+                AttachmentDetailView(
+                    session: session,
+                    attachmentID: attachmentID,
+                    onChanged: { viewModel.reload() }
+                )
+            }
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
@@ -193,7 +203,7 @@ struct StudyReviewView: View {
             LTEmptyState(
                 symbol: "sparkles.rectangle.stack",
                 title: "还没有整理",
-                message: "把这堂课的转录、翻译和你的笔记，整理成一份可复习的学习资料。"
+                message: "把这堂课的转录、翻译、你的笔记和板书图片，整理成一份可复习的学习资料。"
             )
             Button {
                 viewModel.generate(resume: false)
@@ -210,6 +220,20 @@ struct StudyReviewView: View {
                 Text("这堂课没有可整理的文字内容。")
                     .font(LTTypography.caption)
                     .foregroundStyle(LTColors.textTertiary)
+            } else if viewModel.unanalyzedAttachmentCount > 0 {
+                Label(
+                    "还有 \(viewModel.unanalyzedAttachmentCount) 张图片未分析，整理时不会包含它们",
+                    systemImage: "photo.badge.exclamationmark"
+                )
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textTertiary)
+            } else if viewModel.analyzedAttachmentCount > 0 {
+                Label(
+                    "将包含 \(viewModel.analyzedAttachmentCount) 张图片的板书与笔记内容",
+                    systemImage: "photo.on.rectangle.angled"
+                )
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textTertiary)
             }
         }
         .ltCard()
@@ -279,7 +303,7 @@ struct StudyReviewView: View {
                 HStack(spacing: LTSpacing.xs) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.caption)
-                    Text("课堂内容在整理后有更新（例如补翻译或新笔记），可重新整理。")
+                    Text("课堂资料在整理后有更新（例如补翻译、新笔记或新的板书图片），可重新整理。")
                         .font(LTTypography.caption)
                     Spacer()
                 }
@@ -318,7 +342,8 @@ struct StudyReviewView: View {
                 ForEach(content.keyPoints) { point in
                     itemRow(
                         text: point.text,
-                        refEntryIDs: point.refEntryIDs
+                        refEntryIDs: point.refEntryIDs,
+                        refAttachmentIDs: point.refAttachmentIDs
                     ) { newText in
                         viewModel.editKeyPoint(point, text: newText)
                     } onDelete: {
@@ -346,6 +371,7 @@ struct StudyReviewView: View {
                     itemRow(
                         text: assignment.text,
                         refEntryIDs: assignment.refEntryIDs,
+                        refAttachmentIDs: assignment.refAttachmentIDs,
                         symbol: "checklist"
                     ) { newText in
                         viewModel.editAssignment(assignment, text: newText)
@@ -371,6 +397,7 @@ struct StudyReviewView: View {
                     itemRow(
                         text: item.text,
                         refEntryIDs: item.refEntryIDs,
+                        refAttachmentIDs: item.refAttachmentIDs,
                         symbol: "questionmark.diamond"
                     ) { newText in
                         viewModel.editUncertainty(item, text: newText)
@@ -444,6 +471,7 @@ struct StudyReviewView: View {
     private func itemRow(
         text: String,
         refEntryIDs: [UUID],
+        refAttachmentIDs: [UUID] = [],
         symbol: String = "circle.fill",
         onEdit: @escaping (String) -> Void,
         onDelete: @escaping () -> Void
@@ -454,8 +482,11 @@ struct StudyReviewView: View {
                 .foregroundStyle(LTColors.textPrimary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if !refEntryIDs.isEmpty {
-                citationsRow(refEntryIDs)
+            if !refEntryIDs.isEmpty || !refAttachmentIDs.isEmpty {
+                HStack(spacing: LTSpacing.s) {
+                    citationsRow(refEntryIDs, expand: false)
+                    attachmentChips(refAttachmentIDs)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -513,7 +544,8 @@ struct StudyReviewView: View {
     }
 
     /// "查看原文" affordance: the timestamp of the cited line, tappable.
-    private func citationsRow(_ entryIDs: [UUID]) -> some View {
+    /// `expand == false` keeps the trailing Spacer for inline rows.
+    private func citationsRow(_ entryIDs: [UUID], expand: Bool = true) -> some View {
         HStack(spacing: LTSpacing.s) {
             ForEach(entryIDs.prefix(3), id: \.self) { entryID in
                 Button {
@@ -535,7 +567,34 @@ struct StudyReviewView: View {
                     .font(LTTypography.timestamp)
                     .foregroundStyle(LTColors.textTertiary)
             }
-            Spacer()
+            if expand { Spacer() }
+        }
+    }
+
+    /// 板书引用 chips: tap opens the referenced image (not just the
+    /// transcript line).
+    private func attachmentChips(_ attachmentIDs: [UUID]) -> some View {
+        HStack(spacing: LTSpacing.s) {
+            ForEach(attachmentIDs.prefix(3), id: \.self) { attachmentID in
+                Button {
+                    viewedAttachmentID = attachmentID
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "photo")
+                            .font(.caption2)
+                        Text(viewModel.attachmentLabel(attachmentID))
+                            .font(LTTypography.timestamp)
+                    }
+                    .foregroundStyle(LTColors.accentGreen.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("查看图片 \(viewModel.attachmentLabel(attachmentID))"))
+            }
+            if attachmentIDs.count > 3 {
+                Text("+\(attachmentIDs.count - 3)")
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+            }
         }
     }
 

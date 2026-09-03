@@ -15,6 +15,10 @@ enum SyncEntityType: String, Codable, Sendable {
     case course
     case note
     case studyReview = "study_review"
+    /// Classroom image metadata. The wire name fits the server's
+    /// VARCHAR(16) entity_type columns ("session_attachment" would not).
+    /// Binary files travel on /v1/attachments, never through push.
+    case attachment
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -208,6 +212,24 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var reviewModel: String?
     var reviewGeneratedAt: Date?
     var reviewSourceUpdatedAt: Date?
+    // session attachment (classroom image). title rides `title`; the
+    // structured analysis rides as a JSON STRING in `attachmentAnalysis`
+    // (same convention as reviewContent) — the server casts it into a
+    // JSONB column, and a string field keeps record decode failures from
+    // one malformed nested object from rejecting the whole record.
+    var attachmentKind: String?
+    var attachmentMime: String?
+    var attachmentWidth: Int?
+    var attachmentHeight: Int?
+    var attachmentFileSize: Int64?
+    var attachmentHash: String?
+    var attachmentCapturedAt: Date?
+    var attachmentCaption: String?
+    var attachmentSortIndex: Int?
+    var attachmentTransform: String?
+    var attachmentAnalysisStatus: String?
+    var attachmentAnalysis: String?
+    var attachmentOcrText: String?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -267,6 +289,19 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var reviewModel: String?
     var reviewGeneratedAt: Date?
     var reviewSourceUpdatedAt: Date?
+    var attachmentKind: String?
+    var attachmentMime: String?
+    var attachmentWidth: Int?
+    var attachmentHeight: Int?
+    var attachmentFileSize: Int64?
+    var attachmentHash: String?
+    var attachmentCapturedAt: Date?
+    var attachmentCaption: String?
+    var attachmentSortIndex: Int?
+    var attachmentTransform: String?
+    var attachmentAnalysisStatus: String?
+    var attachmentAnalysis: String?
+    var attachmentOcrText: String?
     var serverVersion: Int
     var deleted: Bool
 
@@ -303,6 +338,19 @@ struct SyncServerRecordDTO: Codable, Sendable {
         reviewModel: String? = nil,
         reviewGeneratedAt: Date? = nil,
         reviewSourceUpdatedAt: Date? = nil,
+        attachmentKind: String? = nil,
+        attachmentMime: String? = nil,
+        attachmentWidth: Int? = nil,
+        attachmentHeight: Int? = nil,
+        attachmentFileSize: Int64? = nil,
+        attachmentHash: String? = nil,
+        attachmentCapturedAt: Date? = nil,
+        attachmentCaption: String? = nil,
+        attachmentSortIndex: Int? = nil,
+        attachmentTransform: String? = nil,
+        attachmentAnalysisStatus: String? = nil,
+        attachmentAnalysis: String? = nil,
+        attachmentOcrText: String? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -336,6 +384,19 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.reviewModel = reviewModel
         self.reviewGeneratedAt = reviewGeneratedAt
         self.reviewSourceUpdatedAt = reviewSourceUpdatedAt
+        self.attachmentKind = attachmentKind
+        self.attachmentMime = attachmentMime
+        self.attachmentWidth = attachmentWidth
+        self.attachmentHeight = attachmentHeight
+        self.attachmentFileSize = attachmentFileSize
+        self.attachmentHash = attachmentHash
+        self.attachmentCapturedAt = attachmentCapturedAt
+        self.attachmentCaption = attachmentCaption
+        self.attachmentSortIndex = attachmentSortIndex
+        self.attachmentTransform = attachmentTransform
+        self.attachmentAnalysisStatus = attachmentAnalysisStatus
+        self.attachmentAnalysis = attachmentAnalysis
+        self.attachmentOcrText = attachmentOcrText
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -372,6 +433,19 @@ struct SyncServerRecordDTO: Codable, Sendable {
         reviewModel = try container.decodeIfPresent(String.self, forKey: .reviewModel)
         reviewGeneratedAt = try container.decodeIfPresent(Date.self, forKey: .reviewGeneratedAt)
         reviewSourceUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .reviewSourceUpdatedAt)
+        attachmentKind = try container.decodeIfPresent(String.self, forKey: .attachmentKind)
+        attachmentMime = try container.decodeIfPresent(String.self, forKey: .attachmentMime)
+        attachmentWidth = try container.decodeIfPresent(Int.self, forKey: .attachmentWidth)
+        attachmentHeight = try container.decodeIfPresent(Int.self, forKey: .attachmentHeight)
+        attachmentFileSize = try container.decodeIfPresent(Int64.self, forKey: .attachmentFileSize)
+        attachmentHash = try container.decodeIfPresent(String.self, forKey: .attachmentHash)
+        attachmentCapturedAt = try container.decodeIfPresent(Date.self, forKey: .attachmentCapturedAt)
+        attachmentCaption = try container.decodeIfPresent(String.self, forKey: .attachmentCaption)
+        attachmentSortIndex = try container.decodeIfPresent(Int.self, forKey: .attachmentSortIndex)
+        attachmentTransform = try container.decodeIfPresent(String.self, forKey: .attachmentTransform)
+        attachmentAnalysisStatus = try container.decodeIfPresent(String.self, forKey: .attachmentAnalysisStatus)
+        attachmentAnalysis = try container.decodeIfPresent(String.self, forKey: .attachmentAnalysis)
+        attachmentOcrText = try container.decodeIfPresent(String.self, forKey: .attachmentOcrText)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -417,4 +491,5 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var courseCount: Int?
     var noteCount: Int?
     var reviewCount: Int?
+    var attachmentCount: Int?
 }

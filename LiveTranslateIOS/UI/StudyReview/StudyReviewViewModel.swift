@@ -12,6 +12,7 @@ final class StudyReviewViewModel {
     private(set) var session: ClassroomSession?
     private(set) var review: StudyReview?
     private(set) var entries: [TranscriptEntry] = []
+    private(set) var attachments: [SessionAttachment] = []
     var isLoaded = false
 
     // MARK: - Lifecycle
@@ -27,11 +28,13 @@ final class StudyReviewViewModel {
             self.session = nil
             review = nil
             entries = []
+            attachments = []
             isLoaded = true
             return
         }
         self.session = session
         entries = (try? environment.repository.entries(for: session)) ?? []
+        attachments = (try? environment.repository.attachments(forSessionID: sessionID)) ?? []
         review = try? environment.repository.studyReview(forSessionID: sessionID)
         reconcileOrphanedGeneration()
         isLoaded = true
@@ -124,6 +127,15 @@ final class StudyReviewViewModel {
         return TranscriptExporter.mmss(entry.startOffset)
     }
 
+    /// Label for an image citation chip ("图片已不存在" when the image was
+    /// deleted — the review text itself survives).
+    func attachmentLabel(_ attachmentID: UUID) -> String {
+        guard let attachment = attachments.first(where: { $0.id == attachmentID }) else {
+            return String(localized: "图片已不存在")
+        }
+        return attachment.kind.displayName
+    }
+
     /// One-line preview of a cited line (outline citations).
     func entryPreview(_ entryID: UUID) -> String? {
         guard let entry = entriesByID[entryID] else { return "原文已不存在" }
@@ -138,13 +150,62 @@ final class StudyReviewViewModel {
         let context = classContext()
         let notes = noteTexts()
         let currentEntries = entries
+        let materials = attachmentMaterials()
         environment.studyReviewGenerator.generate(
             session: session,
             context: context,
             notes: notes,
             entries: currentEntries,
+            attachments: materials,
             resume: resume
         )
+    }
+
+    /// Analyzed attachments become prompt material (板书与图片分析);
+    /// unanalyzed ones are skipped (the UI surfaces them separately —
+    /// images missing analysis never silently degrade the review).
+    private func attachmentMaterials() -> [StudyReviewPrompt.AttachmentMaterial] {
+        guard let environment, let session else { return [] }
+        let analyzed = (try? environment.repository.attachments(forSessionID: session.id)) ?? []
+            .filter { $0.analysisStatus == .completed || $0.analysisStatus == .partial }
+        return analyzed.enumerated().prefix(12).map { index, attachment in
+            let result = AttachmentAnalysisResult.decode(attachment.analysisJSON)
+            var digestParts: [String] = []
+            if let visible = result?.visibleText, !visible.isEmpty {
+                digestParts.append(visible.prefix(4).joined(separator: " / "))
+            }
+            if let formulas = result?.formulas, !formulas.isEmpty {
+                digestParts.append("公式：\(formulas.prefix(3).joined(separator: "；"))")
+            }
+            if let code = result?.codeBlocks, !code.isEmpty {
+                digestParts.append("代码：\(code.prefix(1).joined(separator: "\n").prefix(300))")
+            }
+            if let points = result?.keyPoints, !points.isEmpty {
+                digestParts.append("要点：\(points.prefix(4).joined(separator: "；"))")
+            }
+            return StudyReviewPrompt.AttachmentMaterial(
+                id: attachment.id,
+                number: index + 1,
+                kindName: attachment.kind.displayName,
+                title: attachment.title,
+                caption: attachment.caption,
+                digest: digestParts.joined(separator: "\n")
+            )
+        }
+    }
+
+    /// Attachments present but not yet analyzed (drives the review UI's
+    /// hint to analyze them first).
+    var unanalyzedAttachmentCount: Int {
+        attachments.filter {
+            $0.analysisStatus == .pending || $0.analysisStatus == .failed
+        }.count
+    }
+
+    var analyzedAttachmentCount: Int {
+        attachments.filter {
+            $0.analysisStatus == .completed || $0.analysisStatus == .partial
+        }.count
     }
 
     func cancel() {

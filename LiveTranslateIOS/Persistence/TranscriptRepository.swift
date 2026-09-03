@@ -39,6 +39,9 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func sessionSummary(id: UUID) -> SessionSummary?
     /// Whether an entry with the given UUID exists locally.
     func entryExists(id: UUID) -> Bool
+    /// The course a session belongs to (attachment display bookkeeping;
+    /// nil = standalone).
+    func courseID(sessionID: UUID) throws -> UUID?
 
     // MARK: Courses
 
@@ -110,6 +113,57 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Cloud-sync apply for a review record (protects local user edits).
     func applyRemoteStudyReview(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteStudyReviewByID(_ id: UUID) throws
+
+    // MARK: Session attachments (classroom images)
+    // Files are managed by AttachmentFileStore; the repository persists
+    // metadata only. Analysis progress (analyzing / chunk-less single
+    // image states) is device-local and never notifies the sync observer;
+    // terminal states and user edits do.
+
+    /// All attachments of a session, timeline order (capturedAt, sortIndex).
+    func attachments(forSessionID id: UUID) throws -> [SessionAttachment]
+    /// One attachment by id (analysis runner).
+    func attachment(id: UUID) throws -> SessionAttachment?
+    /// All attachments across sessions (search, storage management).
+    func allAttachments() throws -> [SessionAttachment]
+    /// Whether an attachment with this hash exists in the session
+    /// (duplicate-import prompt; never auto-deletes).
+    func attachmentExists(sessionID: UUID, contentHash: String) throws -> Bool
+    /// Persists a fully-written attachment (files already on disk — the
+    /// row is written LAST by contract). Notifies sync.
+    func addAttachment(_ draft: AttachmentDraft, toSessionID id: UUID) throws -> SessionAttachment
+    func updateAttachmentTitle(_ attachment: SessionAttachment, title: String) throws
+    func updateAttachmentCaption(_ attachment: SessionAttachment, caption: String) throws
+    func updateAttachmentKind(_ attachment: SessionAttachment, kind: AttachmentKind) throws
+    /// Clears or replaces the anchor (the image stays). A nil anchor
+    /// pushes the explicit-clear sentinel so the change syncs.
+    func updateAttachmentAnchor(_ attachment: SessionAttachment, anchorEntryID: UUID?) throws
+    func updateAttachmentSortIndex(_ attachment: SessionAttachment, sortIndex: Int) throws
+    /// Non-destructive display transform (rotation/crop). The original
+    /// file is never rewritten. Notifies sync.
+    func updateAttachmentTransform(_ attachment: SessionAttachment, transform: AttachmentTransform) throws
+    /// Saves user-edited local OCR text (never mixed with model output).
+    /// Notifies sync.
+    func updateAttachmentOCRText(_ attachment: SessionAttachment, text: String) throws
+    /// A finished analysis run: replaces the structured result, stamps the
+    /// status. Notifies sync. Local-only state changes (analyzing) use
+    /// `updateAttachmentAnalysisProgress`.
+    func completeAttachmentAnalysis(
+        _ attachment: SessionAttachment, result: AttachmentAnalysisResult, status: AttachmentAnalysisStatus
+    ) throws
+    /// Local-only analysis status change (analyzing start / interrupted /
+    /// failed without result). Never notifies sync — terminal statuses are
+    /// pushed only via completeAttachmentAnalysis / failAttachmentAnalysis.
+    func updateAttachmentAnalysisProgress(
+        _ attachment: SessionAttachment, status: AttachmentAnalysisStatus
+    ) throws
+    /// A failed analysis (previous result, if any, stays). Notifies sync
+    /// only when a result worth keeping exists.
+    func failAttachmentAnalysis(_ attachment: SessionAttachment) throws
+    func deleteAttachment(_ attachment: SessionAttachment) throws
+    /// Cloud-sync apply for an attachment record.
+    func applyRemoteAttachment(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteAttachmentByID(_ id: UUID) throws
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).
@@ -154,6 +208,26 @@ struct CourseDraft: Sendable, Equatable {
 struct NoteDraft: Sendable {
     var text: String
     var anchorEntryID: UUID? = nil
+}
+
+/// A fully-processed new attachment. The FILES are already on disk (the
+/// importer writes them first, the row last — an interrupted import never
+/// leaves a row whose files are missing); the draft carries only metadata
+/// derived during import.
+struct AttachmentDraft: Sendable {
+    var capturedAt: Date
+    var title: String
+    var caption: String
+    var kind: AttachmentKind
+    var mimeType: String
+    var fileExtension: String
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var fileSize: Int64
+    var contentHash: String
+    var sortIndex: Int
+    var anchorEntryID: UUID?
+    var courseID: UUID?
 }
 
 extension UUID {

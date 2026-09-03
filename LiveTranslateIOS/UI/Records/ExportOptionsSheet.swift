@@ -7,16 +7,21 @@ struct ExportOptionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var scope: ExportScope = .fullMaterial
     @State private var format: ExportFormat = .markdown
+    @State private var attachmentFiles: SessionExport.AttachmentFileOption = .none
 
     /// Whether the classroom has a study review (gates the review scopes).
     private let hasReview: Bool
-    private let onExport: (ExportScope, ExportFormat) -> Void
+    /// How many classroom images exist (gates the image-file option).
+    private let attachmentCount: Int
+    private let onExport: (ExportScope, ExportFormat, SessionExport.AttachmentFileOption) -> Void
 
     init(
         hasReview: Bool,
-        onExport: @escaping (ExportScope, ExportFormat) -> Void
+        attachmentCount: Int = 0,
+        onExport: @escaping (ExportScope, ExportFormat, SessionExport.AttachmentFileOption) -> Void
     ) {
         self.hasReview = hasReview
+        self.attachmentCount = attachmentCount
         self.onExport = onExport
     }
 
@@ -59,8 +64,20 @@ struct ExportOptionsSheet: View {
                             }
                         }
                     }
+                    if attachmentCount > 0 && (scope == .fullMaterial || scope == .transcriptAndNotes) {
+                        section(title: "图片文件") {
+                            VStack(spacing: LTSpacing.xs) {
+                                ForEach(SessionExport.AttachmentFileOption.allCases) { candidate in
+                                    attachmentOptionRow(candidate)
+                                }
+                                Text("文档中始终包含图片的标题、说明与分析结果。")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(LTColors.textTertiary)
+                            }
+                        }
+                    }
                     Button {
-                        onExport(scope, format)
+                        onExport(scope, format, attachmentFiles)
                         dismiss()
                     } label: {
                         Label("导出", systemImage: "square.and.arrow.up")
@@ -127,6 +144,43 @@ struct ExportOptionsSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(LTColors.textPrimary)
                 Spacer()
+            }
+            .padding(LTSpacing.m)
+            .background(
+                RoundedRectangle(cornerRadius: LTRadius.small)
+                    .fill(LTColors.surfacePrimary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: LTRadius.small)
+                    .strokeBorder(
+                        isSelected ? LTColors.accentGreen.opacity(0.4) : LTColors.border,
+                        lineWidth: 0.6
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private func attachmentOptionRow(_ candidate: SessionExport.AttachmentFileOption) -> some View {
+        let isSelected = candidate == attachmentFiles
+        return Button {
+            attachmentFiles = candidate
+            LTHaptics.tap()
+        } label: {
+            HStack {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isSelected ? LTColors.accentGreen : LTColors.textTertiary)
+                Text(candidate.displayName)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                Spacer()
+                if candidate != .none {
+                    Text("\(attachmentCount) 张")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
             }
             .padding(LTSpacing.m)
             .background(

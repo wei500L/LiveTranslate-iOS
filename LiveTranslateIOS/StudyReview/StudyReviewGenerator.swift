@@ -150,6 +150,7 @@ final class StudyReviewGenerator {
         context: StudyReviewPrompt.ClassContext,
         notes: [String],
         entries: [TranscriptEntry],
+        attachments: [StudyReviewPrompt.AttachmentMaterial] = [],
         resume: Bool
     ) {
         let sessionID = session.id
@@ -157,7 +158,8 @@ final class StudyReviewGenerator {
         progressBySession[sessionID] = Progress(stage: .preparing, done: 0, total: 0)
         tasks[sessionID] = Task { [weak self] in
             await self?.run(
-                session: session, context: context, notes: notes, entries: entries, resume: resume
+                session: session, context: context, notes: notes, entries: entries,
+                attachments: attachments, resume: resume
             )
             // run() clears the session's progress on every exit path.
             self?.tasks[sessionID] = nil
@@ -169,6 +171,7 @@ final class StudyReviewGenerator {
         context: StudyReviewPrompt.ClassContext,
         notes: [String],
         entries: [TranscriptEntry],
+        attachments: [StudyReviewPrompt.AttachmentMaterial],
         resume: Bool
     ) async {
         let sessionID = session.id
@@ -202,7 +205,8 @@ final class StudyReviewGenerator {
                     )
                 }
                 let userPrompt = StudyReviewPrompt.extractionUserPrompt(
-                    context: context, entries: materials, notes: notes
+                    context: context, entries: materials, notes: notes,
+                    attachments: attachments
                 )
                 do {
                     let raw = try await service.complete(
@@ -254,7 +258,8 @@ final class StudyReviewGenerator {
             )
             let extractions = chunkState.chunks.compactMap(\.extractionJSON)
             let mergePrompt = StudyReviewPrompt.mergeUserPrompt(
-                context: context, chunkExtractions: extractions, notes: notes
+                context: context, chunkExtractions: extractions, notes: notes,
+                attachments: attachments
             )
             let mergedRaw: String
             do {
@@ -269,7 +274,11 @@ final class StudyReviewGenerator {
                 progressBySession[sessionID] = nil
                 return
             }
-            var content = try StudyReviewParser.parse(text: mergedRaw, citationIDs: chunkState.citationIDs)
+            var content = try StudyReviewParser.parse(
+                text: mergedRaw,
+                citationIDs: chunkState.citationIDs,
+                attachmentIDs: attachments.map(\.id)
+            )
             // The user's own additions always survive a regeneration.
             if let old = StudyReviewContent.decode(review.contentJSON), !old.userNotes.isEmpty {
                 content.userNotes = old.userNotes

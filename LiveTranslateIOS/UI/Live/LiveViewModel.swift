@@ -261,10 +261,19 @@ final class LiveViewModel {
     }
 
     /// The entry the current focus points at (what "现在讲的" means for a
-    /// note taken right now).
+    /// note or image taken right now).
     private var currentAnchoredEntry: LiveTranscriptItem? {
         entries.last { $0.sequenceID == currentSequenceID }
     }
+
+    /// The persisted entry id a new note/image anchors to (nil when nothing
+    /// has landed yet). Exposed for the attachment capture sheet.
+    var currentAnchorEntryID: UUID? {
+        currentAnchoredEntry?.entryID
+    }
+
+    /// Session id alias for the capture sheet's import target.
+    var sessionID: UUID? { activeSessionID }
 
     /// Timestamp label of the entry a new note would anchor to (empty when
     /// nothing has landed yet).
@@ -296,6 +305,25 @@ final class LiveViewModel {
     func deleteNote(_ note: SessionNote) {
         try? environment?.repository.deleteNote(note)
         reloadNotes()
+    }
+
+    // MARK: - Attachments (this session)
+
+    /// The classroom's captured/imported images (persisted; survive the
+    /// classroom ending).
+    private(set) var sessionAttachments: [SessionAttachment] = []
+
+    func reloadAttachments() {
+        guard let environment, let sessionID = activeSessionID else {
+            sessionAttachments = []
+            return
+        }
+        sessionAttachments = (try? environment.repository.attachments(forSessionID: sessionID)) ?? []
+    }
+
+    func deleteAttachment(_ attachment: SessionAttachment) {
+        try? environment?.repository.deleteAttachment(attachment)
+        reloadAttachments()
     }
 
     /// Timestamp shown for a note in class: the anchored entry's offset

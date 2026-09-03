@@ -214,6 +214,7 @@ final class GuestDataMigration {
             }
             copyGuestNotes(guestNotes)
             copyGuestReviews(guestReviews)
+            copyGuestAttachments()
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -365,6 +366,69 @@ final class GuestDataMigration {
         }
     }
 
+    /// Copies guest attachments whose session now exists in the account
+    /// store: the metadata row via the remote-apply path AND the image
+    /// files from the guest store into the account's file store. A missing
+    /// local file (should not happen — the guest store is intact) is
+    /// logged and skipped, never fatal.
+    private func copyGuestAttachments() {
+        let guestFileStore = AttachmentFileStore(accountID: nil)
+        let accountFileStore = AttachmentFileStoreShared.store
+        for snapshot in reader.attachmentSnapshots() {
+            guard (try? repository.attachment(id: snapshot.id)) ?? nil == nil else { continue }
+            let record = SyncServerRecordDTO(
+                id: snapshot.id,
+                title: snapshot.title,
+                sessionId: snapshot.sessionID,
+                courseId: snapshot.courseID,
+                anchorEntryId: snapshot.anchorEntryID,
+                attachmentKind: snapshot.kindRaw,
+                attachmentMime: snapshot.mimeType,
+                attachmentWidth: snapshot.pixelWidth,
+                attachmentHeight: snapshot.pixelHeight,
+                attachmentFileSize: snapshot.fileSize,
+                attachmentHash: snapshot.contentHash,
+                attachmentCapturedAt: snapshot.capturedAt,
+                attachmentCaption: snapshot.caption,
+                attachmentSortIndex: snapshot.sortIndex,
+                attachmentTransform: snapshot.transformJSON.isEmpty ? nil : snapshot.transformJSON,
+                attachmentAnalysisStatus: snapshot.analysisStatusRaw,
+                attachmentAnalysis: snapshot.analysisJSON.isEmpty ? nil : snapshot.analysisJSON,
+                attachmentOcrText: snapshot.ocrText.isEmpty ? nil : snapshot.ocrText,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteAttachment(record: record, serverVersion: 0)
+            // Files: original (extension from mime) + preview + analysis.
+            guard let accountFileStore else { continue }
+            let ext = AttachmentFileStore.fileExtension(forMIME: snapshot.mimeType)
+            if let original = guestFileStore.originalData(
+                for: snapshot.id, sessionID: snapshot.sessionID
+            ) {
+                try? accountFileStore.writeSynced(
+                    original, variant: .original,
+                    attachmentID: snapshot.id, sessionID: snapshot.sessionID,
+                    fileExtension: ext
+                )
+            }
+            if let preview = guestFileStore.previewOrOriginalData(
+                for: snapshot.id, sessionID: snapshot.sessionID
+            ) {
+                try? accountFileStore.writeSynced(
+                    preview, variant: .preview,
+                    attachmentID: snapshot.id, sessionID: snapshot.sessionID
+                )
+            }
+            if let analysis = guestFileStore.analysisData(
+                for: snapshot.id, sessionID: snapshot.sessionID
+            ) {
+                try? accountFileStore.writeSynced(
+                    analysis, variant: .analysis,
+                    attachmentID: snapshot.id, sessionID: snapshot.sessionID
+                )
+            }
+        }
+    }
+
     /// Merges the guest bookmark ids into the account's store (union —
     /// existing account bookmarks win). Runs on the account's BookmarkStore.
     private func mergeGuestBookmarks() {
@@ -399,6 +463,8 @@ final class GuestDataMigration {
         for suffix in ["", "-wal", "-shm"] {
             try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
         }
+        // The guest attachment files follow the guest copy.
+        AttachmentFileStore(accountID: nil).removeAll()
         // Clear the guest bookmark record too (its sessions are gone).
         UserDefaults.standard.removeObject(forKey: AccountScope.bookmarkKey(accountID: nil))
         Self.logger.info("guest copy deleted after migration")
@@ -483,9 +549,33 @@ struct GuestLibraryReader {
         var sourceUpdatedAt: Date?
     }
 
+    /// Sendable snapshot of one guest attachment (metadata; the FILES are
+    /// copied separately by the migration through the file stores).
+    struct AttachmentSnapshot: Sendable {
+        var id: UUID
+        var sessionID: UUID
+        var courseID: UUID?
+        var anchorEntryID: UUID?
+        var capturedAt: Date
+        var title: String
+        var caption: String
+        var kindRaw: String
+        var mimeType: String
+        var pixelWidth: Int
+        var pixelHeight: Int
+        var fileSize: Int64
+        var contentHash: String
+        var sortIndex: Int
+        var transformJSON: String
+        var analysisStatusRaw: String
+        var analysisJSON: String
+        var ocrText: String
+    }
+
     private static let schema = Schema([
         ClassroomSession.self, TranscriptEntry.self,
-        Course.self, SessionNote.self, StudyReview.self
+        Course.self, SessionNote.self, StudyReview.self,
+        SessionAttachment.self
     ])
 
     private var guestURL: URL { AccountScope.guestDatabaseURL }
@@ -614,6 +704,37 @@ struct GuestLibraryReader {
                 id: r.id, status: r.status, contentJSON: r.contentJSON,
                 generatedJSON: r.generatedJSON, reviewModel: r.reviewModel,
                 generatedAt: r.generatedAt, sourceUpdatedAt: r.sourceUpdatedAt
+            )
+        }
+    }
+
+    /// All guest attachments (values only). Files live in the GUEST
+    /// attachment store; the migration copies both.
+    func attachmentSnapshots() -> [AttachmentSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<SessionAttachment>())) ?? []
+        return rows.map { row in
+            AttachmentSnapshot(
+                id: row.id,
+                sessionID: row.sessionID,
+                courseID: row.courseID,
+                anchorEntryID: row.anchorEntryID,
+                capturedAt: row.capturedAt,
+                title: row.title,
+                caption: row.caption,
+                kindRaw: row.kindRaw,
+                mimeType: row.mimeType,
+                pixelWidth: row.pixelWidth,
+                pixelHeight: row.pixelHeight,
+                fileSize: row.fileSize,
+                contentHash: row.contentHash,
+                sortIndex: row.sortIndex,
+                transformJSON: row.transformJSON,
+                analysisStatusRaw: row.analysisStatusRaw,
+                analysisJSON: row.analysisJSON,
+                ocrText: row.ocrText
             )
         }
     }

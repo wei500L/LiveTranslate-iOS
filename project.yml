@@ -50,6 +50,10 @@ targets:
           LiveTranslate uses the microphone to recognize Russian speech on
           device with GigaAM-v3 and show a Chinese translation. Audio is
           processed locally and is not saved unless you enable it in Settings.
+        NSCameraUsageDescription: >-
+          LiveTranslate uses the camera to photograph blackboards and slides
+          during class. Photos stay on your device unless you enable cloud
+          sync.
         UIBackgroundModes:
           - audio
         ITSAppUsesNonExemptEncryption: false

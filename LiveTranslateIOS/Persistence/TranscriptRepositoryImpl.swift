@@ -37,6 +37,14 @@ enum SessionRecordings {
     }
 }
 
+/// Thread-safe holder for the profile's AttachmentFileStore, so the
+/// repository (main-actor) can reap files on deletes without a stored
+/// reference in the protocol. Set by the composition root at profile
+/// build; nil = no file store (demo/in-memory).
+enum AttachmentFileStoreShared {
+    nonisolated(unsafe) static var store: AttachmentFileStore?
+}
+
 @MainActor
 final class TranscriptRepository: ClassroomRepositoryProtocol {
     private let container: ModelContainer
@@ -172,6 +180,21 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 hitSessionIDs.insert(review.sessionID)
             }
         }
+        // Attachment content participates: user titles/captions, local OCR
+        // text and the persisted multimodal analysis (never a live model
+        // call — search reads stored text only).
+        let attachments = try context.fetch(FetchDescriptor<SessionAttachment>())
+        for attachment in attachments {
+            var text = attachment.title + "\n" + attachment.caption
+            if !attachment.ocrText.isEmpty { text += "\n" + attachment.ocrText }
+            if !attachment.analysisJSON.isEmpty,
+               let analysis = AttachmentAnalysisResult.decode(attachment.analysisJSON) {
+                text += "\n" + analysis.searchableText
+            }
+            if text.lowercased().contains(needle) {
+                hitSessionIDs.insert(attachment.sessionID)
+            }
+        }
         return all.filter { session in
             if hitSessionIDs.contains(session.id) { return true }
             if session.title.lowercased().contains(needle) { return true }
@@ -200,8 +223,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         let sessionID = session.id
         // Notes are session-scoped with no SwiftData relationship — delete
         // them explicitly alongside the cascade-deleted entries, together
-        // with the session's study review. Raw recordings (保存原始录音)
-        // are session data too.
+        // with the session's study review AND attachments (metadata rows
+        // plus their files). Raw recordings (保存原始录音) are session data
+        // too.
         let noteDescriptor = FetchDescriptor<SessionNote>(
             predicate: #Predicate { $0.sessionID == sessionID }
         )
@@ -211,9 +235,16 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         if let review = try studyReview(forSessionID: sessionID) {
             context.delete(review)
         }
+        let attachmentDescriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.sessionID == sessionID }
+        )
+        for attachment in try context.fetch(attachmentDescriptor) {
+            context.delete(attachment)
+        }
         context.delete(session)
         try context.save()
         SessionRecordings.remove(for: sessionID)
+        AttachmentFileStoreShared.store?.removeSessionFiles(for: sessionID)
         mutationObserver?.sessionDeleted(id: sessionID)
     }
 
@@ -223,8 +254,10 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         try context.delete(model: ClassroomSession.self)
         try context.delete(model: SessionNote.self)
         try context.delete(model: StudyReview.self)
+        try context.delete(model: SessionAttachment.self)
         try context.save()
         SessionRecordings.removeAll()
+        AttachmentFileStoreShared.store?.removeAll()
         for id in ids {
             mutationObserver?.sessionDeleted(id: id)
         }
@@ -300,6 +333,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let review = try context.fetch(descriptor).first else { return }
             review.serverVersion = max(review.serverVersion, version)
+        case .attachment:
+            let descriptor = FetchDescriptor<SessionAttachment>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let attachment = try context.fetch(descriptor).first else { return }
+            attachment.serverVersion = max(attachment.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -418,9 +457,16 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         if let review = try studyReview(forSessionID: id) {
             context.delete(review)
         }
+        let attachmentDescriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.sessionID == id }
+        )
+        for attachment in try context.fetch(attachmentDescriptor) {
+            context.delete(attachment)
+        }
         try context.delete(session)
         try context.save()
         SessionRecordings.remove(for: id)
+        AttachmentFileStoreShared.store?.removeSessionFiles(for: id)
     }
 
     func deleteEntryByID(_ id: UUID) throws {
@@ -431,14 +477,21 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         if let session = entry.session, session.entryCount > 0 {
             session.entryCount -= 1
         }
-        // Notes anchored to the removed entry keep their text — the anchor
-        // is metadata and is simply dropped.
+        // Notes AND attachments anchored to the removed entry keep their
+        // content — the anchor is metadata and is simply dropped.
         let noteDescriptor = FetchDescriptor<SessionNote>(
             predicate: #Predicate { $0.anchorEntryID == id }
         )
         for note in try context.fetch(noteDescriptor) {
             note.anchorEntryID = nil
             note.updatedAt = .now
+        }
+        let attachmentDescriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.anchorEntryID == id }
+        )
+        for attachment in try context.fetch(attachmentDescriptor) {
+            attachment.anchorEntryID = nil
+            attachment.updatedAt = .now
         }
         try context.delete(entry)
         try context.save()
@@ -464,6 +517,13 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             predicate: #Predicate { $0.id == id }
         )
         return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
+
+    func courseID(sessionID: UUID) throws -> UUID? {
+        let descriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == sessionID }
+        )
+        return try context.fetch(descriptor).first?.courseID
     }
 
     /// First-upload snapshot: every course, session, entry and note becomes
@@ -529,6 +589,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                     entityID: review.id,
                     operation: .upsert,
                     baseServerVersion: review.serverVersion,
+                    payload: payload
+                ))
+            }
+            let attachments = (try? attachments(forSessionID: session.id)) ?? []
+            for attachment in attachments {
+                var payload = CloudSyncService.payload(for: attachment)
+                payload.sessionId = attachment.sessionID
+                items.append(SyncOutboxItem(
+                    entityType: .attachment,
+                    entityID: attachment.id,
+                    operation: .upsert,
+                    baseServerVersion: attachment.serverVersion,
                     payload: payload
                 ))
             }
@@ -868,10 +940,10 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             if let status = record.reviewStatus { existing.status = status }
             if !remoteContent.isEmpty {
                 existing.contentJSON = remoteContent
-                let remoteGenerated = record.reviewGenerated ?? ""
+                let remoteGenerated = record.reviewGeneratedContent ?? ""
                 existing.hasUserEdits = !remoteGenerated.isEmpty && remoteContent != remoteGenerated
             }
-            if let generated = record.reviewGenerated, !generated.isEmpty {
+            if let generated = record.reviewGeneratedContent, !generated.isEmpty {
                 existing.generatedJSON = generated
             }
             if let model = record.reviewModel, !model.isEmpty {
@@ -880,7 +952,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             if let generatedAt = record.reviewGeneratedAt {
                 existing.generatedAt = generatedAt
             }
-            if let sourceAt = record.reviewSourceAt {
+            if let sourceAt = record.reviewSourceUpdatedAt {
                 existing.sourceUpdatedAt = sourceAt
             }
             existing.serverVersion = serverVersion
@@ -893,12 +965,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             sessionID: recordID,
             status: StudyReviewStatus(rawValue: record.reviewStatus ?? "") ?? .completed,
             contentJSON: remoteContent,
-            generatedJSON: record.reviewGenerated ?? "",
+            generatedJSON: record.reviewGeneratedContent ?? "",
             hasUserEdits: false,
             chunkStateJSON: "",
             reviewModel: record.reviewModel ?? "",
             generatedAt: record.reviewGeneratedAt,
-            sourceUpdatedAt: record.reviewSourceAt,
+            sourceUpdatedAt: record.reviewSourceUpdatedAt,
             serverVersion: serverVersion
         )
         context.insert(review)
@@ -912,5 +984,254 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         guard let review = try context.fetch(descriptor).first else { return }
         context.delete(review)
         try context.save()
+    }
+
+    // MARK: - Session attachments
+
+    func attachments(forSessionID id: UUID) throws -> [SessionAttachment] {
+        let descriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.sessionID == id },
+            sortBy: [SortDescriptor(\.capturedAt), SortDescriptor(\.sortIndex)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func attachment(id: UUID) throws -> SessionAttachment? {
+        let descriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.id == id }
+        )
+        return try context.fetch(descriptor).first
+    }
+
+    func allAttachments() throws -> [SessionAttachment] {
+        try context.fetch(FetchDescriptor<SessionAttachment>())
+    }
+
+    func attachmentExists(sessionID: UUID, contentHash: String) throws -> Bool {
+        guard !contentHash.isEmpty else { return false }
+        let descriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.sessionID == sessionID && $0.contentHash == contentHash }
+        )
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
+
+    func addAttachment(_ draft: AttachmentDraft, toSessionID id: UUID) throws -> SessionAttachment {
+        // The session must exist — attachments are session-scoped (the
+        // importer guarantees the files are already on disk).
+        let sessionDescriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let session = try context.fetch(sessionDescriptor).first else {
+            throw RepositoryError.sessionMissing
+        }
+        let attachment = SessionAttachment(
+            sessionID: id,
+            courseID: draft.courseID,
+            anchorEntryID: draft.anchorEntryID,
+            capturedAt: draft.capturedAt,
+            title: draft.title,
+            caption: draft.caption,
+            kind: draft.kind,
+            mimeType: draft.mimeType,
+            pixelWidth: draft.pixelWidth,
+            pixelHeight: draft.pixelHeight,
+            fileSize: draft.fileSize,
+            contentHash: draft.contentHash,
+            sortIndex: draft.sortIndex
+        )
+        context.insert(attachment)
+        session.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentCreated(attachment)
+        return attachment
+    }
+
+    func updateAttachmentTitle(_ attachment: SessionAttachment, title: String) throws {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard attachment.title != trimmed else { return }
+        attachment.title = trimmed
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentCaption(_ attachment: SessionAttachment, caption: String) throws {
+        guard attachment.caption != caption else { return }
+        attachment.caption = caption
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentKind(_ attachment: SessionAttachment, kind: AttachmentKind) throws {
+        guard attachment.kind != kind else { return }
+        attachment.kind = kind
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentAnchor(_ attachment: SessionAttachment, anchorEntryID: UUID?) throws {
+        guard attachment.anchorEntryID != anchorEntryID else { return }
+        attachment.anchorEntryID = anchorEntryID
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentSortIndex(_ attachment: SessionAttachment, sortIndex: Int) throws {
+        guard attachment.sortIndex != sortIndex else { return }
+        attachment.sortIndex = sortIndex
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentTransform(_ attachment: SessionAttachment, transform: AttachmentTransform) throws {
+        let json = transform.encodedJSON() ?? ""
+        guard attachment.transformJSON != json else { return }
+        attachment.transformJSON = json
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentOCRText(_ attachment: SessionAttachment, text: String) throws {
+        guard attachment.ocrText != text else { return }
+        attachment.ocrText = text
+        attachment.updatedAt = .now
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func completeAttachmentAnalysis(
+        _ attachment: SessionAttachment, result: AttachmentAnalysisResult, status: AttachmentAnalysisStatus
+    ) throws {
+        guard let json = result.encodedJSON() else { return }
+        attachment.analysisJSON = json
+        attachment.analysisStatus = status
+        attachment.updatedAt = .now
+        // A new analysis result is new study material — an existing review
+        // must show 课堂资料已更新. Bumping the session's updatedAt drives
+        // the existing staleness check (no extra sync churn: the session
+        // row is not re-notified).
+        if let session = try? context.fetch(FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == attachment.sessionID }
+        )).first {
+            session.updatedAt = .now
+        }
+        try context.save()
+        mutationObserver?.attachmentUpdated(attachment)
+    }
+
+    func updateAttachmentAnalysisProgress(
+        _ attachment: SessionAttachment, status: AttachmentAnalysisStatus
+    ) throws {
+        guard attachment.analysisStatus != status else { return }
+        attachment.analysisStatus = status
+        attachment.updatedAt = .now
+        try context.save()
+    }
+
+    func failAttachmentAnalysis(_ attachment: SessionAttachment) throws {
+        attachment.analysisStatus = .failed
+        attachment.updatedAt = .now
+        try context.save()
+        // A failed first run (no result) stays device-local; a failed
+        // RE-analysis over an existing result keeps the old result in sync
+        // so other devices see the same state.
+        if !attachment.analysisJSON.isEmpty {
+            mutationObserver?.attachmentUpdated(attachment)
+        }
+    }
+
+    func deleteAttachment(_ attachment: SessionAttachment) throws {
+        let attachmentID = attachment.id
+        let sessionID = attachment.sessionID
+        context.delete(attachment)
+        // Removal is a study-material change too (review staleness).
+        if let session = try? context.fetch(FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.id == sessionID }
+        )).first {
+            session.updatedAt = .now
+        }
+        try context.save()
+        AttachmentFileStoreShared.store?.removeFiles(for: attachmentID, sessionID: sessionID)
+        mutationObserver?.attachmentDeleted(id: attachmentID)
+    }
+
+    func applyRemoteAttachment(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id, let sessionID = record.sessionId else { return }
+        let descriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let analysisJSON = record.attachmentAnalysis ?? ""
+        let attachment: SessionAttachment
+        if let existing {
+            attachment = existing
+            if let title = record.title, !title.isEmpty { attachment.title = title }
+            attachment.caption = record.attachmentCaption ?? attachment.caption
+            if let kindRaw = record.attachmentKind, let kind = AttachmentKind(rawValue: kindRaw) {
+                attachment.kind = kind
+            }
+            if let mime = record.attachmentMime, !mime.isEmpty { attachment.mimeType = mime }
+            if let width = record.attachmentWidth { attachment.pixelWidth = width }
+            if let height = record.attachmentHeight { attachment.pixelHeight = height }
+            // Hash/size are identity — immutable after creation.
+            if let sortIndex = record.attachmentSortIndex { attachment.sortIndex = sortIndex }
+            if let capturedAt = record.attachmentCapturedAt { attachment.capturedAt = capturedAt }
+            attachment.transformJSON = record.attachmentTransform ?? attachment.transformJSON
+            // Full row state: a record without an anchor means unanchored.
+            attachment.anchorEntryID = record.anchorEntryId
+            attachment.courseID = record.courseId
+            if let ocr = record.attachmentOcrText, !ocr.isEmpty { attachment.ocrText = ocr }
+            if let statusRaw = record.attachmentAnalysisStatus,
+               let status = AttachmentAnalysisStatus(rawValue: statusRaw),
+               status != .analyzing {
+                attachment.analysisStatus = status
+            }
+            if !analysisJSON.isEmpty { attachment.analysisJSON = analysisJSON }
+            attachment.serverVersion = serverVersion
+        } else {
+            attachment = SessionAttachment(
+                id: recordID,
+                sessionID: sessionID,
+                courseID: record.courseId,
+                anchorEntryID: record.anchorEntryId,
+                capturedAt: record.attachmentCapturedAt ?? .now,
+                title: record.title ?? "",
+                caption: record.attachmentCaption ?? "",
+                kind: AttachmentKind(rawValue: record.attachmentKind ?? "") ?? .other,
+                mimeType: record.attachmentMime ?? "",
+                pixelWidth: record.attachmentWidth ?? 0,
+                pixelHeight: record.attachmentHeight ?? 0,
+                fileSize: record.attachmentFileSize ?? 0,
+                contentHash: record.attachmentHash ?? "",
+                sortIndex: record.attachmentSortIndex ?? 0,
+                analysisStatus: AttachmentAnalysisStatus(
+                    rawValue: record.attachmentAnalysisStatus ?? ""
+                ) ?? .pending,
+                analysisJSON: analysisJSON,
+                ocrText: record.attachmentOcrText ?? "",
+                serverVersion: serverVersion
+            )
+            attachment.transformJSON = record.attachmentTransform ?? ""
+            context.insert(attachment)
+        }
+        try context.save()
+    }
+
+    func deleteAttachmentByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<SessionAttachment>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let attachment = try context.fetch(descriptor).first else { return }
+        let sessionID = attachment.sessionID
+        context.delete(attachment)
+        try context.save()
+        AttachmentFileStoreShared.store?.removeFiles(for: id, sessionID: sessionID)
     }
 }

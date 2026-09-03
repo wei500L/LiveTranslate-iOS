@@ -33,6 +33,9 @@ final class SettingsStore {
         /// Model for post-class study reviews; empty = inherit the
         /// translation model.
         static let studyReviewModel = "studyReview.model"
+        /// Dedicated model for image understanding (multimodal); empty =
+        /// inherit the study-review model (then the translation model).
+        static let attachmentAnalysisModel = "attachmentAnalysis.model"
     }
 
     /// Live-classroom translation toggle (new-classroom form). When off,
@@ -116,6 +119,12 @@ final class SettingsStore {
         didSet { defaults.set(studyReviewModel, forKey: Keys.studyReviewModel) }
     }
 
+    /// Dedicated model for image understanding; empty = use
+    /// `studyReviewModel` (which itself falls back to `translationModel`).
+    var attachmentAnalysisModel: String {
+        didSet { defaults.set(attachmentAnalysisModel, forKey: Keys.attachmentAnalysisModel) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         preferredBackend = ASRBackendKind(
@@ -150,6 +159,7 @@ final class SettingsStore {
         let conc = defaults.object(forKey: Keys.concurrency) as? Int
         translationConcurrency = conc ?? 2
         studyReviewModel = defaults.string(forKey: Keys.studyReviewModel) ?? ""
+        attachmentAnalysisModel = defaults.string(forKey: Keys.attachmentAnalysisModel) ?? ""
         let liveTranslation = defaults.object(forKey: Keys.liveTranslationEnabled) as? Bool
         liveTranslationEnabled = liveTranslation ?? true
     }

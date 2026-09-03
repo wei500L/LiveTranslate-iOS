@@ -124,6 +124,8 @@ final class CloudSyncService: AuthenticationService {
         debounceTask = nil
         syncTask?.cancel()
         syncTask = nil
+        attachmentUploadTask?.cancel()
+        attachmentUploadTask = nil
         pathMonitor.cancel()
         repository.mutationObserver = nil
         bookmarks.syncObserver = nil
@@ -424,6 +426,23 @@ final class CloudSyncService: AuthenticationService {
         )
         Task { await outbox.enqueue(item) }
         refreshPendingCount()
+    }
+
+    private func enqueueAttachmentUpsert(_ attachment: SessionAttachment) {
+        var payload = Self.payload(for: attachment)
+        payload.sessionId = attachment.sessionID
+        let item = SyncOutboxItem(
+            entityType: .attachment,
+            entityID: attachment.id,
+            operation: .upsert,
+            baseServerVersion: attachment.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+        // The metadata row is queued — the FILES ride the dedicated
+        // upload pass (uploadPendingAttachmentFiles), not the JSON push.
+        scheduleAttachmentFileUpload()
     }
 
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
@@ -731,7 +750,7 @@ final class CloudSyncService: AuthenticationService {
         entityType: SyncEntityType, entityID: UUID, version: Int
     ) {
         switch entityType {
-        case .session, .entry, .course, .note, .studyReview:
+        case .session, .entry, .course, .note, .studyReview, .attachment:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -778,6 +797,8 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteNoteByID(entityID)
         case .studyReview:
             try? repository.deleteStudyReviewByID(entityID)
+        case .attachment:
+            try? repository.deleteAttachmentByID(entityID)
         }
     }
 
@@ -812,6 +833,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteNote(record: record, serverVersion: serverVersion)
         case .studyReview:
             try? repository.applyRemoteStudyReview(record: record, serverVersion: serverVersion)
+        case .attachment:
+            try? repository.applyRemoteAttachment(record: record, serverVersion: serverVersion)
+            // Newly-learned attachments sync their previews on demand —
+            // the file upload pass picks up anything local worth pushing.
         }
     }
 
@@ -829,11 +854,13 @@ final class CloudSyncService: AuthenticationService {
             return
         }
         // Reset the cursor so a later re-enable does a fresh pull, drop
-        // pending upserts (the user asked the cloud copy to stay gone).
+        // pending upserts (the user asked the cloud copy to stay gone) and
+        // forget which attachment files were uploaded (they are gone too).
         cursorStore.resetCursor()
         cursorStore.cloudDeletedAt = .now
         cloudDeletedRecently = true
         defaults.set(false, forKey: initialUploadKey)
+        defaults.removeObject(forKey: attachmentUploadKey)
         await outbox.dropAllUpserts()
         refreshPendingCount()
         phase = .cloudDeleted
@@ -858,9 +885,160 @@ final class CloudSyncService: AuthenticationService {
         cursorStore.cloudDeletedAt = nil
         cloudDeletedRecently = false
         defaults.set(false, forKey: initialUploadKey)
+        defaults.removeObject(forKey: attachmentUploadKey)
         await refreshSignInState()
         phase = .signedOut
         return true
+    }
+
+    // MARK: - Attachment file upload (binary, outside the JSON push)
+
+    /// Per-attachment file upload bookkeeping (metadata pushed → bytes
+    /// confirmed). Survives restarts via the defaults key.
+    enum AttachmentFileState: String, Codable {
+        case pendingUpload
+        case uploaded
+    }
+
+    private var attachmentUploadTask: Task<Void, Never>?
+    private let attachmentUploadKey = "cloudsync.attachmentUploads"
+
+    private func attachmentUploadRecord() -> [String: AttachmentFileState] {
+        (defaults.dictionary(forKey: attachmentUploadKey) as? [String: String])
+            .map { dict in
+                dict.compactMapValues(AttachmentFileState.init(rawValue:))
+            } ?? [:]
+    }
+
+    private func saveAttachmentUploadRecord(_ record: [String: AttachmentFileState]) {
+        defaults.set(
+            Dictionary(uniqueKeysWithValues: record.map { ($0.key, $1.rawValue) }),
+            forKey: attachmentUploadKey
+        )
+    }
+
+    /// Debounced file-upload pass: uploads preview + original for every
+    /// attachment whose metadata has been pushed (serverVersion > 0) but
+    /// whose files are not yet confirmed server-side.
+    func scheduleAttachmentFileUpload() {
+        attachmentUploadTask?.cancel()
+        attachmentUploadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled else { return }
+            await self.uploadPendingAttachmentFiles()
+        }
+    }
+
+    private func uploadPendingAttachmentFiles() async {
+        guard isSignedIn, cursorStore.isSyncEnabled, isNetworkAvailable else { return }
+        var record = attachmentUploadRecord()
+        guard let all = try? repository.allAttachments() else { return }
+
+        for attachment in all {
+            if Task.isCancelled { return }
+            // Only attachments whose metadata the server already holds.
+            guard attachment.serverVersion > 0 else { continue }
+            let key = attachment.id.uuidString
+            if record[key] == .uploaded { continue }
+            guard let store = AttachmentFileStoreShared.store else { continue }
+
+            // Preview first (lists want it), then the original.
+            for variant: AttachmentFileStore.Variant in [.preview, .original] {
+                let hasLocal = store.fileExists(
+                    for: attachment.id, sessionID: attachment.sessionID, variant: variant
+                )
+                guard hasLocal else { continue } // reclaimed originals skip
+                guard let data = variant == .preview
+                    ? store.previewOrOriginalData(
+                        for: attachment.id, sessionID: attachment.sessionID
+                    )
+                    : store.originalData(
+                        for: attachment.id, sessionID: attachment.sessionID
+                    ) else { continue }
+                do {
+                    try await authSession.authorize { [api] token in
+                        try await api.uploadAttachmentFile(
+                            attachmentID: attachment.id,
+                            variant: variant.rawValue,
+                            data: data,
+                            contentHash: attachment.contentHash,
+                            accessToken: token
+                        )
+                    }
+                } catch let error as SyncAPIError {
+                    // 原图未上传完成时不算"全部同步完成"：leave pending and
+                    // retry on the next scheduled pass.
+                    Self.logger.notice(
+                        "attachment file upload deferred: \(error.localizedDescription, privacy: .public)"
+                    )
+                    return
+                } catch {
+                    return
+                }
+            }
+            record[key] = .uploaded
+            saveAttachmentUploadRecord(record)
+        }
+    }
+
+    /// Whether every synced attachment's files are confirmed server-side
+    /// (drives honest 全部同步完成 presentation).
+    var allAttachmentFilesUploaded: Bool {
+        guard let all = try? repository.allAttachments() else { return true }
+        let record = attachmentUploadRecord()
+        return all
+            .filter { $0.serverVersion > 0 }
+            .allSatisfy { record[$0.id.uuidString] == .uploaded }
+    }
+
+    /// Downloads one variant from the server into the local store
+    /// (on-demand: lists pull previews, the viewer pulls originals).
+    /// Returns the file bytes' availability locally after the attempt.
+    func downloadAttachmentFile(
+        _ attachment: SessionAttachment, variant: AttachmentFileStore.Variant
+    ) async -> Bool {
+        guard isSignedIn else { return false }
+        guard let store = AttachmentFileStoreShared.store else { return false }
+        if store.fileExists(
+            for: attachment.id, sessionID: attachment.sessionID, variant: variant
+        ) { return true }
+        do {
+            let data = try await authSession.authorize { [api] token in
+                try await api.downloadAttachmentFile(
+                    attachmentID: attachment.id,
+                    variant: variant.rawValue,
+                    accessToken: token
+                )
+            }
+            let ext = variant == .original
+                ? AttachmentFileStore.fileExtension(forMIME: attachment.mimeType) : "jpg"
+            try store.writeSynced(
+                data, variant: variant,
+                attachmentID: attachment.id,
+                sessionID: attachment.sessionID,
+                fileExtension: ext
+            )
+            return true
+        } catch {
+            Self.logger.notice(
+                "attachment download failed: \(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    /// 删除云端原图 (storage management): removes the server-side files of
+    /// synced attachments while keeping local files and metadata. The
+    /// upload record forgets them so a later edit re-uploads on demand.
+    func deleteCloudAttachmentFiles(attachmentIDs: [UUID]) async {
+        for id in attachmentIDs {
+            try? await authSession.authorize { [api] token in
+                try await api.deleteAttachmentFiles(attachmentID: id, accessToken: token)
+            }
+        }
+        var record = attachmentUploadRecord()
+        for id in attachmentIDs { record[id.uuidString] = nil }
+        saveAttachmentUploadRecord(record)
     }
 
     // MARK: - Derived state
@@ -967,6 +1145,35 @@ final class CloudSyncService: AuthenticationService {
             reviewSourceUpdatedAt: review.sourceUpdatedAt
         )
     }
+
+    /// Attachment metadata (files travel on /v1/attachments). The
+    /// structured analysis rides as a JSON string; `analyzing` is a
+    /// device-local state and never pushed — terminal states only.
+    static func payload(for attachment: SessionAttachment) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: attachment.title,
+            // Same sentinel rule as notes: an unanchored image explicitly
+            // clears the anchor server-side.
+            courseId: attachment.courseID ?? .nilSentinel,
+            anchorEntryId: attachment.anchorEntryID ?? .nilSentinel,
+            attachmentKind: attachment.kindRaw,
+            attachmentMime: attachment.mimeType,
+            attachmentWidth: attachment.pixelWidth,
+            attachmentHeight: attachment.pixelHeight,
+            attachmentFileSize: attachment.fileSize,
+            attachmentHash: attachment.contentHash,
+            attachmentCapturedAt: attachment.capturedAt,
+            attachmentCaption: attachment.caption,
+            attachmentSortIndex: attachment.sortIndex,
+            attachmentTransform: attachment.transformJSON.isEmpty ? nil : attachment.transformJSON,
+            attachmentAnalysisStatus: attachment.analysisStatus == .analyzing
+                ? AttachmentAnalysisStatus.pending.rawValue
+                : attachment.analysisStatusRaw,
+            attachmentAnalysis: attachment.analysisJSON.isEmpty
+                ? nil : attachment.analysisJSON,
+            attachmentOcrText: attachment.ocrText.isEmpty ? nil : attachment.ocrText
+        )
+    }
 }
 
 // MARK: - TranscriptMutationObserving
@@ -989,6 +1196,9 @@ protocol TranscriptMutationObserving: AnyObject {
     func noteDeleted(id: UUID)
     func studyReviewUpdated(_ review: StudyReview)
     func studyReviewDeleted(id: UUID)
+    func attachmentCreated(_ attachment: SessionAttachment)
+    func attachmentUpdated(_ attachment: SessionAttachment)
+    func attachmentDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -1042,5 +1252,17 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func studyReviewDeleted(id: UUID) {
         enqueueDelete(entityType: .studyReview, entityID: id)
+    }
+
+    func attachmentCreated(_ attachment: SessionAttachment) {
+        enqueueAttachmentUpsert(attachment)
+    }
+
+    func attachmentUpdated(_ attachment: SessionAttachment) {
+        enqueueAttachmentUpsert(attachment)
+    }
+
+    func attachmentDeleted(id: UUID) {
+        enqueueDelete(entityType: .attachment, entityID: id)
     }
 }

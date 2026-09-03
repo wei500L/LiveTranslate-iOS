@@ -30,30 +30,61 @@ enum StudyReviewPrompt {
         }
     }
 
+    /// Analyzed classroom-image material (板书/课件/笔记) woven into the
+    /// prompts. Citation numbers are P-prefixed (`P1`, `P2`…) so they can
+    /// never collide with transcript numbers.
+    struct AttachmentMaterial: Sendable, Equatable {
+        var id: UUID
+        var number: Int
+        var kindName: String
+        var title: String
+        var caption: String
+        /// Bounded digest of the structured analysis (visible text,
+        /// formulas, code, key points).
+        var digest: String
+    }
+
+    private static func attachmentsSection(_ attachments: [AttachmentMaterial]) -> [String] {
+        guard !attachments.isEmpty else { return [] }
+        var lines: [String] = ["", "课堂图片（板书、课件、手写笔记的理解结果）："]
+        for material in attachments {
+            var line = "[P\(material.number)] \(material.kindName)"
+            if !material.title.isEmpty { line += " · \(material.title)" }
+            lines.append(line)
+            var body = material.digest
+            if !material.caption.isEmpty {
+                body = "学生说明：\(material.caption)\n\(body)"
+            }
+            lines.append("    " + body.replacingOccurrences(of: "\n", with: "\n    "))
+        }
+        return lines
+    }
+
     // MARK: - Chunk extraction
 
     static func extractionSystemPrompt() -> String {
         """
-        你是课堂学习助手。用户是在俄罗斯大学留学的中国学生，刚上完一堂用俄语授课的课程。你会收到这堂课转录文本的一部分（每条带 [编号]、时间、俄语原文与中文翻译），可能还有学生的课堂笔记。请从这部分内容中提取学习材料。
+        你是课堂学习助手。用户是在俄罗斯大学留学的中国学生，刚上完一堂用俄语授课的课程。你会收到这堂课转录文本的一部分（每条带 [编号]、时间、俄语原文与中文翻译），可能还有学生的课堂笔记，也可能有课堂图片（黑板、课件、手写笔记，带 [P编号]）。请从这部分内容中提取学习材料。
 
         要求：
         - 只输出一个 JSON 对象，不要输出任何其他文字或代码块标记。
         - topic：这一部分的主题（一句话，若内容太杂可概括）。
-        - keyPoints：这部分真正重要的概念、公式、定义、方法或结论；不要把每句话都列成重点。
+        - keyPoints：这部分真正重要的概念、公式、定义、方法或结论；不要把每句话都列成重点。黑板公式、课件定义、图表含义、程序代码等只有图片里才有的内容，必须纳入。
         - terms：本部分出现的学科专业术语（俄语原词 + 中文含义 + 简短解释）；不要收录普通高频词汇。
-        - assignments：只收录老师明确布置的任务（作业、阅读、截止日期、下节课准备、需提交材料）。没有明确证据时返回空数组，绝不要猜测。
+        - assignments：只收录老师明确布置的任务（作业、阅读、截止日期、下节课准备、需提交材料），包括图片中出现但老师没有念出的要求。没有明确证据时返回空数组，绝不要猜测。
         - uncertainties：转录明显不完整、翻译可疑、上下文不足或含义不确定、值得学生回看原文确认的内容。
-        - 每条内容用 cites 标注其来源转录编号，只能使用本次输入中出现的编号；无法确定来源时用空数组。
+        - 每条内容用 cites 标注其来源转录编号，用 refAttachments 标注其来源图片编号（P 编号的数字部分）；只能使用本次输入中出现的编号；无法确定来源时用空数组。
 
         JSON 格式：
-        {"topic": "…", "keyPoints": [{"text": "…", "cites": [1]}], "terms": [{"russian": "…", "chinese": "…", "explanation": "…", "cites": [2]}], "assignments": [{"text": "…", "cites": [3]}], "uncertainties": [{"text": "…", "cites": [4]}]}
+        {"topic": "…", "keyPoints": [{"text": "…", "cites": [1], "refAttachments": [1]}], "terms": [{"russian": "…", "chinese": "…", "explanation": "…", "cites": [2]}], "assignments": [{"text": "…", "cites": [3]}], "uncertainties": [{"text": "…", "cites": [4]}]}
         """
     }
 
     static func extractionUserPrompt(
         context: ClassContext,
         entries: [EntryMaterial],
-        notes: [String]
+        notes: [String],
+        attachments: [AttachmentMaterial] = []
     ) -> String {
         var lines: [String] = []
         let contextLine = context.contextLine
@@ -68,6 +99,7 @@ enum StudyReviewPrompt {
                 lines.append("    中文：\(chinese)")
             }
         }
+        lines.append(contentsOf: attachmentsSection(attachments))
         if !notes.isEmpty {
             lines.append("")
             lines.append("学生课堂笔记（参考，不必逐条处理）：")
@@ -82,28 +114,29 @@ enum StudyReviewPrompt {
 
     static func mergeSystemPrompt() -> String {
         """
-        你是课堂学习助手。以下输入是对一堂课分段提取的结果（JSON 对象数组，每段对应课堂的一部分）。请把它们合并为一份完整的课后复习整理。
+        你是课堂学习助手。以下输入是对一堂课分段提取的结果（JSON 对象数组，每段对应课堂的一部分），以及课堂图片（板书、课件、手写笔记，带 [P编号]）的理解结果。请把它们合并为一份完整的课后复习整理。
 
         要求：
         - 只输出一个 JSON 对象，不要输出任何其他文字或代码块标记。
         - topic：用一句话概括本堂课的主题。
         - summary：面向复习的中文摘要（约 200～400 字），概括本堂课讲了什么、按什么脉络展开、最重要的结论；写成连贯的段落，不要罗列条目。
         - outline：层级提纲（最多三层），按授课逻辑组织；每个节点有 title，可附 detail（关键解释、示例、结论）；保留来源编号。
-        - keyPoints：合并并去重各段的重点；保留全课最重要的内容，不要超过 15 条。
+        - keyPoints：合并并去重各段的重点；黑板公式、课件定义、图表含义、程序代码等图片内容必须保留；不要超过 15 条。
         - terms：合并去重各段术语；保留专业术语。
-        - assignments：合并各段识别到的明确任务；若所有段落都没有明确任务，返回空数组。
+        - assignments：合并各段识别到的明确任务（包括图片中出现但老师没有念出的作业要求）；若所有部分都没有明确任务，返回空数组。
         - uncertainties：合并值得回看原文确认的内容，不要超过 10 条。
-        - cites 只能使用输入中出现的转录编号。
+        - cites 只能使用输入中出现的转录编号；refAttachments 只能使用输入中出现的 P 图片编号的数字部分。
 
         JSON 格式：
-        {"topic": "…", "summary": "…", "outline": [{"title": "…", "detail": "…", "cites": [1], "children": []}], "keyPoints": [{"text": "…", "cites": [2]}], "terms": [{"russian": "…", "chinese": "…", "explanation": "…", "cites": [3]}], "assignments": [{"text": "…", "cites": [4]}], "uncertainties": [{"text": "…", "cites": [5]}]}
+        {"topic": "…", "summary": "…", "outline": [{"title": "…", "detail": "…", "cites": [1], "refAttachments": [1], "children": []}], "keyPoints": [{"text": "…", "cites": [2]}], "terms": [{"russian": "…", "chinese": "…", "explanation": "…", "cites": [3]}], "assignments": [{"text": "…", "cites": [4]}], "uncertainties": [{"text": "…", "cites": [5]}]}
         """
     }
 
     static func mergeUserPrompt(
         context: ClassContext,
         chunkExtractions: [String],
-        notes: [String]
+        notes: [String],
+        attachments: [AttachmentMaterial] = []
     ) -> String {
         var lines: [String] = []
         let contextLine = context.contextLine
@@ -116,6 +149,7 @@ enum StudyReviewPrompt {
             lines.append("—— 第 \(index + 1) 部分 ——")
             lines.append(extraction)
         }
+        lines.append(contentsOf: attachmentsSection(attachments))
         if !notes.isEmpty {
             lines.append("")
             lines.append("学生课堂笔记（供理解上下文，不要求纳入输出）：")

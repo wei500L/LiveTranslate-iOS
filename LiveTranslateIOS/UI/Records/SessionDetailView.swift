@@ -22,10 +22,15 @@ struct SessionDetailView: View {
     @State private var pendingReviewJump: UUID?
     @State private var pushingReview = false
     @FocusState private var searchFocused: Bool
+    /// The detail scroll's proxy, captured when the reader renders (the
+    /// attachments landing jump needs it from outside `detailContent`).
+    @State private var detailScrollProxy: ScrollViewProxy?
 
     let sessionID: UUID
     /// Opens the study-review page right away (search hit landing).
     var openReviewOnLoad = false
+    /// Scrolls to the 板书与图片 section on load (attachment search hit).
+    var openAttachmentsOnLoad = false
 
     /// What the note editor sheet is editing (Identifiable so it can drive
     /// `sheet(item:)`).
@@ -69,6 +74,16 @@ struct SessionDetailView: View {
                 pushingReview = true
             }
         }
+        .onChange(of: viewModel.isLoaded) { _, loaded in
+            guard loaded, openAttachmentsOnLoad else { return }
+            // Give the scroll content one layout pass before jumping.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                withAnimation(LTMotion.resolved(reduceMotion)) {
+                    detailScrollProxy?.scrollTo(attachmentSectionAnchor, anchor: .top)
+                }
+            }
+        }
         .navigationDestination(isPresented: $pushingReview) {
             StudyReviewView(
                 sessionID: sessionID,
@@ -86,14 +101,20 @@ struct SessionDetailView: View {
             }
         }
         .sheet(item: $shareItem) { item in
-            ShareSheet(items: [item.url])
+            ShareSheet(items: item.allURLs)
         }
         .sheet(isPresented: $exportSheet) {
             if let session = viewModel.session {
                 ExportOptionsSheet(
-                    hasReview: viewModel.hasReviewResult
-                ) { scope, format in
-                    Task { await export(session: session, scope: scope, format: format) }
+                    hasReview: viewModel.hasReviewResult,
+                    attachmentCount: viewModel.attachments.count
+                ) { scope, format, attachmentFiles in
+                    Task {
+                        await export(
+                            session: session, scope: scope, format: format,
+                            attachmentFiles: attachmentFiles
+                        )
+                    }
                 }
                 .environment(environment)
             }
@@ -116,6 +137,8 @@ struct SessionDetailView: View {
         }
     }
 
+    private let attachmentSectionAnchor = "attachment-section-anchor"
+
     // MARK: - Content
 
     private func detailContent(_ session: ClassroomSession) -> some View {
@@ -125,6 +148,8 @@ struct SessionDetailView: View {
                     VStack(spacing: LTSpacing.l) {
                         headerCard(session)
                         reviewCard
+                        attachmentsCard(session)
+                            .id(attachmentSectionAnchor)
                         notesCard
                         searchCard
                         modeChips
@@ -134,6 +159,7 @@ struct SessionDetailView: View {
                     .padding(.top, LTSpacing.s)
                     .padding(.bottom, 90)
                 }
+                .onAppear { detailScrollProxy = proxy }
                 .onChange(of: viewModel.currentMatchIndex) { _, _ in
                     scrollToMatch(proxy)
                 }
@@ -157,6 +183,16 @@ struct SessionDetailView: View {
     }
 
     // MARK: - Header
+
+    /// 板书与图片: the class's image materials. Any change (add, edit,
+    /// re-analysis) refreshes the study-review staleness hint.
+    private func attachmentsCard(_ session: ClassroomSession) -> some View {
+        AttachmentSectionView(
+            session: session,
+            attachments: viewModel.attachments,
+            onAttachmentSetChanged: { viewModel.reload() }
+        )
+    }
 
     private func headerCard(_ session: ClassroomSession) -> some View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
@@ -661,9 +697,13 @@ struct SessionDetailView: View {
 
     // MARK: - Export
 
-    private func export(session: ClassroomSession, scope: ExportScope, format: ExportFormat) async {
+    private func export(
+        session: ClassroomSession, scope: ExportScope, format: ExportFormat,
+        attachmentFiles: SessionExport.AttachmentFileOption = .none
+    ) async {
         let entries = (try? environment.repository.entries(for: session)) ?? []
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
+        let attachments = (try? environment.repository.attachments(forSessionID: session.id)) ?? []
         let review: StudyReviewContent?
         if scope == .reviewOnly || scope == .fullMaterial {
             review = (try? environment.repository.studyReview(forSessionID: session.id))
@@ -671,20 +711,24 @@ struct SessionDetailView: View {
         } else {
             review = nil
         }
-        guard let url = await SessionExport.writeTemporaryFile(
+        let urls = await SessionExport.writeTemporaryFiles(
             session: session,
             entries: entries,
             notes: notes,
             scope: scope,
             review: review,
+            attachments: attachments,
+            attachmentFiles: attachmentFiles,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
-        ) else {
+        )
+        guard let first = urls.first else {
             exportFailed = true
             LTHaptics.warning()
             return
         }
-        shareItem = SharedFile(url: url)
+        // 课堂资料包: the document plus any image copies share together.
+        shareItem = SharedFile(url: first, companions: Array(urls.dropFirst()))
     }
 }
 

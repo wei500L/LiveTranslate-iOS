@@ -46,12 +46,14 @@ enum StudyReviewParser {
         var title: String?
         var detail: String?
         var cites: [Int]?
+        var refAttachments: [Int]?
         var children: [RawOutlineNode]?
     }
 
     private struct RawKeyPoint: Decodable {
         var text: String?
         var cites: [Int]?
+        var refAttachments: [Int]?
     }
 
     private struct RawTerm: Decodable {
@@ -59,16 +61,19 @@ enum StudyReviewParser {
         var chinese: String?
         var explanation: String?
         var cites: [Int]?
+        var refAttachments: [Int]?
     }
 
     private struct RawAssignment: Decodable {
         var text: String?
         var cites: [Int]?
+        var refAttachments: [Int]?
     }
 
     private struct RawUncertainty: Decodable {
         var text: String?
         var cites: [Int]?
+        var refAttachments: [Int]?
     }
 
     // MARK: - Public API
@@ -78,26 +83,44 @@ enum StudyReviewParser {
     /// - Parameters:
     ///   - text: raw model output (possibly fenced, possibly with prose).
     ///   - citationIDs: global table — number n maps to citationIDs[n-1].
-    static func parse(text: String, citationIDs: [UUID]) throws -> StudyReviewContent {
+    static func parse(
+        text: String, citationIDs: [UUID], attachmentIDs: [UUID] = []
+    ) throws -> StudyReviewContent {
         let raw = try decodeRaw(text)
         var content = StudyReviewContent()
         content.topic = bounded(raw.topic, limit: Limits.topic)
         content.summary = bounded(raw.summary, limit: Limits.summary)
         var outlineBudget = Limits.outlineNodes
-        content.outline = mapOutline(raw.outline ?? [], citationIDs: citationIDs, remaining: &outlineBudget)
+        content.outline = mapOutline(
+            raw.outline ?? [], citationIDs: citationIDs,
+            attachmentIDs: attachmentIDs, remaining: &outlineBudget
+        )
         content.keyPoints = (raw.keyPoints ?? []).prefix(Limits.keyPoints)
-            .map { .init(text: bounded($0.text, limit: Limits.itemText), refEntryIDs: mapCites($0.cites, citationIDs: citationIDs)) }
+            .map { .init(
+                text: bounded($0.text, limit: Limits.itemText),
+                refEntryIDs: mapCites($0.cites, citationIDs: citationIDs),
+                refAttachmentIDs: mapAttachmentRefs($0.refAttachments, attachmentIDs: attachmentIDs)
+            ) }
         content.terms = (raw.terms ?? []).prefix(Limits.terms)
             .map { .init(
                 russian: bounded($0.russian, limit: Limits.itemText),
                 chinese: bounded($0.chinese, limit: Limits.itemText),
                 explanation: bounded($0.explanation, limit: Limits.itemText),
-                refEntryIDs: mapCites($0.cites, citationIDs: citationIDs)
+                refEntryIDs: mapCites($0.cites, citationIDs: citationIDs),
+                refAttachmentIDs: mapAttachmentRefs($0.refAttachments, attachmentIDs: attachmentIDs)
             ) }
         content.assignments = (raw.assignments ?? []).prefix(Limits.assignments)
-            .map { .init(text: bounded($0.text, limit: Limits.itemText), refEntryIDs: mapCites($0.cites, citationIDs: citationIDs)) }
+            .map { .init(
+                text: bounded($0.text, limit: Limits.itemText),
+                refEntryIDs: mapCites($0.cites, citationIDs: citationIDs),
+                refAttachmentIDs: mapAttachmentRefs($0.refAttachments, attachmentIDs: attachmentIDs)
+            ) }
         content.uncertainties = (raw.uncertainties ?? []).prefix(Limits.uncertainties)
-            .map { .init(text: bounded($0.text, limit: Limits.itemText), refEntryIDs: mapCites($0.cites, citationIDs: citationIDs)) }
+            .map { .init(
+                text: bounded($0.text, limit: Limits.itemText),
+                refEntryIDs: mapCites($0.cites, citationIDs: citationIDs),
+                refAttachmentIDs: mapAttachmentRefs($0.refAttachments, attachmentIDs: attachmentIDs)
+            ) }
 
         guard !content.isEmptyParse else { throw ParseError.empty }
         return content
@@ -114,6 +137,7 @@ enum StudyReviewParser {
             object["keyPoints"] = keyPoints.prefix(Limits.keyPoints).map { point in
                 var item: [String: Any] = ["text": bounded(point.text, limit: Limits.itemText)]
                 item["cites"] = (point.cites ?? []).prefix(Limits.citesPerItem).map { $0 }
+                item["refAttachments"] = (point.refAttachments ?? []).prefix(Limits.citesPerItem).map { $0 }
                 return item
             }
         }
@@ -124,6 +148,7 @@ enum StudyReviewParser {
                 item["chinese"] = bounded(term.chinese, limit: Limits.itemText)
                 item["explanation"] = bounded(term.explanation, limit: Limits.itemText)
                 item["cites"] = (term.cites ?? []).prefix(Limits.citesPerItem).map { $0 }
+                item["refAttachments"] = (term.refAttachments ?? []).prefix(Limits.citesPerItem).map { $0 }
                 return item
             }
         }
@@ -131,6 +156,7 @@ enum StudyReviewParser {
             object["assignments"] = assignments.prefix(Limits.assignments).map { item in
                 var entry: [String: Any] = ["text": bounded(item.text, limit: Limits.itemText)]
                 entry["cites"] = (item.cites ?? []).prefix(Limits.citesPerItem).map { $0 }
+                entry["refAttachments"] = (item.refAttachments ?? []).prefix(Limits.citesPerItem).map { $0 }
                 return entry
             }
         }
@@ -180,20 +206,42 @@ enum StudyReviewParser {
     }
 
     private static func mapOutline(
-        _ nodes: [RawOutlineNode], citationIDs: [UUID], remaining: inout Int
+        _ nodes: [RawOutlineNode], citationIDs: [UUID], attachmentIDs: [UUID],
+        remaining: inout Int
     ) -> [StudyReviewContent.OutlineNode] {
         var result: [StudyReviewContent.OutlineNode] = []
         result.reserveCapacity(min(nodes.count, max(remaining, 0)))
         for node in nodes {
             guard remaining > 0 else { break }
             remaining -= 1
-            let children = mapOutline(node.children ?? [], citationIDs: citationIDs, remaining: &remaining)
+            let children = mapOutline(
+                node.children ?? [], citationIDs: citationIDs,
+                attachmentIDs: attachmentIDs, remaining: &remaining
+            )
             result.append(.init(
                 title: bounded(node.title, limit: Limits.itemText),
                 detail: bounded(node.detail, limit: Limits.itemText),
                 refEntryIDs: mapCites(node.cites, citationIDs: citationIDs),
+                refAttachmentIDs: mapAttachmentRefs(
+                    node.refAttachments, attachmentIDs: attachmentIDs
+                ),
                 children: children
             ))
+        }
+        return result
+    }
+
+    /// P-numbers → attachment ids; invalid numbers are dropped (the model
+    /// may only cite images that were actually sent).
+    private static func mapAttachmentRefs(_ refs: [Int]?, attachmentIDs: [UUID]) -> [UUID] {
+        guard let refs, !refs.isEmpty else { return [] }
+        var seen = Set<UUID>()
+        var result: [UUID] = []
+        for number in refs.prefix(Limits.citesPerItem) where number >= 1 && number <= attachmentIDs.count {
+            let id = attachmentIDs[number - 1]
+            if seen.insert(id).inserted {
+                result.append(id)
+            }
         }
         return result
     }

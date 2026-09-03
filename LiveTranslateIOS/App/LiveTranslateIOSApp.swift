@@ -78,6 +78,16 @@ final class AppEnvironment {
     private let studyServiceBox: StudyServiceBox
     /// One generator per profile; owns in-flight review generations.
     let studyReviewGenerator: StudyReviewGenerator
+    /// Classroom-image understanding (multimodal) — its own domain, same
+    /// transport primitives as the study service.
+    private(set) var attachmentAnalysisService: any AttachmentAnalysisModelService
+    private let attachmentServiceBox: AttachmentServiceBox
+    /// One analysis generator per profile; owns in-flight image analyses.
+    let attachmentAnalysisGenerator: AttachmentAnalysisGenerator
+    /// Import pipeline for camera/photo-library images.
+    let attachmentImporter: AttachmentImportService
+    /// The profile's attachment file store (paths, renditions, cleanup).
+    let attachmentStore: AttachmentFileStore
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -103,11 +113,17 @@ final class AppEnvironment {
     convenience init(profile: LocalProfile = .guest) {
         let accountID: UUID? = if case .account(let account) = profile { account.id } else { nil }
         let settings = SettingsStore.shared
+        // The attachment file store is built FIRST and registered globally
+        // so repository deletes can reap files (guest keeps the legacy
+        // global path; accounts are isolated — 多账号不共享附件目录).
+        let attachmentStore = AttachmentFileStore(accountID: accountID)
+        AttachmentFileStoreShared.store = attachmentStore
         let modelContainer: ModelContainer
         do {
             let schema = Schema([
                 ClassroomSession.self, TranscriptEntry.self,
-                Course.self, SessionNote.self, StudyReview.self
+                Course.self, SessionNote.self, StudyReview.self,
+                SessionAttachment.self
             ])
             let config = ModelConfiguration(
                 "LiveTranslate",
@@ -123,7 +139,8 @@ final class AppEnvironment {
             modelContainer = try! ModelContainer(
                 for: Schema([
                     ClassroomSession.self, TranscriptEntry.self,
-                    Course.self, SessionNote.self, StudyReview.self
+                    Course.self, SessionNote.self, StudyReview.self,
+                    SessionAttachment.self
                 ])
             )
         }
@@ -209,6 +226,19 @@ final class AppEnvironment {
             repository: repository,
             serviceProvider: { [weak studyBox] in studyBox?.get() }
         )
+        let attachmentService = AppEnvironment.makeAttachmentAnalysisService(
+            settings: settings, keychain: keychain
+        )
+        let attachmentBox = AttachmentServiceBox()
+        attachmentBox.set(attachmentService)
+        let attachmentGenerator = AttachmentAnalysisGenerator(
+            repository: repository,
+            fileStore: { AttachmentFileStoreShared.store },
+            serviceProvider: { [weak attachmentBox] in attachmentBox?.get() }
+        )
+        let attachmentImporter = AttachmentImportService(
+            repository: repository, fileStore: attachmentStore
+        )
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -226,7 +256,12 @@ final class AppEnvironment {
             guestMigration: guestMigration,
             studyReviewService: studyService,
             studyServiceBox: studyBox,
-            studyReviewGenerator: studyGenerator
+            studyReviewGenerator: studyGenerator,
+            attachmentAnalysisService: attachmentService,
+            attachmentServiceBox: attachmentBox,
+            attachmentAnalysisGenerator: attachmentGenerator,
+            attachmentImporter: attachmentImporter,
+            attachmentStore: attachmentStore
         )
     }
 
@@ -251,7 +286,14 @@ final class AppEnvironment {
             config: StudyReviewModelConfig(apiBase: "", apiKey: nil, model: "")
         ),
         studyServiceBox: StudyServiceBox = StudyServiceBox(),
-        studyReviewGenerator: StudyReviewGenerator? = nil
+        studyReviewGenerator: StudyReviewGenerator? = nil,
+        attachmentAnalysisService: any AttachmentAnalysisModelService = OpenAICompatibleAttachmentService(
+            config: AttachmentAnalysisModelConfig(apiBase: "", apiKey: nil, model: "")
+        ),
+        attachmentServiceBox: AttachmentServiceBox = AttachmentServiceBox(),
+        attachmentAnalysisGenerator: AttachmentAnalysisGenerator? = nil,
+        attachmentImporter: AttachmentImportService? = nil,
+        attachmentStore: AttachmentFileStore? = nil
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -279,6 +321,33 @@ final class AppEnvironment {
                 repository: repository,
                 serviceProvider: { [weak studyServiceBox] in studyServiceBox?.get() }
             )
+        }
+        self.attachmentAnalysisService = attachmentAnalysisService
+        self.attachmentServiceBox = attachmentServiceBox
+        if let attachmentAnalysisGenerator {
+            self.attachmentAnalysisGenerator = attachmentAnalysisGenerator
+        } else {
+            attachmentServiceBox.set(attachmentAnalysisService)
+            self.attachmentAnalysisGenerator = AttachmentAnalysisGenerator(
+                repository: repository,
+                fileStore: { AttachmentFileStoreShared.store },
+                serviceProvider: { [weak attachmentServiceBox] in attachmentServiceBox?.get() }
+            )
+        }
+        if let attachmentImporter {
+            self.attachmentImporter = attachmentImporter
+        } else {
+            self.attachmentImporter = AttachmentImportService(
+                repository: repository,
+                fileStore: attachmentStore ?? AttachmentFileStore(accountID: nil)
+            )
+        }
+        if let attachmentStore {
+            self.attachmentStore = attachmentStore
+            AttachmentFileStoreShared.store = attachmentStore
+        } else {
+            self.attachmentStore = AttachmentFileStore(accountID: nil)
+            AttachmentFileStoreShared.store = self.attachmentStore
         }
     }
 
@@ -328,11 +397,16 @@ final class AppEnvironment {
             settings: settings, keychain: keychain
         )
         translationServiceBox.set(translationService)
-        // The study service inherits the API base + key; rebuild it too.
+        // The study and image services inherit the API base + key; rebuild
+        // them too.
         studyReviewService = AppEnvironment.makeStudyReviewService(
             settings: settings, keychain: keychain
         )
         studyServiceBox.set(studyReviewService)
+        attachmentAnalysisService = AppEnvironment.makeAttachmentAnalysisService(
+            settings: settings, keychain: keychain
+        )
+        attachmentServiceBox.set(attachmentAnalysisService)
     }
 
     /// Study-review service from current settings: the same API base and
@@ -346,6 +420,32 @@ final class AppEnvironment {
             apiBase: settings.apiBase,
             apiKey: apiKey.isEmpty ? nil : apiKey,
             model: model.isEmpty ? settings.translationModel : model
+        ))
+    }
+
+    /// Image-understanding service from current settings: same API base
+    /// and key as translation (the user never re-enters it); the model
+    /// falls back study-review model → translation model. Whether the
+    /// chosen model actually accepts images is the server's call — the
+    /// settings copy never claims support it cannot verify.
+    static func makeAttachmentAnalysisService(
+        settings: SettingsStore, keychain: any KeychainStoring
+    ) -> any AttachmentAnalysisModelService {
+        let apiKey = (try? keychain.get(forKey: apiKeychainKey)) ?? ""
+        let model = settings.attachmentAnalysisModel
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved: String
+        if !model.isEmpty {
+            resolved = model
+        } else if !settings.studyReviewModel.isEmpty {
+            resolved = settings.studyReviewModel
+        } else {
+            resolved = settings.translationModel
+        }
+        return OpenAICompatibleAttachmentService(config: AttachmentAnalysisModelConfig(
+            apiBase: settings.apiBase,
+            apiKey: apiKey.isEmpty ? nil : apiKey,
+            model: resolved
         ))
     }
 
@@ -397,6 +497,8 @@ final class AppEnvironment {
     /// recovered rows.
     func reconcileAbnormalTerminations() {
         try? repository.markAbnormalTerminations()
+        // Same launch-time reconciliation for interrupted image analyses.
+        attachmentAnalysisGenerator.reconcileInterruptedAnalyses()
     }
 }
 
@@ -432,6 +534,24 @@ final class StudyServiceBox: @unchecked Sendable {
     }
 
     func get() -> (any StudyReviewModelService)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return service
+    }
+}
+
+/// Same holder pattern for the image-understanding model service.
+final class AttachmentServiceBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var service: (any AttachmentAnalysisModelService)?
+
+    func set(_ service: (any AttachmentAnalysisModelService)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.service = service
+    }
+
+    func get() -> (any AttachmentAnalysisModelService)? {
         lock.lock()
         defer { lock.unlock() }
         return service
