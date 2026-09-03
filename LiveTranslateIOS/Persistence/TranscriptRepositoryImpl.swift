@@ -334,11 +334,17 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
 
     // MARK: - Guest-data migration support
 
-    func sessionExists(id: UUID) -> Bool {
+    func sessionSummary(id: UUID) -> SessionSummary? {
         let descriptor = FetchDescriptor<ClassroomSession>(
             predicate: #Predicate { $0.id == id }
         )
-        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+        guard let session = try? context.fetch(descriptor).first else { return nil }
+        return SessionSummary(
+            id: session.id,
+            title: session.title,
+            startTime: session.startTime,
+            entryCount: session.entryCount
+        )
     }
 
     func entryExists(id: UUID) -> Bool {

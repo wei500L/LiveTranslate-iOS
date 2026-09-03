@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// 忘记密码 → 重置：one flow, two steps. The reset token arrives by mail
-/// (the server never reveals whether the account exists) as a deep link
-/// (App Link / livetranslate:// scheme) or as a manual-paste credential.
-/// A deep link pre-fills the token via `prefilledToken`; it lives only in
-/// this view's @State — never persistence.
+/// (the server never reveals whether the account exists) as an HTTPS
+/// universal link or as a manual-paste credential from the web fallback
+/// page. A deep link pre-fills the token via `prefilledToken`; it lives
+/// only in this view's @State — never persistence.
 struct PasswordRecoveryView: View {
     private enum Step {
         case request
@@ -17,8 +17,7 @@ struct PasswordRecoveryView: View {
     @State private var token = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     /// Deep-link token (in-memory only). When set, the flow starts at the
     /// reset step with the token already in place.
     @State private var deepLinkToken: String?
@@ -43,6 +42,12 @@ struct PasswordRecoveryView: View {
         .scrollContentBackground(.hidden)
         .background(LTBackground())
         .onAppear(perform: applyDeepLink)
+        .onDisappear {
+            // Leaving the flow drops the token and password from memory.
+            token = ""
+            newPassword = ""
+            confirmPassword = ""
+        }
     }
 
     /// A deep-linked token jumps straight to the reset step.
@@ -60,12 +65,12 @@ struct PasswordRecoveryView: View {
     private var requestSection: some View {
         Section {
             AuthEmailField(text: $email)
-            if let errorText {
+            if let errorText = form.errorText {
                 AuthErrorText(message: errorText)
             }
             AuthActionButton(
                 title: String(localized: "发送重置邮件"),
-                isBusy: isBusy,
+                isBusy: form.isBusy,
                 action: requestReset
             )
             .listRowBackground(Color.clear)
@@ -77,26 +82,26 @@ struct PasswordRecoveryView: View {
     }
 
     private func requestReset() {
-        errorText = nil
+        form.clearError()
         let email = email.trimmingCharacters(in: .whitespaces)
         guard !email.isEmpty else {
-            errorText = String(localized: "请填写邮箱")
+            form.fail(String(localized: "请填写邮箱"))
             return
         }
         if let problem = AuthForm.emailProblem(email) {
-            errorText = problem
+            form.fail(problem)
             return
         }
-        isBusy = true
+        guard form.begin() else { return }
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 guard let baseURL else { throw SyncAPIError.notConfigured }
                 let api = SyncAPIClient(baseURL: baseURL)
                 try await api.forgotPassword(email: email)
                 step = .reset
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }
@@ -122,12 +127,12 @@ struct PasswordRecoveryView: View {
                 text: $confirmPassword,
                 prompt: String(localized: "再次输入新密码")
             )
-            if let errorText {
+            if let errorText = form.errorText {
                 AuthErrorText(message: errorText)
             }
             AuthActionButton(
                 title: String(localized: "重置密码"),
-                isBusy: isBusy,
+                isBusy: form.isBusy,
                 action: resetPassword
             )
             .listRowBackground(Color.clear)
@@ -139,21 +144,21 @@ struct PasswordRecoveryView: View {
     }
 
     private func resetPassword() {
-        errorText = nil
+        form.clearError()
         guard !token.trimmingCharacters(in: .whitespaces).isEmpty else {
-            errorText = String(localized: "请粘贴邮件中的重置凭证")
+            form.fail(String(localized: "请粘贴邮件中的重置凭证"))
             return
         }
         if let problem = AuthForm.newPasswordProblem(newPassword)
             ?? AuthForm.confirmationProblem(newPassword, confirmPassword) {
-            errorText = problem
+            form.fail(problem)
             return
         }
-        isBusy = true
+        guard form.begin() else { return }
         let token = token.trimmingCharacters(in: .whitespaces)
         let newPassword = newPassword
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 guard let baseURL else { throw SyncAPIError.notConfigured }
                 let api = SyncAPIClient(baseURL: baseURL)
@@ -161,7 +166,7 @@ struct PasswordRecoveryView: View {
                 clearTokenFromMemory()
                 step = .done
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }

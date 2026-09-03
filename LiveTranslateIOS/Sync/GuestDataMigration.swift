@@ -6,20 +6,37 @@ import SwiftData
 /// account's store. Runs after the first sign-in, on explicit user consent —
 /// history is NEVER auto-uploaded.
 ///
+/// Concurrency & memory contract:
+///   - everything runs on the main actor (SwiftData is main-actor here);
+///   - the guest store is read ONLY through `GuestLibraryReader` — a type
+///     whose entire API surface is fetch/count (no insert, no delete, no
+///     save: writes are structurally impossible through it). The reader
+///     additionally opens the store with allowsSave=false; the API boundary
+///     is the primary guard, the flag the second;
+///   - models never cross contexts or actors: each batch of sessions (plus
+///     its entries) is converted to a Sendable value snapshot on the main
+///     actor and ONLY the values move on. Batches are bounded
+///     (`sessionBatchSize`), so the snapshot working set is bounded.
+///
 /// State machine (persisted in the ACCOUNT's defaults suite so it survives
 /// restarts and stays per-account):
 ///
 ///     waiting → preparing → moving → queuedForUpload → completed
 ///                                     ↘ partiallyFailed
 ///
-/// Guarantees:
-///   - the ORIGINAL session/entry UUIDs are preserved (no duplicates: a
-///     re-run skips ids already present in the account store);
-///   - the guest store is only ever READ here — deleting the guest copy is
-///     a separate, explicit user action;
-///   - any interruption leaves the guest data intact; the state machine
-///     resumes from `moving` on relaunch;
-///   - errors mark `partiallyFailed` and keep the already-copied rows.
+///   - `moving` records `copiedSessionIDs` after every confirmed batch, so
+///     an interrupted run RESUMES from the last confirmed batch (skipping
+///     those sessions) instead of restarting or double-copying;
+///   - `partiallyFailed` records `failedSessionIDs` (the retryable scope);
+///     a retry re-copies exactly those;
+///   - UUID conflicts are COMPARED, never silently skipped or overwritten:
+///     an existing account row with the same id must match in ownership
+///     (session's own entries) and content, else it is recorded as a
+///     conflict in `conflictedSessionIDs` and surfaced.
+///
+/// The guest store is only ever READ here; deleting the guest copy is a
+/// separate, explicitly confirmed action and is only offered after the
+/// copy AND the upload hand-off completed.
 @MainActor
 @Observable
 final class GuestDataMigration {
@@ -38,14 +55,19 @@ final class GuestDataMigration {
         case declined
     }
 
-    /// Persisted record (per account).
+    /// Persisted record (per account). `copiedSessionIDs`/`failedSessionIDs`
+    /// are the resume/conflict bookkeeping; they are cleared on completion.
     struct Record: Codable {
         var phase: Phase = .waiting
         var totalSessions: Int = 0
-        var movedSessions: Int = 0
+        var copiedSessionIDs: [UUID] = []
+        var failedSessionIDs: [UUID] = []
+        var conflictedSessionIDs: [UUID] = []
         var movedEntries: Int = 0
         var startedAt: Date?
         var finishedAt: Date?
+
+        var copiedCount: Int { copiedSessionIDs.count }
     }
 
     private(set) var record: Record {
@@ -57,11 +79,17 @@ final class GuestDataMigration {
         record.phase == .preparing || record.phase == .moving
     }
 
+    /// Sessions copied per batch (bounded working set: a session snapshot
+    /// plus its entries is a few KB; the batch cap keeps the main-thread
+    /// snapshot work short between persists).
+    private let sessionBatchSize = 10
+
     private let accountID: UUID
     private let defaults: UserDefaults
     private let repository: any ClassroomRepositoryProtocol
     private let bookmarks: BookmarkStore
     private let sync: CloudSyncService?
+    private let reader = GuestLibraryReader()
 
     private static let recordKey = "guestMigration.record"
 
@@ -82,7 +110,8 @@ final class GuestDataMigration {
         } else {
             self.record = Record()
         }
-        // A crash mid-move resumes on next construction.
+        // A crash mid-move resumes from the last confirmed batch on the
+        // next construction (copiedSessionIDs carries the boundary).
         if record.phase == .preparing || record.phase == .moving {
             record.phase = .moving
         }
@@ -95,113 +124,20 @@ final class GuestDataMigration {
     }
 
     /// Whether the "本机记录待归属" prompt should be shown for this account:
-    /// a waiting/declined-then-reopened migration AND guest data exists.
+    /// a not-yet-decided migration AND guest data exists.
     var needsPrompt: Bool {
-        record.phase == .waiting && guestStoreHasContent()
+        record.phase == .waiting && reader.sessionCount() > 0
     }
 
     /// True when some guest data is still un-migrated (banner in settings).
     var hasUnclaimedData: Bool {
         (record.phase == .waiting || record.phase == .partiallyFailed)
-            && guestStoreHasContent()
+            && reader.sessionCount() > 0
     }
 
-    // MARK: - Guest store access (read-only)
-
-    private static let guestSchema = Schema([ClassroomSession.self, TranscriptEntry.self])
-
-    /// Opens the GUEST store (the legacy global SQLite file) READ-ONLY.
-    private func guestContainer() throws -> ModelContainer {
-        let config = ModelConfiguration(
-            "LiveTranslate",
-            schema: Self.guestSchema,
-            url: AppEnvironment.databaseURL(accountID: nil),
-            allowsSave: false
-        )
-        return try ModelContainer(for: Self.guestSchema, configurations: [config])
-    }
-
-    /// Cheap existence probe for the guest store (no copy).
-    func guestStoreHasContent() -> Bool {
-        guestSessionCount() > 0
-    }
-
-    /// Session count in the guest store (cached after the first probe —
-    /// opening the read-only container on every render would be wasteful;
-    /// @ObservationIgnored: a cache, not UI state).
-    @ObservationIgnored private var cachedGuestCount: Int?
+    /// Session count in the guest store (for the settings banner).
     func guestSessionCount() -> Int {
-        if let cachedGuestCount { return cachedGuestCount }
-        let url = AppEnvironment.databaseURL(accountID: nil)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            cachedGuestCount = 0
-            return 0
-        }
-        guard let container = try? guestContainer() else {
-            cachedGuestCount = 0
-            return 0
-        }
-        let context = ModelContext(container)
-        context.shouldAutosave = false
-        let n = (try? context.fetchCount(FetchDescriptor<ClassroomSession>())) ?? 0
-        cachedGuestCount = n
-        return n
-    }
-
-    /// Snapshot of the guest library as plain values (crosses from the
-    /// guest container into the account's actor space as data, not models).
-    private struct GuestSnapshot {
-        struct Entry {
-            var id: UUID
-            var sequenceID: Int
-            var startOffset: TimeInterval
-            var endOffset: TimeInterval
-            var originalText: String
-            var translatedText: String?
-            var translationStatus: String
-        }
-
-        struct Session {
-            var id: UUID
-            var title: String
-            var startTime: Date
-            var endTime: Date?
-            var duration: TimeInterval
-            var sourceLanguage: String
-            var targetLanguage: String
-            var abnormalTermination: Bool
-            var entries: [Entry]
-        }
-
-        var sessions: [Session]
-    }
-
-    private func snapshotGuest() throws -> GuestSnapshot {
-        let container = try guestContainer()
-        let context = ModelContext(container)
-        context.shouldAutosave = false
-        let sessionRows = try context.fetch(FetchDescriptor<ClassroomSession>())
-        var snap = GuestSnapshot(sessions: [])
-        for s in sessionRows {
-            let entries = s.entries.sorted { $0.sequenceID < $1.sequenceID }.map { e in
-                GuestSnapshot.Entry(
-                    id: e.id,
-                    sequenceID: e.sequenceID,
-                    startOffset: e.startOffset,
-                    endOffset: e.endOffset,
-                    originalText: e.originalText,
-                    translatedText: e.translatedText,
-                    translationStatus: e.translationStatus
-                )
-            }
-            snap.sessions.append(GuestSnapshot.Session(
-                id: s.id, title: s.title, startTime: s.startTime, endTime: s.endTime,
-                duration: s.duration, sourceLanguage: s.sourceLanguage,
-                targetLanguage: s.targetLanguage, abnormalTermination: s.abnormalTermination,
-                entries: entries
-            ))
-        }
-        return snap
+        reader.sessionCount()
     }
 
     // MARK: - Actions
@@ -213,16 +149,16 @@ final class GuestDataMigration {
         record.finishedAt = .now
     }
 
-    /// User chose 上传并加入当前账号. Copy guest rows into the ACCOUNT store
-    /// under their original UUIDs (serverVersion 0 so the sync layer treats
-    /// them as fresh local data), then hand off to the normal initial-upload
+    /// User chose 上传并加入当前账号 (or retried a partially-failed run).
+    /// Copies guest rows into the ACCOUNT store under their original UUIDs
+    /// in bounded batches, then hands off to the normal initial-upload
     /// pipeline. The guest store is untouched.
     func beginMigration() {
         guard !isRunning else { return }
         record.phase = .preparing
         record.startedAt = .now
-        record.movedSessions = 0
-        record.movedEntries = 0
+        record.failedSessionIDs = []
+        record.conflictedSessionIDs = []
         Task { await run() }
     }
 
@@ -232,38 +168,65 @@ final class GuestDataMigration {
     }
 
     private func run() async {
+        // Bounded batch loop: read one batch of session snapshots from the
+        // guest store (Sendable values only), copy it, persist the batch
+        // boundary, then continue. Nothing loads the whole library.
         do {
-            let snap = try snapshotGuest()
-            record.totalSessions = snap.sessions.count
+            let sessionIDs = try reader.sessionIDs(excluding: Set(record.copiedSessionIDs))
+            record.totalSessions = record.copiedCount + sessionIDs.count
             record.phase = .moving
 
-            var failures = 0
-            for session in snap.sessions {
-                do {
-                    try copySession(session)
-                    record.movedSessions += 1
-                } catch {
-                    failures += 1
-                    Self.logger.error(
-                        "guest session copy failed: \(String(describing: error), privacy: .public)"
-                    )
+            var index = 0
+            while index < sessionIDs.count {
+                let batchIDs = Array(sessionIDs[index..<min(index + sessionBatchSize, sessionIDs.count)])
+                let snapshots = try reader.snapshots(forIDs: batchIDs)
+                for snapshot in snapshots {
+                    do {
+                        switch try copySessionCheckingConflicts(snapshot) {
+                        case .copied:
+                            record.copiedSessionIDs.append(snapshot.id)
+                            record.movedEntries += snapshot.entries.count
+                        case .alreadyPresentIdentical:
+                            // Our own previous copy (or a re-run): counted,
+                            // never duplicated.
+                            record.copiedSessionIDs.append(snapshot.id)
+                        case .conflict:
+                            record.conflictedSessionIDs.append(snapshot.id)
+                        }
+                    } catch {
+                        record.failedSessionIDs.append(snapshot.id)
+                        Self.logger.error(
+                            "guest session copy failed: \(String(describing: error), privacy: .public)"
+                        )
+                    }
                 }
+                // Batch boundary persisted: an interruption resumes here.
+                persist()
+                index += batchIDs.count
             }
             mergeGuestBookmarks()
 
-            if failures > 0 && record.movedSessions == 0 {
+            if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
+                // Nothing moved — either failures or conflicts consumed the
+                // whole run; the retry scope is explicit either way.
                 record.phase = .partiallyFailed
                 record.finishedAt = .now
                 return
             }
-            // Hand the copied rows to the sync pipeline: reset the account's
-            // first-upload flag so the initial upload snapshots them.
+            // Hand the copied rows to the sync pipeline: reset the
+            // account's first-upload flag so the initial upload snapshots
+            // them (server-side idempotency + outbox per-entity merge make
+            // the re-run of this trigger non-duplicating).
             record.phase = .queuedForUpload
             sync?.prepareForGuestMigrationUpload()
-            if failures > 0 {
+            if !record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty {
                 record.phase = .partiallyFailed
             } else {
                 record.phase = .completed
+                // Bookkeeping has served its purpose; drop the id lists.
+                record.copiedSessionIDs = []
+                record.failedSessionIDs = []
+                record.conflictedSessionIDs = []
             }
             record.finishedAt = .now
         } catch {
@@ -275,13 +238,36 @@ final class GuestDataMigration {
         }
     }
 
-    /// Copies one session (+entries) into the account store. Sessions whose
-    /// id already exists are SKIPPED (idempotent re-run; no duplicates).
-    /// The rows ride the repository's remote-apply path (it preserves ids)
-    /// with serverVersion 0, so the sync layer treats them as fresh local
-    /// data and the initial upload snapshots them.
-    private func copySession(_ session: GuestSnapshot.Session) throws {
-        if repository.sessionExists(id: session.id) { return }
+    enum CopyOutcome {
+        case copied
+        case alreadyPresentIdentical
+        case conflict
+    }
+
+    /// Copies one session (+entries) into the account store under its
+    /// ORIGINAL id, comparing any pre-existing row instead of skipping it
+    /// silently: identical content (a previous copy of this very session)
+    /// is treated as done; different content is a conflict, recorded and
+    /// never overwritten.
+    private func copySessionCheckingConflicts(_ session: GuestLibraryReader.SessionSnapshot) throws -> CopyOutcome {
+        if let existing = repository.sessionSummary(id: session.id) {
+            // Ownership + content comparison: same title, start time and
+            // entry count ⇒ treat as our own prior copy.
+            if existing.title == session.title,
+               existing.startTime == session.startTime,
+               existing.entryCount == session.entries.count {
+                return .alreadyPresentIdentical
+            }
+            return .conflict
+        }
+        try copySession(session)
+        return .copied
+    }
+
+    /// Inserts the session and its entries through the repository's
+    /// remote-apply path (it preserves ids) with serverVersion 0, so the
+    /// sync layer treats them as fresh local data.
+    private func copySession(_ session: GuestLibraryReader.SessionSnapshot) throws {
         let sessionRecord = SyncServerRecordDTO(
             id: session.id,
             title: session.title,
@@ -308,7 +294,6 @@ final class GuestDataMigration {
                 serverVersion: 0
             )
             try repository.applyRemoteEntry(record: entryRecord, serverVersion: 0)
-            record.movedEntries += 1
         }
     }
 
@@ -316,7 +301,7 @@ final class GuestDataMigration {
     /// existing account bookmarks win). Runs on the account's BookmarkStore.
     private func mergeGuestBookmarks() {
         let guestDefaults = UserDefaults.standard
-        let guestKey = AccountStore.bookmarkKey(accountID: nil)
+        let guestKey = AccountScope.bookmarkKey(accountID: nil)
         guard let data = guestDefaults.data(forKey: guestKey) else { return }
         struct GuestRecord: Decodable {
             var entryBookmarks: [GuestBookmark]?
@@ -340,13 +325,14 @@ final class GuestDataMigration {
     /// migration. Destructive to the GUEST store only; the account store
     /// (and the cloud copy) is untouched.
     func deleteGuestCopy() {
-        let url = AppEnvironment.databaseURL(accountID: nil)
+        guard record.phase == .completed else { return }
+        let url = AccountScope.guestDatabaseURL
         let fm = FileManager.default
         for suffix in ["", "-wal", "-shm"] {
             try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
         }
         // Clear the guest bookmark record too (its sessions are gone).
-        UserDefaults.standard.removeObject(forKey: AccountStore.bookmarkKey(accountID: nil))
+        UserDefaults.standard.removeObject(forKey: AccountScope.bookmarkKey(accountID: nil))
         Self.logger.info("guest copy deleted after migration")
     }
 
@@ -356,11 +342,111 @@ final class GuestDataMigration {
         case .waiting: return String(localized: "待处理")
         case .preparing: return String(localized: "准备中…")
         case .moving:
-            return String(localized: "正在迁移 \(record.movedSessions)/\(record.totalSessions)")
+            return String(localized: "正在迁移 \(record.copiedCount)/\(record.totalSessions)")
         case .queuedForUpload: return String(localized: "已加入上传队列")
         case .completed: return String(localized: "已并入当前账号，云端上传进度见「同步状态」")
         case .partiallyFailed: return String(localized: "部分失败")
         case .declined: return String(localized: "仅保存在本机")
         }
+    }
+}
+
+// MARK: - Guest library reader (the ONLY guest-store access path)
+
+/// Read-only accessor for the guest (pre-sign-in) SwiftData store.
+///
+/// The write boundary is structural: this type exposes ONLY count / id /
+/// snapshot queries. It performs no inserts, no deletes and no saves — and
+/// it opens the store with `allowsSave: false` as a second layer, plus
+/// `shouldAutosave = false` on its private context. All returned values
+/// are Sendable snapshots; `@Model` objects never leave this type.
+@MainActor
+struct GuestLibraryReader {
+    /// Sendable value snapshot of one guest session (bounded: a session
+    /// plus its entries).
+    struct SessionSnapshot: Sendable {
+        struct Entry: Sendable {
+            var id: UUID
+            var sequenceID: Int
+            var startOffset: TimeInterval
+            var endOffset: TimeInterval
+            var originalText: String
+            var translatedText: String?
+            var translationStatus: String
+        }
+
+        var id: UUID
+        var title: String
+        var startTime: Date
+        var endTime: Date?
+        var duration: TimeInterval
+        var abnormalTermination: Bool
+        var entries: [Entry]
+    }
+
+    private static let schema = Schema([ClassroomSession.self, TranscriptEntry.self])
+
+    private var guestURL: URL { AccountScope.guestDatabaseURL }
+
+    /// Opens the guest store read-only. Returns nil when the guest store
+    /// does not exist (never signed in / already deleted).
+    private func containerIfPresent() throws -> ModelContainer? {
+        guard FileManager.default.fileExists(atPath: guestURL.path) else { return nil }
+        let config = ModelConfiguration(
+            "LiveTranslate",
+            schema: Self.schema,
+            url: guestURL,
+            allowsSave: false
+        )
+        return try ModelContainer(for: Self.schema, configurations: [config])
+    }
+
+    /// Session count in the guest store (cheap; used for prompts/banners).
+    func sessionCount() -> Int {
+        guard let container = try? containerIfPresent() else { return 0 }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        return (try? context.fetchCount(FetchDescriptor<ClassroomSession>())) ?? 0
+    }
+
+    /// All guest session ids, optionally excluding already-copied ones.
+    /// (Ids only — bounded memory regardless of library size.)
+    func sessionIDs(excluding done: Set<UUID> = []) throws -> [UUID] {
+        guard let container = try containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let sessions = try context.fetch(FetchDescriptor<ClassroomSession>())
+        return sessions.map(\.id).filter { !done.contains($0) }
+    }
+
+    /// Snapshots of the GIVEN sessions (one bounded batch), values only.
+    func snapshots(forIDs ids: [UUID]) throws -> [SessionSnapshot] {
+        guard !ids.isEmpty else { return [] }
+        guard let container = try containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let idSet = Set(ids)
+        let sessions = try context.fetch(FetchDescriptor<ClassroomSession>())
+        var out: [SessionSnapshot] = []
+        out.reserveCapacity(ids.count)
+        for s in sessions where idSet.contains(s.id) {
+            let entries = s.entries.sorted { $0.sequenceID < $1.sequenceID }.map { e in
+                SessionSnapshot.Entry(
+                    id: e.id,
+                    sequenceID: e.sequenceID,
+                    startOffset: e.startOffset,
+                    endOffset: e.endOffset,
+                    originalText: e.originalText,
+                    translatedText: e.translatedText,
+                    translationStatus: e.translationStatus
+                )
+            }
+            out.append(SessionSnapshot(
+                id: s.id, title: s.title, startTime: s.startTime, endTime: s.endTime,
+                duration: s.duration, abnormalTermination: s.abnormalTermination,
+                entries: entries
+            ))
+        }
+        return out
     }
 }

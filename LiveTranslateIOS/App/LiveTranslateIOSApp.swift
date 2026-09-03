@@ -166,8 +166,7 @@ final class AppEnvironment {
                 bookmarks: bookmarks,
                 defaults: syncDefaults,
                 outboxFileURL: accountID.map {
-                    AccountStore.accountDirectory(accountID: $0)
-                        .appendingPathComponent("SyncOutbox.json")
+                    AccountScope.outboxURL(accountID: $0)
                 },
                 accountID: accountID
             )
@@ -239,17 +238,10 @@ final class AppEnvironment {
         self.guestMigration = guestMigration
     }
 
-    /// Guest: the legacy global store. Accounts: their isolated store
-    /// under Accounts/<uuid>/.
+    /// Profile store location — delegated to `AccountScope` (the single
+    /// source of truth for the account-ID → storage mapping).
     static func databaseURL(accountID: UUID? = nil) -> URL {
-        guard let accountID else {
-            let support = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first!
-            return support.appendingPathComponent("LiveTranslate.sqlite")
-        }
-        return AccountStore.accountDirectory(accountID: accountID)
-            .appendingPathComponent("LiveTranslate.sqlite")
+        AccountScope.databaseURL(accountID: accountID)
     }
 
     // MARK: - Translation configuration (single source of truth)

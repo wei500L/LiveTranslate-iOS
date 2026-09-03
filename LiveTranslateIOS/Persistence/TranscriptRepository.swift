@@ -33,12 +33,19 @@ protocol ClassroomRepositoryProtocol: AnyObject {
 
     // MARK: Guest-data migration support
 
-    /// Whether a session with the given UUID exists locally (migration
-    /// idempotency — copied rows keep their ORIGINAL ids and must not be
-    /// duplicated on re-run).
-    func sessionExists(id: UUID) -> Bool
+    /// Lightweight summary of one locally-stored session (migration
+    /// conflict comparison — no entries loaded).
+    func sessionSummary(id: UUID) -> SessionSummary?
     /// Whether an entry with the given UUID exists locally.
     func entryExists(id: UUID) -> Bool
+}
+
+/// Minimal comparable projection of a classroom session (Sendable).
+struct SessionSummary: Sendable, Equatable {
+    var id: UUID
+    var title: String
+    var startTime: Date
+    var entryCount: Int
 }
 
 struct SessionDraft: Sendable {

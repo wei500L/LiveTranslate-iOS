@@ -89,11 +89,25 @@ enum AuthForm {
         case "too many attempts, try later", "too many requests":
             return String(localized: "尝试过于频繁，请稍后再试")
         case "invalid or expired reset token":
-            return String(localized: "重置凭证无效或已过期，请重新发起重置")
+            return String(localized: "重置链接已过期、已使用或无效，请重新发起重置")
         case "mail transport unavailable":
             return String(localized: "服务器邮件服务暂不可用，请稍后再试")
         case "device not found":
             return String(localized: "设备不存在或已移除")
+        case "registration is currently closed":
+            return String(localized: "服务器当前未开放注册")
+        case "this email is already in use":
+            return String(localized: "该邮箱已被其他账号使用")
+        case "the new email equals the current email":
+            return String(localized: "新邮箱与当前邮箱相同")
+        case "cannot remove the last sign-in method":
+            return String(localized: "无法移除最后一种登录方式，请先设置密码")
+        case "display name is too long":
+            return String(localized: "显示名称过长")
+        case "this Apple ID is already linked to another account":
+            return String(localized: "该 Apple ID 已绑定到其他账号")
+        case "no Apple account is linked":
+            return String(localized: "该账号未绑定 Apple ID")
         default:
             // Password policy reasons: "password rejected: <reason>".
             if detail.hasPrefix("password rejected") {
@@ -118,6 +132,59 @@ enum AuthForm {
         default:
             return String(localized: "密码不满足安全要求")
         }
+    }
+}
+
+// MARK: - Shared form state
+
+/// Unified in-flight + inline-error state for EVERY auth form (login,
+/// register, verify, change password, change email, bind/unbind, device
+/// management). One shape instead of per-view ad-hoc pairs:
+///
+/// - `begin()` returns false while a request is in flight, so double
+///   submits are structurally impossible (buttons also disable on isBusy);
+/// - `fail(_:)` maps any thrown error through `AuthForm.message` — network
+///   errors, validation failures, account suspension, login expiry and
+///   version incompatibility each surface their own Chinese line;
+/// - views read `errorText` for the inline `AuthErrorText` row.
+@MainActor
+@Observable
+final class AuthFormState {
+    private(set) var isBusy = false
+    private(set) var errorText: String?
+
+    /// Marks the form busy. Returns false when a request is already in
+    /// flight (the caller simply returns — a second tap did nothing).
+    @discardableResult
+    func begin() -> Bool {
+        guard !isBusy else { return false }
+        isBusy = true
+        errorText = nil
+        return true
+    }
+
+    /// Ends the in-flight window (defer in every submit task).
+    func end() {
+        isBusy = false
+    }
+
+    /// Records a mapped failure line for the inline error row.
+    func fail(_ message: String) {
+        errorText = message
+    }
+
+    /// Maps and records a thrown error.
+    func fail(error: Error) {
+        fail(AuthForm.message(for: error))
+    }
+
+    func clearError() {
+        errorText = nil
+    }
+
+    /// Inline error row bound to this state (nil view when no error).
+    var errorRow: AuthErrorText? {
+        errorText.map { AuthErrorText(message: $0) }
     }
 }
 

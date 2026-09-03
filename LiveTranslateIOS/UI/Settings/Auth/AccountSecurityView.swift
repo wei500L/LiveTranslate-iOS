@@ -10,8 +10,7 @@ struct AccountSecurityView: View {
     @Environment(AppSession.self) private var session
 
     @State private var profile: SyncMeProfileDTO?
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     @State private var showDisplayNameEdit = false
     @State private var showChangeEmail = false
     @State private var showUnbindApple = false
@@ -22,7 +21,7 @@ struct AccountSecurityView: View {
 
     var body: some View {
         Form {
-            if let errorText {
+            if let errorText = form.errorText {
                 Section { AuthErrorText(message: errorText) }
             }
             if let profile {
@@ -31,7 +30,7 @@ struct AccountSecurityView: View {
                 sessionsSection(profile)
                 securityActionsSection
                 dangerSection
-            } else if isBusy {
+            } else if form.isBusy {
                 Section {
                     HStack {
                         ProgressView()
@@ -134,7 +133,7 @@ struct AccountSecurityView: View {
                 }
                 .signInWithAppleButtonStyle(.white)
                 .frame(height: 44)
-                .disabled(isBusy)
+                .disabled(form.isBusy)
                 Text(String(localized: "绑定后可以用 Apple 账号在本 App 登录同一账号。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -188,7 +187,7 @@ struct AccountSecurityView: View {
             Button(String(localized: "退出所有设备"), role: .destructive) {
                 showSignOutAllConfirm = true
             }
-            .disabled(isBusy)
+            .disabled(form.isBusy)
         } header: {
             Text(String(localized: "安全操作"))
         }
@@ -220,12 +219,12 @@ struct AccountSecurityView: View {
                         text: $unbindPassword,
                         prompt: String(localized: "当前密码")
                     )
-                    if let errorText {
+                    if let errorText = form.errorText {
                         AuthErrorText(message: errorText)
                     }
                     AuthActionButton(
                         title: String(localized: "确认解绑"),
-                        isBusy: isBusy,
+                        isBusy: form.isBusy,
                         action: unbindApple
                     )
                     .listRowBackground(Color.clear)
@@ -240,6 +239,10 @@ struct AccountSecurityView: View {
             }
             .scrollContentBackground(.hidden)
             .background(LTBackground())
+            .onDisappear {
+                // Leaving the sheet drops the password from memory.
+                unbindPassword = ""
+            }
         }
         .presentationDetents([.medium])
     }
@@ -248,13 +251,13 @@ struct AccountSecurityView: View {
 
     private func load() async {
         guard let sync else { return }
-        isBusy = true
-        defer { isBusy = false }
+        guard form.begin() else { return }
+        defer { form.end() }
         do {
             profile = try await sync.meProfile()
-            errorText = nil
+            form.clearError()
         } catch {
-            errorText = AuthForm.message(for: error)
+            form.fail(error: error)
         }
     }
 
@@ -264,53 +267,53 @@ struct AccountSecurityView: View {
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
                   let tokenData = credential.identityToken,
                   let token = String(data: tokenData, encoding: .utf8) else {
-                errorText = String(localized: "无法从 Apple 获取身份凭据")
+                form.fail(String(localized: "无法从 Apple 获取身份凭据"))
                 return
             }
-            isBusy = true
+            guard form.begin() else { return }
             Task {
-                defer { isBusy = false }
+                defer { form.end() }
                 do {
                     try await sync?.bindApple(identityToken: token)
                     await load()
                 } catch {
-                    errorText = AuthForm.message(for: error)
+                    form.fail(error: error)
                 }
             }
         case .failure(let error):
-            errorText = error.localizedDescription
+            form.fail(error.localizedDescription)
         }
     }
 
     private func unbindApple() {
         guard let sync else { return }
         guard !unbindPassword.isEmpty else {
-            errorText = String(localized: "请输入当前密码")
+            form.fail(String(localized: "请输入当前密码"))
             return
         }
-        isBusy = true
+        guard form.begin() else { return }
         let password = unbindPassword
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await sync.unbindApple(currentPassword: password)
                 showUnbindApple = false
                 unbindPassword = ""
                 await load()
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }
 
     private func signOutAll() async {
         guard let sync else { return }
-        isBusy = true
-        defer { isBusy = false }
+        guard form.begin() else { return }
+        defer { form.end() }
         do {
             try await sync.logoutAllDevices()
         } catch {
-            errorText = AuthForm.message(for: error)
+            form.fail(error: error)
         }
     }
 
@@ -330,8 +333,7 @@ struct DisplayNameEditView: View {
 
     @State var current: String
     @State private var name = ""
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
 
     private let maxLength = 64
 
@@ -350,12 +352,12 @@ struct DisplayNameEditView: View {
                     Text(String(localized: "\(name.count)/\(maxLength)"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if let errorText {
+                    if let errorText = form.errorText {
                         AuthErrorText(message: errorText)
                     }
                     AuthActionButton(
                         title: String(localized: "保存"),
-                        isBusy: isBusy,
+                        isBusy: form.isBusy,
                         action: save
                     )
                     .listRowBackground(Color.clear)
@@ -383,12 +385,12 @@ struct DisplayNameEditView: View {
         guard let sync = environment.cloudSync else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            errorText = String(localized: "显示名称不能为空")
+            form.fail(String(localized: "显示名称不能为空"))
             return
         }
-        isBusy = true
+        guard form.begin() else { return }
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 _ = try await sync.updateDisplayName(trimmed)
                 if let accountID = session.accounts.activeAccountID {
@@ -396,7 +398,7 @@ struct DisplayNameEditView: View {
                 }
                 dismiss()
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }

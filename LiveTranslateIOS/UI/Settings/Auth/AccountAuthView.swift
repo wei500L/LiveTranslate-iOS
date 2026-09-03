@@ -26,8 +26,7 @@ struct AccountAuthView: View {
     @State private var confirmPassword = ""
     @State private var displayName = ""
     @State private var invitationCode = ""
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     @State private var pushVerification = false
     @State private var showTerms = false
     @State private var showPrivacy = false
@@ -68,7 +67,7 @@ struct AccountAuthView: View {
                     }
                     .pickerStyle(.segmented)
                     .listRowBackground(Color.clear)
-                    .onChange(of: mode) { _, _ in errorText = nil }
+                    .onChange(of: mode) { _, _ in form.clearError() }
 
                     Section {
                         AuthEmailField(text: $email)
@@ -99,14 +98,14 @@ struct AccountAuthView: View {
                                 .textInputAutocapitalization(.never)
                             }
                         }
-                        if let errorText {
+                        if let errorText = form.errorText {
                             AuthErrorText(message: errorText)
                         }
                         AuthActionButton(
                             title: mode == .signIn
                                 ? String(localized: "登录")
                                 : String(localized: "注册并获取验证码"),
-                            isBusy: isBusy,
+                            isBusy: form.isBusy,
                             action: submit
                         )
                         .listRowBackground(Color.clear)
@@ -174,6 +173,12 @@ struct AccountAuthView: View {
             }
             .sheet(isPresented: $showTerms) { TermsSheet() }
             .sheet(isPresented: $showPrivacy) { PrivacySheet() }
+            // Leaving the form drops everything sensitive from memory.
+            .onDisappear {
+                password = ""
+                confirmPassword = ""
+                invitationCode = ""
+            }
         }
         .task { await loadCapabilities() }
     }
@@ -257,14 +262,14 @@ struct AccountAuthView: View {
     }
 
     private func submit() {
-        errorText = nil
+        form.clearError()
         let email = email.trimmingCharacters(in: .whitespaces)
         guard !email.isEmpty, !password.isEmpty else {
-            errorText = String(localized: "请填写邮箱和密码")
+            form.fail(String(localized: "请填写邮箱和密码"))
             return
         }
         if let problem = AuthForm.emailProblem(email) {
-            errorText = problem
+            form.fail(problem)
             return
         }
         switch mode {
@@ -276,10 +281,10 @@ struct AccountAuthView: View {
     }
 
     private func signIn(email: String) {
-        isBusy = true
+        guard form.begin() else { return }
         let password = password
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await session.signIn(label: email, provider: "email") { authSession in
                     try await authSession.signIn(email: email, password: password)
@@ -289,7 +294,7 @@ struct AccountAuthView: View {
                 session.clearPendingVerification()
                 dismiss()
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }
@@ -297,27 +302,27 @@ struct AccountAuthView: View {
     private func register(email: String) {
         if let problem = AuthForm.newPasswordProblem(password)
             ?? AuthForm.confirmationProblem(password, confirmPassword) {
-            errorText = problem
+            form.fail(problem)
             return
         }
         if registrationMode == .inviteOnly
             && invitationCode.trimmingCharacters(in: .whitespaces).isEmpty {
-            errorText = String(localized: "当前为邀请制注册，请填写邀请码")
+            form.fail(String(localized: "当前为邀请制注册，请填写邀请码"))
             return
         }
-        isBusy = true
+        guard form.begin() else { return }
         let password = password
         let name = displayName.trimmingCharacters(in: .whitespaces)
         let code = invitationCode.trimmingCharacters(in: .whitespaces)
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await session.registerWithInvitation(
                     email: email, password: password, displayName: name, invitationCode: code
                 )
                 pushVerification = true
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }

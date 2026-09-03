@@ -26,8 +26,7 @@ struct ChangeEmailView: View {
     @State private var newEmail = ""
     @State private var code = ""
     @State private var targetEmail = ""
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     @State private var resendIn = 60
     @State private var countdownTask: Task<Void, Never>?
     @FocusState private var codeFieldFocused: Bool
@@ -53,7 +52,12 @@ struct ChangeEmailView: View {
             .scrollContentBackground(.hidden)
             .background(LTBackground())
         }
-        .onDisappear { countdownTask?.cancel() }
+        .onDisappear {
+            countdownTask?.cancel()
+            // Leaving the flow drops the password and code from memory.
+            currentPassword = ""
+            code = ""
+        }
     }
 
     // MARK: - Step 1
@@ -68,12 +72,12 @@ struct ChangeEmailView: View {
                 prompt: String(localized: "当前密码")
             )
             AuthEmailField(text: $newEmail, prompt: String(localized: "新邮箱"))
-            if let errorText {
+            if let errorText = form.errorText {
                 AuthErrorText(message: errorText)
             }
             AuthActionButton(
                 title: String(localized: "向新邮箱发送验证码"),
-                isBusy: isBusy,
+                isBusy: form.isBusy,
                 action: request
             )
             .listRowBackground(Color.clear)
@@ -85,24 +89,24 @@ struct ChangeEmailView: View {
     }
 
     private func request() {
-        errorText = nil
+        form.clearError()
         guard !currentPassword.isEmpty else {
-            errorText = String(localized: "请输入当前密码")
+            form.fail(String(localized: "请输入当前密码"))
             return
         }
         let email = newEmail.trimmingCharacters(in: .whitespaces)
         guard !email.isEmpty else {
-            errorText = String(localized: "请填写新邮箱")
+            form.fail(String(localized: "请填写新邮箱"))
             return
         }
         if let problem = AuthForm.emailProblem(email) {
-            errorText = problem
+            form.fail(problem)
             return
         }
-        isBusy = true
+        guard form.begin() else { return }
         let password = currentPassword
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 let state = try await sync?.requestEmailChange(
                     currentPassword: password, newEmail: email
@@ -111,7 +115,7 @@ struct ChangeEmailView: View {
                 step = .verify
                 startTimer()
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }
@@ -133,18 +137,18 @@ struct ChangeEmailView: View {
                     let filtered = String(newValue.filter(\.isNumber).prefix(6))
                     if filtered != newValue { code = filtered }
                 }
-            if let errorText {
+            if let errorText = form.errorText {
                 AuthErrorText(message: errorText)
             }
             AuthActionButton(
                 title: String(localized: "验证并完成修改"),
-                isBusy: isBusy,
+                isBusy: form.isBusy,
                 action: verify
             )
             .disabled(code.count != 6)
             .listRowBackground(Color.clear)
             Button(resendTitle) { resend() }
-                .disabled(resendIn > 0 || isBusy)
+                .disabled(resendIn > 0 || form.isBusy)
         } header: {
             Text(String(localized: "第二步：验证新邮箱"))
         } footer: {
@@ -170,12 +174,12 @@ struct ChangeEmailView: View {
     }
 
     private func resend() {
-        errorText = nil
-        isBusy = true
+        form.clearError()
+        guard form.begin() else { return }
         let password = currentPassword
         let email = targetEmail
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 _ = try await sync?.requestEmailChange(
                     currentPassword: password, newEmail: email
@@ -187,17 +191,17 @@ struct ChangeEmailView: View {
                     resendIn = max(60, Int(after))
                     startTimer()
                 }
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }
 
     private func verify() {
-        errorText = nil
-        isBusy = true
+        form.clearError()
+        guard form.begin() else { return }
         let code = code
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await sync?.verifyEmailChange(code: code)
                 // The server returned a fresh token pair for this device
@@ -207,7 +211,7 @@ struct ChangeEmailView: View {
                 }
                 step = .done
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
                 codeFieldFocused = true
             }
         }

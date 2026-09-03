@@ -72,7 +72,7 @@ actor ServerAuthSession {
     /// Legacy → scoped key mapping used by the one-time migration and the
     /// AppSession sign-in handoff.
     nonisolated static func scopedKeyMapping(accountID: UUID) -> [(legacy: String, scoped: String)] {
-        let prefix = "cloudsync.account.\(accountID.uuidString)"
+        let prefix = AccountScope.keychainScope(accountID: accountID)
         return [
             (accessTokenKey, "\(prefix).accessToken"),
             (refreshTokenKey, "\(prefix).refreshToken"),

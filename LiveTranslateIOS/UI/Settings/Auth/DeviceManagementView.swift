@@ -6,13 +6,12 @@ struct DeviceManagementView: View {
     @Environment(AppEnvironment.self) private var environment
 
     @State private var devices: [SyncDeviceSessionDTO]?
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     @State private var confirmLogoutAll = false
 
     var body: some View {
         Form {
-            if let errorText {
+            if let errorText = form.errorText {
                 Section { AuthErrorText(message: errorText) }
             }
             if let devices {
@@ -33,9 +32,9 @@ struct DeviceManagementView: View {
                     Button(String(localized: "退出所有设备"), role: .destructive) {
                         confirmLogoutAll = true
                     }
-                    .disabled(isBusy)
+                    .disabled(form.isBusy)
                 }
-            } else if isBusy {
+            } else if form.isBusy {
                 Section {
                     HStack {
                         ProgressView()
@@ -84,7 +83,7 @@ struct DeviceManagementView: View {
                     Task { await revoke(device) }
                 }
                 .font(.caption)
-                .disabled(isBusy)
+                .disabled(form.isBusy)
             }
         }
     }
@@ -113,37 +112,37 @@ struct DeviceManagementView: View {
 
     private func load() async {
         guard let sync = environment.cloudSync else { return }
-        isBusy = true
-        defer { isBusy = false }
+        guard form.begin() else { return }
+        defer { form.end() }
         do {
             devices = try await sync.listDevices()
-            errorText = nil
+            form.clearError()
         } catch {
-            errorText = AuthForm.message(for: error)
+            form.fail(error: error)
         }
     }
 
     private func revoke(_ device: SyncDeviceSessionDTO) async {
         guard let sync = environment.cloudSync else { return }
-        isBusy = true
-        defer { isBusy = false }
+        guard form.begin() else { return }
+        defer { form.end() }
         do {
             try await sync.revokeDevice(device.id)
             await load()
         } catch {
-            errorText = AuthForm.message(for: error)
+            form.fail(error: error)
         }
     }
 
     private func logoutAll() async {
         guard let sync = environment.cloudSync else { return }
-        isBusy = true
-        defer { isBusy = false }
+        guard form.begin() else { return }
+        defer { form.end() }
         do {
             try await sync.logoutAllDevices()
             devices = []
         } catch {
-            errorText = AuthForm.message(for: error)
+            form.fail(error: error)
         }
     }
 }

@@ -141,26 +141,21 @@ final class AccountStore {
 
     // MARK: - Per-account storage namespaces
 
-    /// UserDefaults suite isolating one account's sync bookkeeping
-    /// (cursor, last-sync, sync-enabled, cloudDeletedAt, initialUpload).
+    // All namespace derivations live in `AccountScope` (single source of
+    // truth for the account-ID → storage mapping). These thin wrappers
+    // keep existing call sites compiling; new code should use AccountScope
+    // directly.
+
     nonisolated static func defaultsSuite(accountID: UUID) -> UserDefaults {
-        UserDefaults(suiteName: "cloudsync.account.\(accountID.uuidString)") ?? .standard
+        AccountScope.defaultsSuite(accountID: accountID)
     }
 
-    /// Bookmarks storage key for one account (guest keeps the legacy key).
     nonisolated static func bookmarkKey(accountID: UUID?) -> String {
-        guard let accountID else { return "ui.bookmarks.v2" }
-        return "ui.bookmarks.v2.\(accountID.uuidString)"
+        AccountScope.bookmarkKey(accountID: accountID)
     }
 
-    /// Directory holding one account's SwiftData store + sync outbox.
     nonisolated static func accountDirectory(accountID: UUID) -> URL {
-        let support = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        let dir = support.appendingPathComponent("Accounts/\(accountID.uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        AccountScope.accountDirectory(accountID: accountID)
     }
 
     /// Hard-deletes an account's local data: SwiftData store, outbox,
@@ -169,16 +164,17 @@ final class AccountStore {
     func deleteLocalData(accountID: UUID) {
         let dir = Self.accountDirectory(accountID: accountID)
         let fm = FileManager.default
-        try? fm.removeItem(at: dir.appendingPathComponent("LiveTranslate.sqlite"))
-        // SwiftData side files (wal/shm) — a store may leave companions.
+        // Store + sidecars + outbox (names from AccountScope — one shape).
+        try? fm.removeItem(at: dir.appendingPathComponent(AccountScope.databaseFileName))
         for suffix in ["-wal", "-shm"] {
             try? fm.removeItem(
-                at: dir.appendingPathComponent("LiveTranslate.sqlite\(suffix)")
+                at: dir.appendingPathComponent(AccountScope.databaseFileName + suffix)
             )
         }
-        try? fm.removeItem(at: dir.appendingPathComponent("SyncOutbox.json"))
-        if let defaults = UserDefaults(suiteName: "cloudsync.account.\(accountID.uuidString)") {
-            defaults.removePersistentDomain(forName: "cloudsync.account.\(accountID.uuidString)")
+        try? fm.removeItem(at: dir.appendingPathComponent(AccountScope.outboxFileName))
+        let suiteName = AccountScope.defaultsSuiteName(accountID: accountID)
+        if let defaults = UserDefaults(suiteName: suiteName) {
+            defaults.removePersistentDomain(forName: suiteName)
             defaults.removeObject(forKey: Self.bookmarkKey(accountID: accountID))
         }
         try? fm.removeItem(at: dir)
@@ -215,8 +211,10 @@ enum LegacyAccountMigrator {
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = AccountStore.accountDirectory(accountID: userID)
-        for name in ["LiveTranslate.sqlite", "LiveTranslate.sqlite-wal",
-                     "LiveTranslate.sqlite-shm", "SyncOutbox.json"] {
+        for name in [AccountScope.databaseFileName,
+                     AccountScope.databaseFileName + "-wal",
+                     AccountScope.databaseFileName + "-shm",
+                     AccountScope.outboxFileName] {
             let from = support.appendingPathComponent(name)
             let to = dir.appendingPathComponent(name)
             if fm.fileExists(atPath: from.path) {

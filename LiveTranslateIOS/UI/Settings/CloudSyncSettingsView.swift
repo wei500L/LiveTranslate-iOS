@@ -269,7 +269,7 @@ struct CloudSyncSettingsView: View {
 
     /// 本机模式 (guest) 与所有本地账号。切换会整体重建数据视图：各账号
     /// 的记录、书签、待上传队列与游标完全隔离。课堂进行中或访客数据
-    /// 迁移进行中时切换被阻止并说明原因。
+    /// 迁移进行中时切换入口被禁用并说明原因。
     private var accountSwitcherSection: some View {
         Section {
             if session.accounts.accounts.isEmpty {
@@ -285,16 +285,37 @@ struct CloudSyncSettingsView: View {
                 Button(String(localized: "切换到本机模式（不登录）")) {
                     attemptSwitch { session.switchToGuest() }
                 }
+                .disabled(switchBlockerText != nil)
             }
             Button {
                 showAddAccount = true
             } label: {
                 Label(String(localized: "添加账号"), systemImage: "plus.circle")
             }
+            if let blocker = switchBlockerText {
+                // Visible reason while the entries above are disabled.
+                Label(blocker, systemImage: "lock")
+                    .font(.caption)
+                    .foregroundStyle(LTColors.warning)
+            }
         } header: {
             Text(String(localized: "账号"))
         } footer: {
             Text(String(localized: "每个账号的数据相互独立且互不可见；移除账号只清掉它在本机的数据，云端数据不受影响。"))
+        }
+    }
+
+    /// The blocker explanation for the CURRENT state, nil when switching is
+    /// allowed. (The alert path remains for a race: the block can appear
+    /// between render and tap.)
+    private var switchBlockerText: String? {
+        switch session.switchBlocker() {
+        case .classroomActive:
+            return String(localized: "课堂正在进行中，暂时无法切换账号。请先结束当前课堂。")
+        case .guestMigrationInProgress:
+            return String(localized: "本机数据迁移进行中，请等待完成后再切换账号。")
+        case nil:
+            return nil
         }
     }
 
@@ -340,6 +361,7 @@ struct CloudSyncSettingsView: View {
                 }
             }
         }
+        .disabled(switchBlockerText != nil)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 Task { await session.removeAccount(account.id, revokeTokens: true) }
@@ -376,9 +398,16 @@ struct CloudSyncSettingsView: View {
                             }
                         }
                         if migration.record.phase == .partiallyFailed {
-                            Text(String(localized: "上次迁移部分失败：已复制 \(migration.record.movedSessions) 节，其余保留在本机。可重试。"))
-                                .font(.caption)
-                                .foregroundStyle(LTColors.warning)
+                            if !migration.record.failedSessionIDs.isEmpty {
+                                Text(String(localized: "上次迁移有 \(migration.record.failedSessionIDs.count) 节复制失败（可重试，仅重试失败部分）。"))
+                                    .font(.caption)
+                                    .foregroundStyle(LTColors.warning)
+                            }
+                            if !migration.record.conflictedSessionIDs.isEmpty {
+                                Text(String(localized: "\(migration.record.conflictedSessionIDs.count) 节与账号中已有记录的编号冲突，已跳过且未覆盖；请在课堂记录中核对。"))
+                                    .font(.caption)
+                                    .foregroundStyle(LTColors.warning)
+                            }
                         }
                     }
                 } header: {
@@ -516,8 +545,8 @@ struct CloudSyncSettingsView: View {
             }
             if sync.remoteUpdatesPending {
                 LabeledRow(
-                    label: String(localized: "云端有新内容"),
-                    value: String(localized: "待下载")
+                    label: String(localized: "云端有未拉取的变更记录"),
+                    value: String(localized: "待同步")
                 )
             }
             if let host = ServerConfiguration.baseURL?.host {

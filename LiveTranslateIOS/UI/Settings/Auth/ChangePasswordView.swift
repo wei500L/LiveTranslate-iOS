@@ -8,8 +8,7 @@ struct ChangePasswordView: View {
     @State private var currentPassword = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     @State private var isDone = false
 
     var body: some View {
@@ -36,12 +35,12 @@ struct ChangePasswordView: View {
                         text: $confirmPassword,
                         prompt: String(localized: "再次输入新密码")
                     )
-                    if let errorText {
+                    if let errorText = form.errorText {
                         AuthErrorText(message: errorText)
                     }
                     AuthActionButton(
                         title: String(localized: "修改密码"),
-                        isBusy: isBusy,
+                        isBusy: form.isBusy,
                         action: change
                     )
                     .listRowBackground(Color.clear)
@@ -56,30 +55,36 @@ struct ChangePasswordView: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(LTBackground())
+        .onDisappear {
+            // Leaving the page drops the passwords from memory.
+            currentPassword = ""
+            newPassword = ""
+            confirmPassword = ""
+        }
     }
 
     private func change() {
-        errorText = nil
+        form.clearError()
         if currentPassword.isEmpty {
-            errorText = String(localized: "请输入当前密码")
+            form.fail(String(localized: "请输入当前密码"))
             return
         }
         if let problem = AuthForm.newPasswordProblem(newPassword)
             ?? AuthForm.confirmationProblem(newPassword, confirmPassword) {
-            errorText = problem
+            form.fail(problem)
             return
         }
         guard let sync = environment.cloudSync else { return }
-        isBusy = true
+        guard form.begin() else { return }
         let current = currentPassword
         let new = newPassword
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await sync.changePassword(current: current, new: new)
                 isDone = true
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }

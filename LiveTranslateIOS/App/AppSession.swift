@@ -27,8 +27,9 @@ final class AppSession {
 
     // MARK: - Deep links (App Link router)
 
-    /// A password-reset token received via a Universal Link / custom
-    /// scheme. IN-MEMORY ONLY: never persisted, never logged — the
+    /// A password-reset token received via an HTTPS Universal Link (the
+    /// only accepted deep-link form; custom schemes are rejected by the
+    /// router). IN-MEMORY ONLY: never persisted, never logged — the
     /// destination sheet consumes it and clears it. Non-nil means "present
     /// the reset flow with this token".
     private(set) var pendingResetToken: String?
@@ -142,7 +143,7 @@ final class AppSession {
             // Not the active profile: revoke via a scoped transient session.
             if let baseURL = ServerConfiguration.baseURL {
                 let api = SyncAPIClient(baseURL: baseURL)
-                let scope = "cloudsync.account.\(id.uuidString)"
+                let scope = AccountScope.keychainScope(accountID: id)
                 let session = ServerAuthSession(api: api, keychain: keychain, scope: scope)
                 await session.signOut()
             }
@@ -266,11 +267,15 @@ final class AppSession {
 
     // MARK: - Deep links
 
-    /// Entry point for `.onOpenURL`. Parses the link, and for a password
-    /// reset parks the token in memory for the UI to present. The token is
-    /// never logged and never persisted; `consumeResetToken()` clears it.
+    /// Entry point for `.onOpenURL`. HTTPS-only Universal Links are the
+    /// single trusted path (host must match the configured sync server);
+    /// custom schemes are rejected by the router. The token parks in
+    /// memory for the UI to present — never logged, never persisted;
+    /// `consumeResetToken()` clears it.
     func handleDeepLink(_ url: URL) {
-        guard let link = AppLinkRouter.parse(url) else {
+        // Demo mode never touches real auth surfaces.
+        guard !isDemoMode else { return }
+        guard let link = AppLinkRouter.parse(url, allowedHost: ServerConfiguration.baseURL?.host) else {
             Self.logger.info("unrecognized app link ignored")
             return
         }

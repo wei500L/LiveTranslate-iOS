@@ -15,8 +15,7 @@ struct EmailVerificationView: View {
     let email: String
 
     @State private var code = ""
-    @State private var errorText: String?
-    @State private var isBusy = false
+    @State private var form = AuthFormState()
     @State private var resendIn = 60
     @State private var countdownTask: Task<Void, Never>?
     @FocusState private var codeFieldFocused: Bool
@@ -45,19 +44,19 @@ struct EmailVerificationView: View {
                     // submits itself.
                     let filtered = String(newValue.filter(\.isNumber).prefix(6))
                     if filtered != newValue { code = filtered }
-                    if filtered.count == 6, !autoSubmitted, !isBusy {
+                    if filtered.count == 6, !autoSubmitted, !form.isBusy {
                         autoSubmitted = true
                         verify()
                     } else if filtered.count < 6 {
                         autoSubmitted = false
                     }
                 }
-                if let errorText {
+                if let errorText = form.errorText {
                     AuthErrorText(message: errorText)
                 }
                 AuthActionButton(
                     title: String(localized: "验证并登录"),
-                    isBusy: isBusy,
+                    isBusy: form.isBusy,
                     action: verify
                 )
                 .disabled(code.count != 6)
@@ -68,7 +67,7 @@ struct EmailVerificationView: View {
 
             Section {
                 Button(resendTitle) { resend() }
-                    .disabled(resendIn > 0 || isBusy)
+                    .disabled(resendIn > 0 || form.isBusy)
             } footer: {
                 Text(String(localized: "未收到邮件？60 秒后可重新发送；也请检查垃圾邮件文件夹。"))
             }
@@ -92,7 +91,11 @@ struct EmailVerificationView: View {
             // AutoFill suggestion) is ready immediately.
             codeFieldFocused = true
         }
-        .onDisappear { countdownTask?.cancel() }
+        .onDisappear {
+            countdownTask?.cancel()
+            // Leaving the page drops the code from memory.
+            code = ""
+        }
     }
 
     private var resendTitle: String {
@@ -120,10 +123,10 @@ struct EmailVerificationView: View {
     }
 
     private func resend() {
-        errorText = nil
-        isBusy = true
+        form.clearError()
+        guard form.begin() else { return }
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await session.resendCode(email: email)
                 restartCountdown(minimumSeconds: 60)
@@ -133,17 +136,17 @@ struct EmailVerificationView: View {
                 if case .rateLimited(let retryAfter) = error, let after = retryAfter {
                     restartCountdown(minimumSeconds: Int(after))
                 }
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
             }
         }
     }
 
     private func verify() {
-        errorText = nil
-        isBusy = true
+        form.clearError()
+        guard form.begin() else { return }
         let code = code
         Task {
-            defer { isBusy = false }
+            defer { form.end() }
             do {
                 try await session.signIn(label: email, provider: "email") { authSession in
                     try await authSession.verifyEmail(email: email, code: code)
@@ -151,7 +154,7 @@ struct EmailVerificationView: View {
                 session.clearPendingVerification()
                 dismiss()
             } catch {
-                errorText = AuthForm.message(for: error)
+                form.fail(error: error)
                 autoSubmitted = false
                 // Wrong code: select-all for a clean retype.
                 codeFieldFocused = true

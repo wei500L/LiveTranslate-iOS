@@ -49,8 +49,11 @@ final class CloudSyncService: AuthenticationService {
     private(set) var lastSuccessfulSync: Date?
     private(set) var lastError: String?
     private(set) var isNetworkAvailable = true
-    /// True when the server's change log is AHEAD of the local pull cursor
-    /// (远端有待下载) — updated after every completed sync via /sync/status.
+    /// True when the server's change-log tail is AHEAD of the local pull
+    /// cursor (远端有未拉取的变更记录). This is a CURSOR comparison, not a
+    /// content claim: the pending entries may be echoes of this device's
+    /// own pushes — the UI words it neutrally for exactly that reason.
+    /// Updated after every completed sync via /sync/status.
     private(set) var remoteUpdatesPending = false
 
     var isServerConfigured: Bool { true }
@@ -87,7 +90,7 @@ final class CloudSyncService: AuthenticationService {
         accountID: UUID? = nil
     ) {
         self.accountID = accountID
-        let scope = accountID.map { "cloudsync.account.\($0.uuidString)" } ?? ""
+        let scope = accountID.map { AccountScope.keychainScope(accountID: $0) } ?? ""
         self.api = SyncAPIClient(baseURL: baseURL)
         self.authSession = ServerAuthSession(api: api, keychain: keychain, scope: scope)
         self.outbox = SyncOutboxStore(fileURL: outboxFileURL)
