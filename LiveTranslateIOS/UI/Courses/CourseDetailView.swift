@@ -199,6 +199,82 @@ struct CourseDetailView: View {
         .ltCard()
     }
 
+    /// Course-level review aggregation — collected from each classroom's
+    /// EXISTING review (no new model calls). Terms and assignments from
+    /// every reviewed class of this course, each jumping to its classroom.
+    @ViewBuilder
+    private var reviewAggregationCard: some View {
+        if viewModel.hasAnyReview {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                HStack(spacing: LTSpacing.xs) {
+                    LTSectionHeader(title: "课程复习")
+                    Text("\(viewModel.reviewsBySessionID.count)/\(viewModel.sessions.count) 堂已整理")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.textTertiary)
+                    Spacer()
+                }
+                if !viewModel.courseTerms.isEmpty {
+                    Text("累计术语 \(viewModel.courseTerms.count) 个")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: LTSpacing.s) {
+                            ForEach(viewModel.courseTerms) { term in
+                                Text(term.russian)
+                                    .font(LTTypography.caption)
+                                    .foregroundStyle(LTColors.textPrimary)
+                                    .padding(.horizontal, LTSpacing.m)
+                                    .padding(.vertical, LTSpacing.xs)
+                                    .background(Capsule().fill(LTColors.surfacePrimary))
+                                    .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
+                            }
+                        }
+                        .padding(.vertical, 1)
+                    }
+                }
+                if !viewModel.courseAssignments.isEmpty {
+                    Text("待办作业")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                    VStack(spacing: LTSpacing.s) {
+                        ForEach(viewModel.courseAssignments, id: \.item.id) { pair in
+                            NavigationLink {
+                                SessionDetailView(sessionID: pair.session.id)
+                            } label: {
+                                HStack(alignment: .top, spacing: LTSpacing.s) {
+                                    Image(systemName: "checklist")
+                                        .font(.caption)
+                                        .foregroundStyle(LTColors.warning)
+                                        .padding(.top, 2)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(pair.item.text)
+                                            .font(.subheadline)
+                                            .foregroundStyle(LTColors.textPrimary)
+                                            .lineLimit(2)
+                                            .multilineTextAlignment(.leading)
+                                        Text(pair.session.title)
+                                            .font(LTTypography.timestamp)
+                                            .foregroundStyle(LTColors.textTertiary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2)
+                                        .foregroundStyle(LTColors.textTertiary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                } else {
+                    Text("各堂课未识别到老师明确布置的任务")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+            .ltCard()
+        }
+    }
+
     private func statTile(value: String, caption: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
@@ -292,10 +368,14 @@ struct CourseDetailView: View {
     private func exportSession(_ session: ClassroomSession, format: ExportFormat) async {
         let entries = (try? environment.repository.entries(for: session)) ?? []
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
+        let review = (try? environment.repository.studyReview(forSessionID: session.id))
+            .flatMap { StudyReviewContent.decode($0.contentJSON) }
         guard let url = await SessionExport.writeTemporaryFile(
             session: session,
             entries: entries,
             notes: notes,
+            scope: .fullMaterial,
+            review: review,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
         ) else {
@@ -323,6 +403,8 @@ final class CourseDetailViewModel {
     private(set) var totalEntries = 0
     private(set) var lastSessionDate: Date?
     private var statsBySessionID: [UUID: RecordsViewModel.SessionStats] = [:]
+    /// Sessions that have a readable review (id → content).
+    private(set) var reviewsBySessionID: [UUID: StudyReviewContent] = [:]
     var isLoaded = false
 
     func attach(_ environment: AppEnvironment) {
@@ -363,7 +445,46 @@ final class CourseDetailViewModel {
         totalDuration = duration
         totalEntries = entries
         lastSessionDate = lastDate
+        // Aggregate the course's study reviews — pure local aggregation
+        // over already-generated reviews; nothing is re-sent to a model.
+        var reviews: [UUID: StudyReviewContent] = [:]
+        for session in sessions {
+            if let review = try? environment.repository.studyReview(forSessionID: session.id),
+               !review.contentJSON.isEmpty,
+               let content = StudyReviewContent.decode(review.contentJSON) {
+                reviews[session.id] = content
+            }
+        }
+        reviewsBySessionID = reviews
         isLoaded = true
+    }
+
+    // MARK: Review aggregation (existing reviews only — no new generation)
+
+    var hasAnyReview: Bool { !reviewsBySessionID.isEmpty }
+
+    /// Distinct terms across the course's reviews (by Russian term).
+    var courseTerms: [StudyReviewContent.TermItem] {
+        var seen = Set<String>()
+        var result: [StudyReviewContent.TermItem] = []
+        for session in sessions {
+            guard let content = reviewsBySessionID[session.id] else { continue }
+            for term in content.terms where !term.russian.isEmpty {
+                if seen.insert(term.russian.lowercased()).inserted {
+                    result.append(term)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Explicit assignments across the course, newest classroom first.
+    var courseAssignments: [(session: ClassroomSession, item: StudyReviewContent.AssignmentItem)] {
+        sessions.compactMap { session -> [(ClassroomSession, StudyReviewContent.AssignmentItem)] in
+            guard let content = reviewsBySessionID[session.id] else { return [] }
+            return content.assignments.map { (session, $0) }
+        }
+        .flatMap { $0 }
     }
 
     func reload() {

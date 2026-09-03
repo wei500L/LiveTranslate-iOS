@@ -16,7 +16,7 @@ struct SearchScreen: View {
     /// One matched session with its best snippet.
     struct SessionHit: Identifiable {
         enum MatchKind {
-            case note, transcript, title
+            case review, note, transcript, title
         }
 
         let session: ClassroomSession
@@ -39,7 +39,7 @@ struct SearchScreen: View {
                             LTEmptyState(
                                 symbol: "magnifyingglass",
                                 title: "搜索全部课堂",
-                                message: "支持课堂名称、笔记、中文翻译与俄语原文"
+                                message: "支持课堂名称、笔记、学习整理、中文翻译与俄语原文"
                             )
                         }
                     }
@@ -107,7 +107,10 @@ struct SearchScreen: View {
             VStack(spacing: LTSpacing.s) {
                 ForEach(results) { hit in
                     NavigationLink {
-                        SessionDetailView(sessionID: hit.session.id)
+                        SessionDetailView(
+                            sessionID: hit.session.id,
+                            openReviewOnLoad: hit.matchKind == .review
+                        )
                     } label: {
                         searchResultRow(hit)
                     }
@@ -135,6 +138,11 @@ struct SearchScreen: View {
                             Label("笔记", systemImage: "pencil.line")
                                 .font(LTTypography.timestamp)
                                 .foregroundStyle(LTColors.warning.opacity(0.9))
+                        }
+                        if hit.matchKind == .review {
+                            Label("学习整理", systemImage: "sparkles")
+                                .font(LTTypography.timestamp)
+                                .foregroundStyle(LTColors.accentGreen.opacity(0.9))
                         }
                     }
                     Text("\(Format.date(hit.session.startTime)) · \(Format.clock(hit.session.duration))")
@@ -186,12 +194,27 @@ struct SearchScreen: View {
         appliedQuery = query
     }
 
-    /// Where a session matched: note text wins the snippet (the user's own
-    /// words are the strongest hit), then the first matching transcript
-    /// entry, then the title.
+    /// Where a session matched: the study review wins the snippet (the
+    /// most distilled form of the classroom), then note text, then the
+    /// first matching transcript entry, then the title.
     private func bestMatch(
         for session: ClassroomSession, query: String
     ) -> (snippet: String, kind: SessionHit.MatchKind) {
+        if let review = try? environment.repository.studyReview(forSessionID: session.id),
+           !review.contentJSON.isEmpty,
+           let content = StudyReviewContent.decode(review.contentJSON) {
+            if let hit = [content.topic, content.summary]
+                .first(where: { $0.localizedCaseInsensitiveContains(query) }) {
+                return (hit, .review)
+            }
+            let itemHit = content.keyPoints.map(\.text)
+                .appending(content.assignments.map(\.text))
+                .appending(content.uncertainties.map(\.text))
+                .first { $0.localizedCaseInsensitiveContains(query) }
+            if let itemHit {
+                return (itemHit, .review)
+            }
+        }
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
         if let note = notes.first(where: { $0.text.localizedCaseInsensitiveContains(query) }) {
             return ("✎ \(note.text)", .note)

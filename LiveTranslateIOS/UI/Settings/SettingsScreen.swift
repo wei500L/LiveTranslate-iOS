@@ -38,6 +38,7 @@ struct SettingsScreen: View {
         .onChange(of: environment.settings.timeout) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.thinkingStyle) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.customSystemPrompt) { _, _ in environment.refreshTranslationService() }
+        .onChange(of: environment.settings.studyReviewModel) { _, _ in environment.refreshTranslationService() }
     }
 
     private var settingsContent: some View {
@@ -46,6 +47,7 @@ struct SettingsScreen: View {
             recognitionSection
             vadSection
             translationSection
+            studyReviewSection
             dataSection
             cloudSection
             aboutSection
@@ -272,6 +274,31 @@ struct SettingsScreen: View {
         } footer: {
             Text("Only recognized Russian text is sent to this endpoint. API keys stay in the Keychain.")
         }
+    }
+
+    /// 课后整理 uses the translation API's base + key; only the model can
+    /// differ. No request parameters are exposed here.
+    private var studyReviewSection: some View {
+        Section {
+            TextField(
+                String(localized: "Model (empty = same as translation)"),
+                text: studyModelBinding
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            LabeledRow(label: String(localized: "Language"), value: String(localized: "简体中文（保留俄语术语原文）"))
+        } header: {
+            Text(String(localized: "Post-class review"))
+        } footer: {
+            Text("把课堂整理为复习资料时，会将你选择的那堂课的文字（转录、翻译、笔记）发送到上方配置的模型服务；整理由你主动点击开始。")
+        }
+    }
+
+    private var studyModelBinding: Binding<String> {
+        Binding(
+            get: { environment.settings.studyReviewModel },
+            set: { environment.settings.studyReviewModel = $0 }
+        )
     }
 
     private var apiBaseBinding: Binding<String> {

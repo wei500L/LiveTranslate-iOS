@@ -10,18 +10,25 @@ enum SessionExport {
     /// common case ourselves).
     private static let staleFileLifetime: TimeInterval = 24 * 60 * 60
 
-    /// Build the export payload from persisted data.
+    /// Build the export payload from persisted data. The scope selects
+    /// which parts ride along; `review` is the classroom's current review
+    /// content when the scope includes it.
     @MainActor
     static func payload(
         session: ClassroomSession,
         entries: [TranscriptEntry],
         notes: [SessionNote] = [],
+        scope: ExportScope = .transcriptAndNotes,
+        review: StudyReviewContent? = nil,
         fallbackBackend: ASRBackendKind
     ) -> TranscriptExportData {
         let ordered = entries.sorted { $0.sequenceID < $1.sequenceID }
         let entriesByID = Dictionary(
             ordered.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
         )
+        let includesTranscript = scope != .reviewOnly
+        let includeNotes = scope == .transcriptAndNotes || scope == .fullMaterial
+        let includeReview = scope == .reviewOnly || scope == .fullMaterial
         return TranscriptExportData(
             title: session.title,
             startTime: session.startTime,
@@ -31,7 +38,7 @@ enum SessionExport {
             modelVersion: session.modelVersion,
             computeDescription: session.computePreference,
             translationModel: session.translationModel,
-            entries: ordered.map { entry in
+            entries: includesTranscript ? ordered.map { entry in
                 ExportEntry(
                     sequenceID: entry.sequenceID,
                     startOffset: entry.startOffset,
@@ -40,15 +47,26 @@ enum SessionExport {
                     translatedText: entry.translatedText,
                     createdAt: entry.createdAt
                 )
-            },
-            notes: notes.map { note in
+            } : [],
+            notes: includeNotes ? notes.map { note in
                 ExportNote(
                     id: note.id,
                     text: note.text,
                     createdAt: note.createdAt,
                     anchorOffset: note.anchorEntryID.flatMap { entriesByID[$0]?.startOffset }
                 )
-            }
+            } : [],
+            review: (includeReview ? review : nil).map { content in
+                ExportReview(
+                    topic: content.topic,
+                    summary: content.summary,
+                    sections: content.markdownSections.map { section in
+                        ExportReview.Section(title: section.title, body: section.body)
+                    },
+                    contentJSON: content.encodedString() ?? ""
+                )
+            },
+            includesTranscript: includesTranscript
         )
     }
 
@@ -67,6 +85,8 @@ enum SessionExport {
         session: ClassroomSession,
         entries: [TranscriptEntry],
         notes: [SessionNote] = [],
+        scope: ExportScope = .transcriptAndNotes,
+        review: StudyReviewContent? = nil,
         format: ExportFormat,
         fallbackBackend: ASRBackendKind
     ) async -> URL? {
@@ -74,6 +94,8 @@ enum SessionExport {
             session: session,
             entries: entries,
             notes: notes,
+            scope: scope,
+            review: review,
             fallbackBackend: fallbackBackend
         )
         return await writeSnapshot(data: data, format: format)
@@ -81,7 +103,7 @@ enum SessionExport {
 
     /// Format + write the already-Sendable snapshot off the main actor, so
     /// a long transcript never freezes the UI mid-share.
-    private static func writeSnapshot(
+    static func writeSnapshot(
         data: TranscriptExportData,
         format: ExportFormat
     ) async -> URL? {

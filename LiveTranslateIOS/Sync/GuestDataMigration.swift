@@ -176,9 +176,10 @@ final class GuestDataMigration {
             // with the same id always wins) so session course references
             // resolve during the copy.
             mergeGuestCourses()
-            // Notes are session-scoped; collect their ids for the copy
-            // after the sessions exist.
+            // Notes and reviews are session-scoped; collect them for the
+            // copy after the sessions exist.
             let guestNotes = reader.noteSnapshots()
+            let guestReviews = reader.reviewSnapshots()
             let sessionIDs = try reader.sessionIDs(excluding: Set(record.copiedSessionIDs))
             record.totalSessions = record.copiedCount + sessionIDs.count
             record.phase = .moving
@@ -212,6 +213,7 @@ final class GuestDataMigration {
                 index += batchIDs.count
             }
             copyGuestNotes(guestNotes)
+            copyGuestReviews(guestReviews)
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -342,6 +344,27 @@ final class GuestDataMigration {
         }
     }
 
+    /// Copies guest study reviews whose session now exists in the account
+    /// store (add-only union: an account row with the same id always wins).
+    private func copyGuestReviews(_ reviews: [GuestLibraryReader.ReviewSnapshot]) {
+        for review in reviews {
+            guard (try? repository.studyReview(forSessionID: review.id)) ?? nil == nil else {
+                continue
+            }
+            let record = SyncServerRecordDTO(
+                id: review.id,
+                reviewStatus: review.status,
+                reviewContent: review.contentJSON,
+                reviewGeneratedContent: review.generatedJSON,
+                reviewModel: review.reviewModel,
+                reviewGeneratedAt: review.generatedAt,
+                reviewSourceUpdatedAt: review.sourceUpdatedAt,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteStudyReview(record: record, serverVersion: 0)
+        }
+    }
+
     /// Merges the guest bookmark ids into the account's store (union —
     /// existing account bookmarks win). Runs on the account's BookmarkStore.
     private func mergeGuestBookmarks() {
@@ -448,8 +471,21 @@ struct GuestLibraryReader {
         var text: String
     }
 
+    /// Sendable snapshot of one guest study review (terminal content only —
+    /// generation progress is device-local and never migrates).
+    struct ReviewSnapshot: Sendable {
+        var id: UUID
+        var status: String
+        var contentJSON: String
+        var generatedJSON: String
+        var reviewModel: String
+        var generatedAt: Date?
+        var sourceUpdatedAt: Date?
+    }
+
     private static let schema = Schema([
-        ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+        ClassroomSession.self, TranscriptEntry.self,
+        Course.self, SessionNote.self, StudyReview.self
     ])
 
     private var guestURL: URL { AccountScope.guestDatabaseURL }
@@ -562,6 +598,22 @@ struct GuestLibraryReader {
             NoteSnapshot(
                 id: n.id, sessionID: n.sessionID,
                 anchorEntryID: n.anchorEntryID, text: n.text
+            )
+        }
+    }
+
+    /// All guest study reviews with content, values only.
+    func reviewSnapshots() -> [ReviewSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let reviews = (try? context.fetch(FetchDescriptor<StudyReview>())) ?? []
+        return reviews.compactMap { r in
+            guard !r.contentJSON.isEmpty else { return nil }
+            return ReviewSnapshot(
+                id: r.id, status: r.status, contentJSON: r.contentJSON,
+                generatedJSON: r.generatedJSON, reviewModel: r.reviewModel,
+                generatedAt: r.generatedAt, sourceUpdatedAt: r.sourceUpdatedAt
             )
         }
     }

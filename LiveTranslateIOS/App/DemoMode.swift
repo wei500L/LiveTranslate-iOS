@@ -67,7 +67,8 @@ extension AppEnvironment {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
 
         let schema = Schema([
-            ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+            ClassroomSession.self, TranscriptEntry.self,
+            Course.self, SessionNote.self, StudyReview.self
         ])
         let configuration = ModelConfiguration(
             "ui-demo", schema: schema, isStoredInMemoryOnly: true
@@ -93,6 +94,9 @@ extension AppEnvironment {
         let service = DemoTranslationService()
         let box = TranslationServiceBox()
         box.set(service)
+        let studyService = DemoStudyReviewService()
+        let studyBox = StudyServiceBox()
+        studyBox.set(studyService)
         let environment = AppEnvironment(
             capabilities: AppEnvironment.Capabilities(
                 requestsMicrophonePermission: false,
@@ -110,7 +114,9 @@ extension AppEnvironment {
             translationServiceBox: box,
             bookmarks: BookmarkStore(defaults: defaults, repository: repository),
             // Demo mode never touches the production sync server.
-            cloudSync: nil
+            cloudSync: nil,
+            studyReviewService: studyService,
+            studyServiceBox: studyBox
         )
 
         environment.flow.demoGreeting = "晚上好，学习者"
@@ -254,6 +260,30 @@ struct DemoTranslationService: TranslationService {
 
     func testConnection() async -> Result<String, TranslationError> {
         .success("演示模式 · 未连接真实服务")
+    }
+}
+
+// MARK: - Demo study review service (canned, no network)
+
+/// Debug-only stand-in for the study-review model service: the REAL
+/// pipeline (chunking, parsing, persistence) runs end to end against these
+/// canned responses — no network is ever touched, and this type does not
+/// exist in Release builds.
+struct DemoStudyReviewService: StudyReviewModelService {
+    var isConfiguredNow: Bool { true }
+
+    func complete(systemPrompt: String, userPrompt: String, maxTokens: Int) async throws -> String {
+        if systemPrompt == StudyReviewPrompt.extractionSystemPrompt() {
+            return """
+            {"topic": "多元函数微分的引入", "keyPoints": [{"text": "偏导数描述多元函数沿单一方向的变化率", "cites": [1]}, {"text": "可微要求所有偏导数存在且连续", "cites": [2]}], "terms": [{"russian": "частная производная", "chinese": "偏导数", "explanation": "其余变量固定时函数对一个变量的导数", "cites": [1]}], "assignments": [{"text": "完成习题集第 4 章第 1–8 题", "cites": [2]}], "uncertainties": [{"text": "一段关于几何解释的话转录不完整", "cites": [1]}]}
+            """
+        }
+        if systemPrompt == StudyReviewPrompt.mergeSystemPrompt() {
+            return """
+            {"topic": "多元函数的偏导数与可微性", "summary": "本讲从 ε−δ 定义的回顾出发，引入偏导数的概念：把其余变量固定，只考察函数对某一个自变量的变化率。随后给出了偏导数的形式化定义（增量比的极限），并通过具体二元函数的例子演示了计算方法。在几何上，偏导数对应曲面被坐标平面所截曲线的切线斜率。最后讨论了可微性：当所有偏导数存在且连续时函数可微，并预告了下一讲的微分与近似计算应用。", "outline": [{"title": "从 ε−δ 定义到多元函数", "detail": "回顾一元极限定义，说明多元情形的思路", "cites": [1], "children": []}, {"title": "偏导数的定义与计算", "detail": "固定其余变量，对单一变量求导；∂z/∂x 的极限形式", "cites": [2], "children": [{"title": "示例：具体二元函数求偏导", "detail": "课堂演算的两个例子", "cites": [3], "children": []}]}, {"title": "几何意义", "detail": "截面曲线切线的斜率", "cites": [4], "children": []}, {"title": "可微性条件与下一讲预告", "detail": "偏导数连续 ⇒ 可微；下一讲：全微分与近似计算", "cites": [5], "children": []}], "keyPoints": [{"text": "偏导数 = 其余变量固定时函数对单一变量的变化率", "cites": [2]}, {"text": "∂z/∂x 定义为增量比在增量趋于零时的极限", "cites": [2]}, {"text": "所有偏导数存在且连续 ⇒ 函数在该点可微", "cites": [5]}], "terms": [{"russian": "частная производная", "chinese": "偏导数", "explanation": "多元函数对单一自变量的导数（其余变量固定）", "cites": [2]}, {"russian": "дифференцируемая функция", "chinese": "可微函数", "explanation": "在该点可用线性逼近良好近似的函数", "cites": [5]}, {"russian": "окрестность точки", "chinese": "点的邻域", "explanation": "该点附近的一个小区域", "cites": [3]}], "assignments": [{"text": "完成习题集第 4 章第 1–8 题，下节课检查", "cites": [5]}], "uncertainties": [{"text": "几何解释一段的转录不完整，建议回看 [01:18] 附近原文", "cites": [1]}]}
+            """
+        }
+        throw TranslationError.emptyResponse
     }
 }
 
@@ -700,6 +730,53 @@ enum DemoSeed {
             }
             if spec.title.hasPrefix("高等数学") {
                 detailSessionID = session.id
+                // Demo study review: a completed review tied to the real
+                // seeded entry ids, so the reading page and citations have
+                // genuine data behind them.
+                if detailEntryIDs.count > 3 {
+                    var demoReviewContent = StudyReviewContent()
+                    demoReviewContent.topic = "多元函数的偏导数与可微性"
+                    demoReviewContent.summary = "本讲从 ε−δ 定义的回顾出发，引入偏导数的概念：把其余变量固定，只考察函数对某一个自变量的变化率。随后给出形式化定义并通过二元函数示例演示计算，几何上对应曲面截面曲线的切线斜率，最后讨论可微性条件并预告下一讲的全微分与近似计算。"
+                    demoReviewContent.outline = [
+                        .init(title: "从 ε−δ 定义到多元函数", detail: "回顾一元极限定义，说明多元情形的思路", refEntryIDs: [detailEntryIDs[0]], children: []),
+                        .init(title: "偏导数的定义与计算", detail: "固定其余变量，对单一变量求导；增量比的极限形式", refEntryIDs: [detailEntryIDs[1], detailEntryIDs[3]], children: [
+                            .init(title: "示例：具体二元函数求偏导", detail: "课堂演算的两个例子", refEntryIDs: [detailEntryIDs[6]], children: []),
+                        ]),
+                        .init(title: "可微性条件", detail: "偏导数存在且连续 ⇒ 可微", refEntryIDs: [detailEntryIDs[5]], children: []),
+                    ]
+                    demoReviewContent.keyPoints = [
+                        .init(text: "偏导数 = 其余变量固定时函数对单一变量的变化率", refEntryIDs: [detailEntryIDs[1]]),
+                        .init(text: "所有偏导数存在且连续 ⇒ 函数在该点可微", refEntryIDs: [detailEntryIDs[5]]),
+                    ]
+                    demoReviewContent.terms = [
+                        .init(russian: "частная производная", chinese: "偏导数", explanation: "多元函数对单一自变量的导数（其余变量固定）", refEntryIDs: [detailEntryIDs[1]]),
+                        .init(russian: "дифференцируемая функция", chinese: "可微函数", explanation: "在该点可用线性逼近良好近似的函数", refEntryIDs: [detailEntryIDs[5]]),
+                    ]
+                    demoReviewContent.assignments = [
+                        .init(text: "完成习题集第 4 章第 1–8 题，下节课检查", refEntryIDs: [detailEntryIDs[6]]),
+                    ]
+                    demoReviewContent.uncertainties = [
+                        .init(text: "几何解释一段的转录不完整，建议回看对应段落原文", refEntryIDs: [detailEntryIDs[4]]),
+                    ]
+                    demoReviewContent.userNotes = [
+                        .init(text: "老师强调偏导数连续只是可微的充分条件"),
+                    ]
+                    if let reviewJSON = demoReviewContent.encodedString() {
+                        let review = StudyReview(
+                            id: session.id,
+                            sessionID: session.id,
+                            status: .completed,
+                            contentJSON: reviewJSON,
+                            generatedJSON: reviewJSON,
+                            hasUserEdits: false,
+                            chunkStateJSON: "",
+                            reviewModel: "demo-review-model",
+                            generatedAt: Date(),
+                            sourceUpdatedAt: session.updatedAt
+                        )
+                        context.insert(review)
+                    }
+                }
                 // Demo notes: one anchored to the definition line, one to
                 // the long formula line, one unanchored.
                 if detailEntryIDs.count > 3 {

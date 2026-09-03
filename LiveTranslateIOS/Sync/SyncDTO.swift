@@ -14,6 +14,7 @@ enum SyncEntityType: String, Codable, Sendable {
     case favorite
     case course
     case note
+    case studyReview = "study_review"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -199,6 +200,14 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     // note
     var noteText: String?
     var anchorEntryId: UUID?
+    // study review (entity id == session id). Only terminal states with
+    // content are ever pushed — generating/partial progress is local.
+    var reviewStatus: String?
+    var reviewContent: String?
+    var reviewGeneratedContent: String?
+    var reviewModel: String?
+    var reviewGeneratedAt: Date?
+    var reviewSourceUpdatedAt: Date?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -252,6 +261,12 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var isArchived: Bool?
     var noteText: String?
     var anchorEntryId: UUID?
+    var reviewStatus: String?
+    var reviewContent: String?
+    var reviewGeneratedContent: String?
+    var reviewModel: String?
+    var reviewGeneratedAt: Date?
+    var reviewSourceUpdatedAt: Date?
     var serverVersion: Int
     var deleted: Bool
 
@@ -282,6 +297,12 @@ struct SyncServerRecordDTO: Codable, Sendable {
         isArchived: Bool? = nil,
         noteText: String? = nil,
         anchorEntryId: UUID? = nil,
+        reviewStatus: String? = nil,
+        reviewContent: String? = nil,
+        reviewGeneratedContent: String? = nil,
+        reviewModel: String? = nil,
+        reviewGeneratedAt: Date? = nil,
+        reviewSourceUpdatedAt: Date? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -309,6 +330,12 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.isArchived = isArchived
         self.noteText = noteText
         self.anchorEntryId = anchorEntryId
+        self.reviewStatus = reviewStatus
+        self.reviewContent = reviewContent
+        self.reviewGeneratedContent = reviewGeneratedContent
+        self.reviewModel = reviewModel
+        self.reviewGeneratedAt = reviewGeneratedAt
+        self.reviewSourceUpdatedAt = reviewSourceUpdatedAt
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -339,6 +366,12 @@ struct SyncServerRecordDTO: Codable, Sendable {
         isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived)
         noteText = try container.decodeIfPresent(String.self, forKey: .noteText)
         anchorEntryId = try container.decodeIfPresent(UUID.self, forKey: .anchorEntryId)
+        reviewStatus = try container.decodeIfPresent(String.self, forKey: .reviewStatus)
+        reviewContent = try container.decodeIfPresent(String.self, forKey: .reviewContent)
+        reviewGeneratedContent = try container.decodeIfPresent(String.self, forKey: .reviewGeneratedContent)
+        reviewModel = try container.decodeIfPresent(String.self, forKey: .reviewModel)
+        reviewGeneratedAt = try container.decodeIfPresent(Date.self, forKey: .reviewGeneratedAt)
+        reviewSourceUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .reviewSourceUpdatedAt)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -383,4 +416,5 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var entryCount: Int
     var courseCount: Int?
     var noteCount: Int?
+    var reviewCount: Int?
 }

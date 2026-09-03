@@ -32,6 +32,41 @@ enum ExportFormat: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 }
 
+/// What an export includes. The scope shapes which sections each format
+/// renders; SRT and single-language TXT never carry review content (their
+/// formats have no place for it).
+enum ExportScope: String, CaseIterable, Identifiable, Sendable {
+    case transcriptOnly
+    case transcriptAndNotes
+    case reviewOnly
+    case fullMaterial
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .transcriptOnly: return "仅转录"
+        case .transcriptAndNotes: return "转录与笔记"
+        case .reviewOnly: return "学习整理"
+        case .fullMaterial: return "完整课堂资料"
+        }
+    }
+}
+
+/// The study-review part of an export: flat titled sections (rendered per
+/// format) plus the structured JSON for the JSON format.
+struct ExportReview: Sendable, Equatable {
+    struct Section: Sendable, Equatable {
+        var title: String
+        var body: String
+    }
+
+    var topic: String
+    var summary: String
+    var sections: [Section]
+    var contentJSON: String
+}
+
 /// One exported utterance.
 struct ExportEntry: Sendable, Identifiable, Equatable {
     let sequenceID: Int
@@ -75,6 +110,10 @@ struct TranscriptExportData: Sendable, Equatable {
     let entries: [ExportEntry]
     /// The user's own classroom notes (empty when none were taken).
     var notes: [ExportNote] = []
+    /// The study review (nil when not part of this export).
+    var review: ExportReview? = nil
+    /// False for a review-only export (no transcript section).
+    var includesTranscript: Bool = true
 
     init(
         title: String,
@@ -86,7 +125,9 @@ struct TranscriptExportData: Sendable, Equatable {
         computeDescription: String,
         translationModel: String,
         entries: [ExportEntry],
-        notes: [ExportNote] = []
+        notes: [ExportNote] = [],
+        review: ExportReview? = nil,
+        includesTranscript: Bool = true
     ) {
         self.title = title
         self.startTime = startTime
@@ -98,6 +139,8 @@ struct TranscriptExportData: Sendable, Equatable {
         self.translationModel = translationModel
         self.entries = entries
         self.notes = notes
+        self.review = review
+        self.includesTranscript = includesTranscript
     }
 }
 
@@ -154,16 +197,36 @@ enum TranscriptExporter {
         if let end = data.endTime {
             lines.append("- \(String(localized: "End")): \(dateTimeFormatter.string(from: end))")
         }
-        lines.append("- \(String(localized: "Duration")): \(durationText(data.duration))")
-        lines.append("- \(String(localized: "Model")): \(modelIdentity)")
-        lines.append("- \(String(localized: "ASR backend")): \(data.backend.displayName)")
-        lines.append("- \(String(localized: "Compute")): \(data.computeDescription)")
-        if !data.translationModel.isEmpty {
-            lines.append("- \(String(localized: "Translation model")): \(data.translationModel)")
+        if data.includesTranscript {
+            lines.append("- \(String(localized: "Duration")): \(durationText(data.duration))")
+            lines.append("- \(String(localized: "Model")): \(modelIdentity)")
+            lines.append("- \(String(localized: "ASR backend")): \(data.backend.displayName)")
+            lines.append("- \(String(localized: "Compute")): \(data.computeDescription)")
+            if !data.translationModel.isEmpty {
+                lines.append("- \(String(localized: "Translation model")): \(data.translationModel)")
+            }
         }
         lines.append("")
-        // The user's own notes come first — they are the shortest path back
-        // into the material when reviewing.
+        if let review = data.review {
+            lines.append("## \(String(localized: "Study review"))")
+            lines.append("")
+            if !review.topic.isEmpty {
+                lines.append("**\(review.topic)**")
+                lines.append("")
+            }
+            if !review.summary.isEmpty {
+                lines.append(review.summary)
+                lines.append("")
+            }
+            for section in review.sections {
+                lines.append("### \(section.title)")
+                lines.append("")
+                lines.append(section.body)
+                lines.append("")
+            }
+        }
+        // The user's own notes come right after the review — together they
+        // are the shortest path back into the material.
         if !data.notes.isEmpty {
             lines.append("## \(String(localized: "Class notes"))")
             lines.append("")
@@ -173,14 +236,18 @@ enum TranscriptExporter {
             }
             lines.append("")
         }
-        lines.append("---")
-        lines.append("")
-        for entry in data.entries {
-            lines.append("**[\(mmss(entry.startOffset))]** \(entry.originalText)")
+        if data.includesTranscript {
+            lines.append("---")
             lines.append("")
-            if let translated = entry.translatedText, !translated.isEmpty {
-                lines.append(translated)
+        }
+        if data.includesTranscript {
+            for entry in data.entries {
+                lines.append("**[\(mmss(entry.startOffset))]** \(entry.originalText)")
                 lines.append("")
+                if let translated = entry.translatedText, !translated.isEmpty {
+                    lines.append(translated)
+                    lines.append("")
+                }
             }
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
@@ -199,6 +266,23 @@ enum TranscriptExporter {
                 lines.append("→ \(translated)")
             }
             lines.append("")
+        }
+        if let review = data.review {
+            lines.append("— \(String(localized: "Study review")) —")
+            lines.append("")
+            if !review.topic.isEmpty {
+                lines.append("◆ \(review.topic)")
+                lines.append("")
+            }
+            if !review.summary.isEmpty {
+                lines.append(review.summary)
+                lines.append("")
+            }
+            for section in review.sections {
+                lines.append("— \(section.title) —")
+                lines.append(section.body)
+                lines.append("")
+            }
         }
         if !data.notes.isEmpty {
             lines.append("— \(String(localized: "Class notes")) —")
@@ -291,6 +375,27 @@ enum TranscriptExporter {
                 }
                 return item
             }
+        }
+        if let review = data.review {
+            var reviewObject: [String: Any] = [
+                "topic": review.topic,
+                "summary": review.summary,
+                "sections": review.sections.map { section in
+                    ["title": section.title, "body": section.body]
+                },
+            ]
+            // The full structured content (with per-item citation entry
+            // ids) rides as parsed JSON, not a string.
+            if let parsed = try? JSONSerialization.jsonObject(
+                with: Data(review.contentJSON.utf8)
+            ) {
+                reviewObject["content"] = parsed
+            }
+            object["studyReview"] = reviewObject
+        }
+        if !data.includesTranscript {
+            object.removeValue(forKey: "entries")
+            object.removeValue(forKey: "entryCount")
         }
         let jsonData = (try? JSONSerialization.data(
             withJSONObject: object, options: [.prettyPrinted, .sortedKeys]

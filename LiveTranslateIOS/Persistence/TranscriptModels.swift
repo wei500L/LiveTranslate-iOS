@@ -216,6 +216,72 @@ final class SessionNote {
     }
 }
 
+/// One post-class AI study review per classroom session. The entity id IS
+/// the session id (the bookmark/favorite pattern) — one review per session
+/// structurally, across every device.
+///
+/// Versioning: `generatedJSON` is the model's structured output as parsed
+/// at generation time; `contentJSON` is what the user reads and edits
+/// (starts as a copy of generated, diverges with user edits). `hasUserEdits`
+/// drives the sync protection — remote changes never silently overwrite a
+/// locally-edited review. Chunk-level generation progress (`chunkStateJSON`)
+/// is device-local and never synced.
+@Model
+final class StudyReview {
+    /// == ClassroomSession.id.
+    @Attribute(.unique) var id: UUID
+    var sessionID: UUID
+    /// Raw value of `StudyReviewStatus`. `generating` is local-only.
+    var status: String
+    /// Current content (may carry user edits) — StudyReviewContent JSON.
+    var contentJSON: String
+    /// The model's original structured output — StudyReviewContent JSON.
+    var generatedJSON: String
+    /// True once the user edited AI fields (sync keeps local content).
+    var hasUserEdits: Bool
+    /// Generation progress (chunk plan + per-chunk results).
+    var chunkStateJSON: String
+    /// Model used for the last completed generation (display only).
+    var reviewModel: String
+    /// When the last successful generation finished.
+    var generatedAt: Date?
+    /// session.updatedAt snapshot at generation time — staleness detection
+    /// ("课堂内容已更新，可重新整理").
+    var sourceUpdatedAt: Date?
+    var createdAt: Date
+    var updatedAt: Date
+    /// Cloud-sync metadata (0 = never synced).
+    var serverVersion: Int
+
+    init(
+        id: UUID,
+        sessionID: UUID,
+        status: StudyReviewStatus = .generating,
+        contentJSON: String = "",
+        generatedJSON: String = "",
+        hasUserEdits: Bool = false,
+        chunkStateJSON: String = "",
+        reviewModel: String = "",
+        generatedAt: Date? = nil,
+        sourceUpdatedAt: Date? = nil,
+        serverVersion: Int = 0
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.status = status.rawValue
+        self.contentJSON = contentJSON
+        self.generatedJSON = generatedJSON
+        self.hasUserEdits = hasUserEdits
+        self.chunkStateJSON = chunkStateJSON
+        self.reviewModel = reviewModel
+        self.generatedAt = generatedAt
+        self.sourceUpdatedAt = sourceUpdatedAt
+        self.createdAt = .now
+        self.updatedAt = .now
+        self.serverVersion = serverVersion
+    }
+}
+
 enum TranslationStatus: String, Codable, Sendable {
     case pending
     case completed

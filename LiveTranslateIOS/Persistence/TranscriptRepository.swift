@@ -72,6 +72,44 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Cloud-sync apply for a note record.
     func applyRemoteNote(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteNoteByID(_ id: UUID) throws
+
+    // MARK: Study reviews
+    // Generation progress (generating / chunk state) is device-local and
+    // never notifies the sync observer; terminal states and user edits do.
+
+    /// The session's review, if one exists.
+    func studyReview(forSessionID id: UUID) throws -> StudyReview?
+    /// All reviews (course aggregation, search, initial upload).
+    func allStudyReviews() throws -> [StudyReview]
+    /// Fetches or creates the review row (id == session id, status
+    /// generating). Local-only — not synced.
+    func ensureStudyReview(forSessionID id: UUID) throws -> StudyReview
+    /// Starts/restarts a generation: writes the chunk plan and status.
+    /// Local-only.
+    func beginStudyReviewGeneration(_ review: StudyReview, chunkState: StudyChunkState) throws
+    /// Persists chunk progress; `terminal` optionally updates the status.
+    /// Local-only.
+    func updateStudyReviewProgress(
+        _ review: StudyReview, chunkStateJSON: String, terminal: StudyReviewStatus?
+    ) throws
+    /// A finished generation: replaces content + generated, stamps model
+    /// and source snapshot, sets status completed. Notifies sync.
+    func completeStudyReviewGeneration(
+        _ review: StudyReview, content: StudyReviewContent,
+        model: String, sourceUpdatedAt: Date
+    ) throws
+    /// Marks a run failed (previous content, if any, stays). Notifies sync
+    /// only when there is content worth keeping in sync.
+    func failStudyReviewGeneration(_ review: StudyReview) throws
+    /// An orphaned `generating` row (app was killed): becomes partial when
+    /// chunks finished, else failed. Local-only.
+    func markStudyReviewInterrupted(_ review: StudyReview) throws
+    /// Saves user-edited content. Notifies sync.
+    func applyStudyReviewUserEdits(_ review: StudyReview, content: StudyReviewContent) throws
+    func deleteStudyReview(_ review: StudyReview) throws
+    /// Cloud-sync apply for a review record (protects local user edits).
+    func applyRemoteStudyReview(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteStudyReviewByID(_ id: UUID) throws
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).

@@ -15,9 +15,17 @@ struct SessionDetailView: View {
     @State private var renameDraft: String?
     /// Note editor presentation: creating (optionally anchored) or editing.
     @State private var noteEditor: NoteEditorContext?
+    /// Export options sheet (scope + format).
+    @State private var exportSheet = false
+    /// A jump target handed over from the study-review page (pops itself
+    /// and scrolls here).
+    @State private var pendingReviewJump: UUID?
+    @State private var pushingReview = false
     @FocusState private var searchFocused: Bool
 
     let sessionID: UUID
+    /// Opens the study-review page right away (search hit landing).
+    var openReviewOnLoad = false
 
     /// What the note editor sheet is editing (Identifiable so it can drive
     /// `sheet(item:)`).
@@ -57,6 +65,19 @@ struct SessionDetailView: View {
         .task {
             viewModel.attach(environment)
             viewModel.load(sessionID: sessionID)
+            if openReviewOnLoad, viewModel.hasReviewResult {
+                pushingReview = true
+            }
+        }
+        .navigationDestination(isPresented: $pushingReview) {
+            StudyReviewView(
+                sessionID: sessionID,
+                onJumpToEntry: { entryID in
+                    pendingReviewJump = entryID
+                    pushingReview = false
+                }
+            )
+            .environment(environment)
         }
         .onAppear {
             // Refresh on back-navigation (e.g. retry happened elsewhere).
@@ -66,6 +87,16 @@ struct SessionDetailView: View {
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
+        }
+        .sheet(isPresented: $exportSheet) {
+            if let session = viewModel.session {
+                ExportOptionsSheet(
+                    hasReview: viewModel.hasReviewResult
+                ) { scope, format in
+                    Task { await export(session: session, scope: scope, format: format) }
+                }
+                .environment(environment)
+            }
         }
         .sheet(item: $noteEditor) { context in
             if let session = viewModel.session {
@@ -93,6 +124,7 @@ struct SessionDetailView: View {
                 ScrollView {
                     VStack(spacing: LTSpacing.l) {
                         headerCard(session)
+                        reviewCard
                         notesCard
                         searchCard
                         modeChips
@@ -111,6 +143,13 @@ struct SessionDetailView: View {
                         proxy.scrollTo(target, anchor: .center)
                     }
                     viewModel.pendingScrollTarget = nil
+                }
+                .onChange(of: pendingReviewJump) { _, entryID in
+                    guard let entryID else { return }
+                    if let entry = viewModel.entries.first(where: { $0.id == entryID }) {
+                        viewModel.pendingScrollTarget = entry.sequenceID
+                    }
+                    pendingReviewJump = nil
                 }
             }
             bottomToolbar
@@ -235,6 +274,47 @@ struct SessionDetailView: View {
 
     private func backendName(_ session: ClassroomSession) -> String {
         ASRBackendKind(rawValue: session.asrBackend)?.userTitle ?? session.asrBackend
+    }
+
+    // MARK: - Study review
+
+    /// Entry point to the classroom's AI study review. The whole review
+    /// lives on its own pushed page; this card shows the honest current
+    /// state (including in-flight progress and staleness).
+    private var reviewCard: some View {
+        Button {
+            pushingReview = true
+            LTHaptics.tap()
+        } label: {
+            HStack(spacing: LTSpacing.m) {
+                LTIconBadge(
+                    symbol: "sparkles",
+                    tint: viewModel.reviewCardTint,
+                    size: 38
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("学习整理")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text(viewModel.reviewCardDetail)
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                if viewModel.isReviewStale && viewModel.hasReviewResult {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(LTColors.warning)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(LTColors.textTertiary)
+            }
+            .ltCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text("双击打开学习整理"))
     }
 
     // MARK: - Notes
@@ -482,7 +562,7 @@ struct SessionDetailView: View {
                 searchFocused = true
             }
             bottomButton(symbol: "square.and.arrow.up", label: "导出") {
-                export(format: .markdown)
+                exportSheet = true
             }
             bottomButton(symbol: "doc.on.doc", label: "复制") {
                 viewModel.copyTranscript()
@@ -508,10 +588,10 @@ struct SessionDetailView: View {
     ) -> some View {
         if showMenu {
             Menu {
-                Menu("导出为") {
-                    ForEach(ExportFormat.allCases) { format in
-                        Button(format.displayName) { export(format: format) }
-                    }
+                Button {
+                    exportSheet = true
+                } label: {
+                    Label("导出…", systemImage: "square.and.arrow.up")
                 }
                 Button {
                     Task { await viewModel.retranslateFailed() }
@@ -569,10 +649,8 @@ struct SessionDetailView: View {
     }
 
     private var exportMenu: some View {
-        Menu {
-            ForEach(ExportFormat.allCases) { format in
-                Button(format.displayName) { export(format: format) }
-            }
+        Button {
+            exportSheet = true
         } label: {
             Image(systemName: "square.and.arrow.up")
                 .font(.system(size: 15, weight: .medium))
@@ -583,14 +661,30 @@ struct SessionDetailView: View {
 
     // MARK: - Export
 
-    private func export(format: ExportFormat) {
-        Task {
-            if let url = await viewModel.exportURL(format: format) {
-                shareItem = SharedFile(url: url)
-            } else {
-                exportFailed = true
-            }
+    private func export(session: ClassroomSession, scope: ExportScope, format: ExportFormat) async {
+        let entries = (try? environment.repository.entries(for: session)) ?? []
+        let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
+        let review: StudyReviewContent?
+        if scope == .reviewOnly || scope == .fullMaterial {
+            review = (try? environment.repository.studyReview(forSessionID: session.id))
+                .flatMap { StudyReviewContent.decode($0.contentJSON) }
+        } else {
+            review = nil
         }
+        guard let url = await SessionExport.writeTemporaryFile(
+            session: session,
+            entries: entries,
+            notes: notes,
+            scope: scope,
+            review: review,
+            format: format,
+            fallbackBackend: environment.settings.preferredBackend
+        ) else {
+            exportFailed = true
+            LTHaptics.warning()
+            return
+        }
+        shareItem = SharedFile(url: url)
     }
 }
 

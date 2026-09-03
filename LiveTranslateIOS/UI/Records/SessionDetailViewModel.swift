@@ -27,6 +27,7 @@ final class SessionDetailViewModel {
 
     var entries: [TranscriptEntry] = []
     var notes: [SessionNote] = []
+    private(set) var review: StudyReview?
     var isLoaded = false
     var isRetranslating = false
     var displayMode: DisplayMode = .bilingual
@@ -53,12 +54,14 @@ final class SessionDetailViewModel {
             self.session = nil
             entries = []
             notes = []
+            review = nil
             isLoaded = true
             return
         }
         self.session = session
         entries = (try? environment.repository.entries(for: session)) ?? []
         notes = (try? environment.repository.notes(forSessionID: sessionID)) ?? []
+        review = try? environment.repository.studyReview(forSessionID: sessionID)
         // Keep bookmark IDs honest: entries deleted upstream drop their
         // bookmarks instead of lingering as orphans.
         environment.bookmarks.pruneEntries(in: sessionID, existingEntryIDs: Set(entries.map(\.id)))
@@ -186,6 +189,58 @@ final class SessionDetailViewModel {
         reload()
     }
 
+    // MARK: - Study review presentation
+
+    var reviewContent: StudyReviewContent? {
+        guard let review, !review.contentJSON.isEmpty else { return nil }
+        return StudyReviewContent.decode(review.contentJSON)
+    }
+
+    /// Live generation progress, when this classroom is being processed.
+    var reviewProgress: StudyReviewGenerator.Progress? {
+        guard let session else { return nil }
+        return environment?.studyReviewGenerator.progress(for: session.id)
+    }
+
+    var reviewStatus: StudyReviewStatus? {
+        review.flatMap { StudyReviewStatus(rawValue: $0.status) }
+    }
+
+    var isReviewStale: Bool {
+        guard let session, let review, let sourceUpdatedAt = review.sourceUpdatedAt else {
+            return false
+        }
+        return session.updatedAt > sourceUpdatedAt
+    }
+
+    /// Short status line for the entry card.
+    var reviewCardDetail: String {
+        if let progress = reviewProgress {
+            return progress.label
+        }
+        if let content = reviewContent, reviewStatus == .completed {
+            return content.topic.isEmpty ? "已整理 · 点击阅读" : content.topic
+        }
+        switch reviewStatus {
+        case .partial: return "上次整理未完成 · 可继续"
+        case .failed: return reviewContent == nil ? "整理失败 · 可重试" : "已整理（上次重新整理失败）"
+        case .generating: return "正在整理…"
+        case .completed, .none: return "整理为复习资料 · 转录、翻译与笔记"
+        }
+    }
+
+    /// Tint for the entry card chip.
+    var reviewCardTint: Color {
+        if reviewProgress != nil { return LTColors.accentCyan }
+        if reviewStatus == .completed, reviewContent != nil { return LTColors.accentGreen }
+        if reviewStatus == .partial || reviewStatus == .failed { return LTColors.warning }
+        return LTColors.textTertiary
+    }
+
+    var hasReviewResult: Bool {
+        reviewContent != nil
+    }
+
     // MARK: - Derived presentation
 
     var visibleEntries: [TranscriptEntry] {
@@ -292,14 +347,4 @@ final class SessionDetailViewModel {
             .map { ($0.originalText, $0.translatedText ?? "") }
     }
 
-    func exportURL(format: ExportFormat) async -> URL? {
-        guard let session, let environment else { return nil }
-        return await SessionExport.writeTemporaryFile(
-            session: session,
-            entries: entries,
-            notes: notes,
-            format: format,
-            fallbackBackend: environment.settings.preferredBackend
-        )
-    }
 }

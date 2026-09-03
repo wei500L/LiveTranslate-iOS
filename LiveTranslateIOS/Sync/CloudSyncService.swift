@@ -412,6 +412,20 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    private func enqueueStudyReviewUpsert(_ review: StudyReview) {
+        var payload = Self.payload(for: review)
+        payload.sessionId = review.sessionID
+        let item = SyncOutboxItem(
+            entityType: .studyReview,
+            entityID: review.id,
+            operation: .upsert,
+            baseServerVersion: review.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -717,7 +731,7 @@ final class CloudSyncService: AuthenticationService {
         entityType: SyncEntityType, entityID: UUID, version: Int
     ) {
         switch entityType {
-        case .session, .entry, .course, .note:
+        case .session, .entry, .course, .note, .studyReview:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -762,6 +776,8 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteCourseByID(entityID)
         case .note:
             try? repository.deleteNoteByID(entityID)
+        case .studyReview:
+            try? repository.deleteStudyReviewByID(entityID)
         }
     }
 
@@ -794,6 +810,8 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteCourse(record: record, serverVersion: serverVersion)
         case .note:
             try? repository.applyRemoteNote(record: record, serverVersion: serverVersion)
+        case .studyReview:
+            try? repository.applyRemoteStudyReview(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -934,6 +952,21 @@ final class CloudSyncService: AuthenticationService {
             anchorEntryId: note.anchorEntryID ?? .nilSentinel
         )
     }
+
+    /// Only terminal states with content reach the outbox (the generator
+    /// never notifies the observer for `generating` progress); the wire
+    /// payload carries the structured result — never prompts or raw model
+    /// responses.
+    static func payload(for review: StudyReview) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            reviewStatus: review.status,
+            reviewContent: review.contentJSON.isEmpty ? nil : review.contentJSON,
+            reviewGeneratedContent: review.generatedJSON.isEmpty ? nil : review.generatedJSON,
+            reviewModel: review.reviewModel.isEmpty ? nil : review.reviewModel,
+            reviewGeneratedAt: review.generatedAt,
+            reviewSourceUpdatedAt: review.sourceUpdatedAt
+        )
+    }
 }
 
 // MARK: - TranscriptMutationObserving
@@ -954,6 +987,8 @@ protocol TranscriptMutationObserving: AnyObject {
     func noteCreated(_ note: SessionNote)
     func noteUpdated(_ note: SessionNote)
     func noteDeleted(id: UUID)
+    func studyReviewUpdated(_ review: StudyReview)
+    func studyReviewDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -999,5 +1034,13 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func noteDeleted(id: UUID) {
         enqueueDelete(entityType: .note, entityID: id)
+    }
+
+    func studyReviewUpdated(_ review: StudyReview) {
+        enqueueStudyReviewUpsert(review)
+    }
+
+    func studyReviewDeleted(id: UUID) {
+        enqueueDelete(entityType: .studyReview, entityID: id)
     }
 }

@@ -30,6 +30,9 @@ final class SettingsStore {
         static let systemPrompt = "translation.customSystemPrompt"
         static let concurrency = "translation.concurrency"
         static let liveTranslationEnabled = "ui.liveTranslationEnabled"
+        /// Model for post-class study reviews; empty = inherit the
+        /// translation model.
+        static let studyReviewModel = "studyReview.model"
     }
 
     /// Live-classroom translation toggle (new-classroom form). When off,
@@ -108,6 +111,11 @@ final class SettingsStore {
         didSet { defaults.set(translationConcurrency, forKey: Keys.concurrency) }
     }
 
+    /// Dedicated model for study reviews; empty = use `translationModel`.
+    var studyReviewModel: String {
+        didSet { defaults.set(studyReviewModel, forKey: Keys.studyReviewModel) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         preferredBackend = ASRBackendKind(
@@ -141,6 +149,7 @@ final class SettingsStore {
         customSystemPrompt = defaults.string(forKey: Keys.systemPrompt) ?? ""
         let conc = defaults.object(forKey: Keys.concurrency) as? Int
         translationConcurrency = conc ?? 2
+        studyReviewModel = defaults.string(forKey: Keys.studyReviewModel) ?? ""
         let liveTranslation = defaults.object(forKey: Keys.liveTranslationEnabled) as? Bool
         liveTranslationEnabled = liveTranslation ?? true
     }

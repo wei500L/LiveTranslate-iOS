@@ -339,23 +339,43 @@ struct LiveScreen: View {
         .accessibilityLabel(Text("继续课堂"))
     }
 
-    /// Shown once the classroom has ended: a summary + return home.
+    /// Shown once the classroom has ended: return home, or jump straight
+    /// to the records tab — the finished class is at the top, the shortest
+    /// path into its transcript, notes and study review.
     @ViewBuilder
     private var finishedControls: some View {
-        Button {
-            environment.flow.collapseLive()
-        } label: {
-            HStack(spacing: LTSpacing.xs) {
-                Image(systemName: "checkmark.circle.fill")
-                Text("课堂已结束 · 返回首页")
+        HStack(spacing: LTSpacing.s) {
+            Button {
+                environment.flow.collapseLive(to: .records)
+            } label: {
+                HStack(spacing: LTSpacing.xs) {
+                    Image(systemName: "list.bullet.rectangle")
+                    Text("查看记录")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(LTColors.textPrimary)
+                .padding(.horizontal, LTSpacing.l)
+                .padding(.vertical, LTSpacing.xs + 4)
+                .background(Capsule().fill(LTColors.surfaceElevated))
+                .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
             }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Color.black.opacity(0.85))
-            .padding(.horizontal, LTSpacing.l)
-            .padding(.vertical, LTSpacing.xs + 4)
-            .background(Capsule().fill(LTColors.accentGreen))
+            .accessibilityLabel(Text("课堂已结束，查看课堂记录"))
+
+            Button {
+                environment.flow.collapseLive()
+            } label: {
+                HStack(spacing: LTSpacing.xs) {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text("返回首页")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.black.opacity(0.85))
+                .padding(.horizontal, LTSpacing.l)
+                .padding(.vertical, LTSpacing.xs + 4)
+                .background(Capsule().fill(LTColors.accentGreen))
+            }
+            .accessibilityLabel(Text("课堂已结束，返回首页"))
         }
-        .accessibilityLabel(Text("课堂已结束，返回首页"))
     }
 
     /// Edge state: the classroom view opened with no session (e.g. an

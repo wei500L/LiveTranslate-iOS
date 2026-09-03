@@ -70,6 +70,14 @@ final class AppEnvironment {
     /// Guest-data migration for the signed-in account (nil for the guest
     /// profile itself and demo mode). Owns the 本机记录待归属 flow.
     let guestMigration: GuestDataMigration?
+    /// Post-class study-review generation (separate domain from the live
+    /// translation service; shares the OpenAI-compatible transport).
+    private(set) var studyReviewService: any StudyReviewModelService
+    /// Lets the generator read the current service without capturing the
+    /// environment (same pattern as TranslationServiceBox).
+    private let studyServiceBox: StudyServiceBox
+    /// One generator per profile; owns in-flight review generations.
+    let studyReviewGenerator: StudyReviewGenerator
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -98,7 +106,8 @@ final class AppEnvironment {
         let modelContainer: ModelContainer
         do {
             let schema = Schema([
-                ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+                ClassroomSession.self, TranscriptEntry.self,
+                Course.self, SessionNote.self, StudyReview.self
             ])
             let config = ModelConfiguration(
                 "LiveTranslate",
@@ -113,7 +122,8 @@ final class AppEnvironment {
             assertionFailure("ModelContainer failed: \(error)")
             modelContainer = try! ModelContainer(
                 for: Schema([
-                    ClassroomSession.self, TranscriptEntry.self, Course.self, SessionNote.self
+                    ClassroomSession.self, TranscriptEntry.self,
+                    Course.self, SessionNote.self, StudyReview.self
                 ])
             )
         }
@@ -190,6 +200,15 @@ final class AppEnvironment {
         } else {
             guestMigration = nil
         }
+        let studyService = AppEnvironment.makeStudyReviewService(
+            settings: settings, keychain: keychain
+        )
+        let studyBox = StudyServiceBox()
+        studyBox.set(studyService)
+        let studyGenerator = StudyReviewGenerator(
+            repository: repository,
+            serviceProvider: { [weak studyBox] in studyBox?.get() }
+        )
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -204,7 +223,10 @@ final class AppEnvironment {
             translationServiceBox: box,
             bookmarks: bookmarks,
             cloudSync: cloudSync,
-            guestMigration: guestMigration
+            guestMigration: guestMigration,
+            studyReviewService: studyService,
+            studyServiceBox: studyBox,
+            studyReviewGenerator: studyGenerator
         )
     }
 
@@ -224,7 +246,12 @@ final class AppEnvironment {
         translationServiceBox: TranslationServiceBox,
         bookmarks: BookmarkStore,
         cloudSync: CloudSyncService?,
-        guestMigration: GuestDataMigration? = nil
+        guestMigration: GuestDataMigration? = nil,
+        studyReviewService: any StudyReviewModelService = OpenAICompatibleStudyService(
+            config: StudyReviewModelConfig(apiBase: "", apiKey: nil, model: "")
+        ),
+        studyServiceBox: StudyServiceBox = StudyServiceBox(),
+        studyReviewGenerator: StudyReviewGenerator? = nil
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -240,6 +267,19 @@ final class AppEnvironment {
         self.bookmarks = bookmarks
         self.cloudSync = cloudSync
         self.guestMigration = guestMigration
+        self.studyReviewService = studyReviewService
+        self.studyServiceBox = studyServiceBox
+        if let studyReviewGenerator {
+            self.studyReviewGenerator = studyReviewGenerator
+        } else {
+            // DI init without a generator (tests, demo): wire one to this
+            // environment's repository + service box.
+            studyServiceBox.set(studyReviewService)
+            self.studyReviewGenerator = StudyReviewGenerator(
+                repository: repository,
+                serviceProvider: { [weak studyServiceBox] in studyServiceBox?.get() }
+            )
+        }
     }
 
     /// Profile store location — delegated to `AccountScope` (the single
@@ -288,6 +328,25 @@ final class AppEnvironment {
             settings: settings, keychain: keychain
         )
         translationServiceBox.set(translationService)
+        // The study service inherits the API base + key; rebuild it too.
+        studyReviewService = AppEnvironment.makeStudyReviewService(
+            settings: settings, keychain: keychain
+        )
+        studyServiceBox.set(studyReviewService)
+    }
+
+    /// Study-review service from current settings: the same API base and
+    /// key as translation, with a dedicated model when the user chose one.
+    static func makeStudyReviewService(
+        settings: SettingsStore, keychain: any KeychainStoring
+    ) -> any StudyReviewModelService {
+        let apiKey = (try? keychain.get(forKey: apiKeychainKey)) ?? ""
+        let model = settings.studyReviewModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return OpenAICompatibleStudyService(config: StudyReviewModelConfig(
+            apiBase: settings.apiBase,
+            apiKey: apiKey.isEmpty ? nil : apiKey,
+            model: model.isEmpty ? settings.translationModel : model
+        ))
     }
 
     // MARK: - Live classroom presentation
@@ -355,6 +414,24 @@ final class TranslationServiceBox: @unchecked Sendable {
     }
 
     func get() -> (any TranslationService)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return service
+    }
+}
+
+/// Same holder pattern for the study-review model service.
+final class StudyServiceBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var service: (any StudyReviewModelService)?
+
+    func set(_ service: (any StudyReviewModelService)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.service = service
+    }
+
+    func get() -> (any StudyReviewModelService)? {
         lock.lock()
         defer { lock.unlock() }
         return service

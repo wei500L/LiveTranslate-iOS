@@ -296,10 +296,14 @@ struct RecordsScreen: View {
     private func exportSession(_ session: ClassroomSession, format: ExportFormat) async {
         let entries = (try? environment.repository.entries(for: session)) ?? []
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
+        let review = (try? environment.repository.studyReview(forSessionID: session.id))
+            .flatMap { StudyReviewContent.decode($0.contentJSON) }
         guard let url = await SessionExport.writeTemporaryFile(
             session: session,
             entries: entries,
             notes: notes,
+            scope: .fullMaterial,
+            review: review,
             format: format,
             fallbackBackend: environment.settings.preferredBackend
         ) else {

@@ -46,6 +46,21 @@ enum SyncConflictResolver {
             if (merged.noteText ?? "").isEmpty, let serverText = server.noteText {
                 merged.noteText = serverText
             }
+        case .studyReview:
+            // The local payload carries the user's current reading state
+            // (possibly edited). Local content wins when non-empty; the
+            // generated original falls back to the server's when the local
+            // run produced none (e.g. a failed first generation adopting an
+            // existing remote review).
+            if (merged.reviewContent ?? "").isEmpty, let serverContent = server.reviewContent,
+               !serverContent.isEmpty {
+                merged.reviewContent = serverContent
+                merged.reviewGeneratedContent = server.reviewGeneratedContent
+                merged.reviewStatus = server.reviewStatus
+                merged.reviewModel = server.reviewModel
+                merged.reviewGeneratedAt = server.reviewGeneratedAt
+                merged.reviewSourceUpdatedAt = server.reviewSourceUpdatedAt
+            }
         }
         return merged
     }

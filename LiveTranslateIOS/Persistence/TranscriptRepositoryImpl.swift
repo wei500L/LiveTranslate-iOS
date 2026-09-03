@@ -158,15 +158,22 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         ))
         guard !trimmed.isEmpty else { return all }
         let needle = trimmed.lowercased()
-        // Note text participates in search: a session matches when any of
-        // its notes contains the query (the user's own words are often the
-        // fastest path back to a classroom).
+        // Note text and study-review text participate in search: a session
+        // matches when any of its notes or its review content contains the
+        // query (the user's own words are often the fastest path back).
         let notes = try context.fetch(FetchDescriptor<SessionNote>())
-        let sessionsWithNoteHit = Set(
+        var hitSessionIDs = Set(
             notes.filter { $0.text.lowercased().contains(needle) }.map(\.sessionID)
         )
+        let reviews = try context.fetch(FetchDescriptor<StudyReview>())
+        for review in reviews where !review.contentJSON.isEmpty {
+            if let content = StudyReviewContent.decode(review.contentJSON),
+               content.searchableText.lowercased().contains(needle) {
+                hitSessionIDs.insert(review.sessionID)
+            }
+        }
         return all.filter { session in
-            if sessionsWithNoteHit.contains(session.id) { return true }
+            if hitSessionIDs.contains(session.id) { return true }
             if session.title.lowercased().contains(needle) { return true }
             return session.entries.contains { entry in
                 entry.originalText.lowercased().contains(needle)
@@ -192,13 +199,17 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
     func deleteSession(_ session: ClassroomSession) throws {
         let sessionID = session.id
         // Notes are session-scoped with no SwiftData relationship — delete
-        // them explicitly alongside the cascade-deleted entries. Raw
-        // recordings (保存原始录音) are session data too.
+        // them explicitly alongside the cascade-deleted entries, together
+        // with the session's study review. Raw recordings (保存原始录音)
+        // are session data too.
         let noteDescriptor = FetchDescriptor<SessionNote>(
             predicate: #Predicate { $0.sessionID == sessionID }
         )
         for note in try context.fetch(noteDescriptor) {
             context.delete(note)
+        }
+        if let review = try studyReview(forSessionID: sessionID) {
+            context.delete(review)
         }
         context.delete(session)
         try context.save()
@@ -211,6 +222,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         let ids = sessions.map(\.id)
         try context.delete(model: ClassroomSession.self)
         try context.delete(model: SessionNote.self)
+        try context.delete(model: StudyReview.self)
         try context.save()
         SessionRecordings.removeAll()
         for id in ids {
@@ -282,6 +294,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let note = try context.fetch(descriptor).first else { return }
             note.serverVersion = max(note.serverVersion, version)
+        case .studyReview:
+            let descriptor = FetchDescriptor<StudyReview>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let review = try context.fetch(descriptor).first else { return }
+            review.serverVersion = max(review.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -397,6 +415,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         for note in try context.fetch(noteDescriptor) {
             context.delete(note)
         }
+        if let review = try studyReview(forSessionID: id) {
+            context.delete(review)
+        }
         try context.delete(session)
         try context.save()
         SessionRecordings.remove(for: id)
@@ -496,6 +517,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                     entityID: note.id,
                     operation: .upsert,
                     baseServerVersion: note.serverVersion,
+                    payload: payload
+                ))
+            }
+            if let review = try? studyReview(forSessionID: session.id),
+               !review.contentJSON.isEmpty {
+                var payload = CloudSyncService.payload(for: review)
+                payload.sessionId = review.sessionID
+                items.append(SyncOutboxItem(
+                    entityType: .studyReview,
+                    entityID: review.id,
+                    operation: .upsert,
+                    baseServerVersion: review.serverVersion,
                     payload: payload
                 ))
             }
@@ -715,6 +748,169 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         )
         guard let note = try context.fetch(descriptor).first else { return }
         context.delete(note)
+        try context.save()
+    }
+
+    // MARK: - Study reviews
+
+    func studyReview(forSessionID id: UUID) throws -> StudyReview? {
+        let descriptor = FetchDescriptor<StudyReview>(
+            predicate: #Predicate { $0.id == id }
+        )
+        return try context.fetch(descriptor).first
+    }
+
+    func allStudyReviews() throws -> [StudyReview] {
+        try context.fetch(FetchDescriptor<StudyReview>())
+    }
+
+    func ensureStudyReview(forSessionID id: UUID) throws -> StudyReview {
+        if let existing = try studyReview(forSessionID: id) {
+            return existing
+        }
+        let review = StudyReview(id: id, sessionID: id)
+        context.insert(review)
+        try context.save()
+        return review
+    }
+
+    func beginStudyReviewGeneration(_ review: StudyReview, chunkState: StudyChunkState) throws {
+        review.status = StudyReviewStatus.generating.rawValue
+        review.chunkStateJSON = chunkState.encodedString() ?? ""
+        review.updatedAt = .now
+        try context.save()
+    }
+
+    func updateStudyReviewProgress(
+        _ review: StudyReview, chunkStateJSON: String, terminal: StudyReviewStatus?
+    ) throws {
+        review.chunkStateJSON = chunkStateJSON
+        if let terminal {
+            review.status = terminal.rawValue
+        }
+        review.updatedAt = .now
+        try context.save()
+    }
+
+    func completeStudyReviewGeneration(
+        _ review: StudyReview, content: StudyReviewContent,
+        model: String, sourceUpdatedAt: Date
+    ) throws {
+        guard let json = content.encodedString() else { return }
+        review.contentJSON = json
+        review.generatedJSON = json
+        review.hasUserEdits = false
+        review.reviewModel = model
+        review.generatedAt = .now
+        review.sourceUpdatedAt = sourceUpdatedAt
+        review.status = StudyReviewStatus.completed.rawValue
+        review.updatedAt = .now
+        try context.save()
+        mutationObserver?.studyReviewUpdated(review)
+    }
+
+    func failStudyReviewGeneration(_ review: StudyReview) throws {
+        review.status = StudyReviewStatus.failed.rawValue
+        review.updatedAt = .now
+        try context.save()
+        // A failed run with no content stays device-local (nothing to
+        // sync); a failed regeneration over an existing result keeps the
+        // old content in sync — other devices should see the same state.
+        if !review.contentJSON.isEmpty {
+            mutationObserver?.studyReviewUpdated(review)
+        }
+    }
+
+    func markStudyReviewInterrupted(_ review: StudyReview) throws {
+        guard review.status == StudyReviewStatus.generating.rawValue else { return }
+        let hasProgress = StudyChunkState.decode(review.chunkStateJSON)?.hasAnyProgress ?? false
+        review.status = (hasProgress
+            ? StudyReviewStatus.partial
+            : StudyReviewStatus.failed).rawValue
+        review.updatedAt = .now
+        try context.save()
+    }
+
+    func applyStudyReviewUserEdits(_ review: StudyReview, content: StudyReviewContent) throws {
+        guard let json = content.encodedString() else { return }
+        review.contentJSON = json
+        review.hasUserEdits = json != review.generatedJSON
+        review.updatedAt = .now
+        try context.save()
+        mutationObserver?.studyReviewUpdated(review)
+    }
+
+    func deleteStudyReview(_ review: StudyReview) throws {
+        let reviewID = review.id
+        context.delete(review)
+        try context.save()
+        mutationObserver?.studyReviewDeleted(id: reviewID)
+    }
+
+    func applyRemoteStudyReview(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id else { return }
+        let descriptor = FetchDescriptor<StudyReview>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        // Local user edits win over any remote change: keep the local
+        // content but adopt the remote version so the next push rebases
+        // onto it (the user's edits then propagate and win server-side).
+        let remoteContent = record.reviewContent ?? ""
+        if let existing {
+            if existing.hasUserEdits && !remoteContent.isEmpty && remoteContent != existing.contentJSON {
+                existing.serverVersion = serverVersion
+                try context.save()
+                return
+            }
+            if let status = record.reviewStatus { existing.status = status }
+            if !remoteContent.isEmpty {
+                existing.contentJSON = remoteContent
+                let remoteGenerated = record.reviewGenerated ?? ""
+                existing.hasUserEdits = !remoteGenerated.isEmpty && remoteContent != remoteGenerated
+            }
+            if let generated = record.reviewGenerated, !generated.isEmpty {
+                existing.generatedJSON = generated
+            }
+            if let model = record.reviewModel, !model.isEmpty {
+                existing.reviewModel = model
+            }
+            if let generatedAt = record.reviewGeneratedAt {
+                existing.generatedAt = generatedAt
+            }
+            if let sourceAt = record.reviewSourceAt {
+                existing.sourceUpdatedAt = sourceAt
+            }
+            existing.serverVersion = serverVersion
+            try context.save()
+            return
+        }
+
+        let review = StudyReview(
+            id: recordID,
+            sessionID: recordID,
+            status: StudyReviewStatus(rawValue: record.reviewStatus ?? "") ?? .completed,
+            contentJSON: remoteContent,
+            generatedJSON: record.reviewGenerated ?? "",
+            hasUserEdits: false,
+            chunkStateJSON: "",
+            reviewModel: record.reviewModel ?? "",
+            generatedAt: record.reviewGeneratedAt,
+            sourceUpdatedAt: record.reviewSourceAt,
+            serverVersion: serverVersion
+        )
+        context.insert(review)
+        try context.save()
+    }
+
+    func deleteStudyReviewByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<StudyReview>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let review = try context.fetch(descriptor).first else { return }
+        context.delete(review)
         try context.save()
     }
 }
