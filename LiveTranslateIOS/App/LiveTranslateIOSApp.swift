@@ -63,6 +63,9 @@ final class AppEnvironment {
     let flow = AppFlow()
     /// UI-layer bookmarks & session favorites (UserDefaults-backed, IDs only).
     let bookmarks: BookmarkStore
+    /// Local-notification reminders for tasks (device-only, account-scoped
+    /// defaults; never synced, never server-side).
+    let taskReminders: TaskReminderScheduler
     /// Private-server cloud sync. Nil when the build configures no server
     /// URL (and always nil in the Debug demo environment — demo mode never
     /// touches the production server). One instance per app lifetime.
@@ -123,7 +126,8 @@ final class AppEnvironment {
             let schema = Schema([
                 ClassroomSession.self, TranscriptEntry.self,
                 Course.self, SessionNote.self, StudyReview.self,
-                SessionAttachment.self
+                SessionAttachment.self,
+                GlossaryTerm.self, StudyCard.self, StudyTask.self
             ])
             let config = ModelConfiguration(
                 "LiveTranslate",
@@ -140,7 +144,8 @@ final class AppEnvironment {
                 for: Schema([
                     ClassroomSession.self, TranscriptEntry.self,
                     Course.self, SessionNote.self, StudyReview.self,
-                    SessionAttachment.self
+                    SessionAttachment.self,
+                    GlossaryTerm.self, StudyCard.self, StudyTask.self
                 ])
             )
         }
@@ -188,6 +193,7 @@ final class AppEnvironment {
             repository: repository,
             storageKey: AccountStore.bookmarkKey(accountID: accountID)
         )
+        let taskReminders = TaskReminderScheduler(defaults: syncDefaults)
         let cloudSync: CloudSyncService?
         if let baseURL = ServerConfiguration.baseURL {
             cloudSync = CloudSyncService(
@@ -252,6 +258,7 @@ final class AppEnvironment {
             translationService: service,
             translationServiceBox: box,
             bookmarks: bookmarks,
+            taskReminders: taskReminders,
             cloudSync: cloudSync,
             guestMigration: guestMigration,
             studyReviewService: studyService,
@@ -280,6 +287,7 @@ final class AppEnvironment {
         translationService: any TranslationService,
         translationServiceBox: TranslationServiceBox,
         bookmarks: BookmarkStore,
+        taskReminders: TaskReminderScheduler? = nil,
         cloudSync: CloudSyncService?,
         guestMigration: GuestDataMigration? = nil,
         studyReviewService: any StudyReviewModelService = OpenAICompatibleStudyService(
@@ -307,6 +315,7 @@ final class AppEnvironment {
         self.translationService = translationService
         self.translationServiceBox = translationServiceBox
         self.bookmarks = bookmarks
+        self.taskReminders = taskReminders ?? TaskReminderScheduler(defaults: .standard)
         self.cloudSync = cloudSync
         self.guestMigration = guestMigration
         self.studyReviewService = studyReviewService

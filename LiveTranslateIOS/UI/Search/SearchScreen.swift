@@ -12,6 +12,12 @@ struct SearchScreen: View {
     @State private var isLoaded = false
     @State private var isSearching = false
     @State private var debounceTask: Task<Void, Never>?
+    @State private var termHits: [GlossaryTerm] = []
+    @State private var cardHits: [StudyCard] = []
+    @State private var taskHits: [StudyTask] = []
+    @State private var viewingTerm: GlossaryTerm?
+    @State private var viewingTask: StudyTask?
+    @State private var viewingCard: StudyCard?
 
     /// One matched session with its best snippet.
     struct SessionHit: Identifiable {
@@ -34,12 +40,13 @@ struct SearchScreen: View {
                         searchField
                         if !appliedQuery.isEmpty && isLoaded {
                             resultHeader
+                            learningResultList
                             resultList
                         } else if isLoaded {
                             LTEmptyState(
                                 symbol: "magnifyingglass",
                                 title: "搜索全部课堂",
-                                message: "支持课堂名称、笔记、学习整理、中文翻译与俄语原文"
+                                message: "支持课堂名称、笔记、学习整理、术语、卡片、任务、中文翻译与俄语原文"
                             )
                         }
                     }
@@ -56,6 +63,21 @@ struct SearchScreen: View {
         }
         .onChange(of: query) { _, newValue in
             searchDidChange(newValue)
+        }
+        .sheet(item: $viewingTerm) { term in
+            NavigationStack {
+                TermDetailView(term: term, courses: [])
+            }
+        }
+        .sheet(item: $viewingTask) { task in
+            NavigationStack {
+                TaskDetailView(task: task, courses: [])
+            }
+        }
+        .sheet(item: $viewingCard) { card in
+            NavigationStack {
+                CardDetailView(card: card, courses: [])
+            }
         }
     }
 
@@ -90,9 +112,77 @@ struct SearchScreen: View {
     }
 
     private var resultHeader: some View {
-        Text(results.isEmpty ? "没有匹配的课堂" : "共 \(results.count) 堂课匹配")
+        let learningCount = termHits.count + cardHits.count + taskHits.count
+        let sessionPart = results.isEmpty ? "没有匹配的课堂" : "共 \(results.count) 堂课匹配"
+        let learningPart = learningCount > 0 ? " · 学习资料 \(learningCount) 条" : ""
+        return Text(sessionPart + learningPart)
             .font(LTTypography.caption)
             .foregroundStyle(LTColors.textTertiary)
+    }
+
+    /// Learning-material results: terms, cards, tasks (each with its kind
+    /// chip and a real destination).
+    @ViewBuilder
+    private var learningResultList: some View {
+        if !termHits.isEmpty || !cardHits.isEmpty || !taskHits.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                LTSectionHeader(title: "学习资料")
+                VStack(spacing: LTSpacing.xs) {
+                    ForEach(termHits.prefix(5)) { term in
+                        Button {
+                            viewingTerm = term
+                        } label: {
+                            learningRow(symbol: "character.book.closed", tint: LTColors.accentGreen, title: term.russian, subtitle: term.chinese, chip: "术语")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(cardHits.prefix(5)) { card in
+                        Button {
+                            viewingCard = card
+                        } label: {
+                            learningRow(symbol: "rectangle.on.rectangle", tint: LTColors.accentCyan, title: card.front, subtitle: card.back, chip: "学习卡片")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(taskHits.prefix(5)) { task in
+                        Button {
+                            viewingTask = task
+                        } label: {
+                            learningRow(symbol: "checklist", tint: LTColors.warning, title: task.title, subtitle: task.detail, chip: "作业任务")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func learningRow(
+        symbol: String, tint: Color, title: String, subtitle: String, chip: String
+    ) -> some View {
+        HStack(spacing: LTSpacing.s) {
+            Image(systemName: symbol)
+                .font(.subheadline)
+                .foregroundStyle(tint)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(LTColors.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            StatusChip(text: chip, tint: tint)
+        }
+        .padding(LTSpacing.m)
+        .ltCard()
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -101,7 +191,7 @@ struct SearchScreen: View {
             LTEmptyState(
                 symbol: "questionmark.circle",
                 title: "换个关键词试试",
-                message: "搜索会覆盖课堂名称、笔记与全部双语文本"
+                message: "搜索会覆盖课堂名称、笔记、术语、卡片、任务与全部双语文本"
             )
         } else {
             VStack(spacing: LTSpacing.s) {
@@ -178,6 +268,9 @@ struct SearchScreen: View {
         guard !trimmed.isEmpty else {
             appliedQuery = ""
             results = []
+            termHits = []
+            cardHits = []
+            taskHits = []
             return
         }
         debounceTask = Task {
@@ -197,6 +290,11 @@ struct SearchScreen: View {
             let match = bestMatch(for: session, query: query)
             return SessionHit(session: session, snippet: match.snippet, matchKind: match.kind)
         }
+        // Learning material: terms (russian/chinese/note), cards
+        // (front/back/note), confirmed tasks (title/detail/note).
+        termHits = (try? environment.repository.terms(matching: query)) ?? []
+        cardHits = (try? environment.repository.cards(matching: query)) ?? []
+        taskHits = (try? environment.repository.tasks(matching: query)) ?? []
         appliedQuery = query
     }
 

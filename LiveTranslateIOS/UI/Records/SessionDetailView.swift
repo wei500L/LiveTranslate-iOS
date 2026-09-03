@@ -25,6 +25,10 @@ struct SessionDetailView: View {
     /// The detail scroll's proxy, captured when the reader renders (the
     /// attachments landing jump needs it from outside `detailContent`).
     @State private var detailScrollProxy: ScrollViewProxy?
+    /// Learning-material save flows from transcript selections.
+    @State private var termDraftBox: TermDraftBox?
+    @State private var cardDraftBox: CardDraftBox?
+    @State private var taskDraftBox: TaskDraftBox?
 
     let sessionID: UUID
     /// Opens the study-review page right away (search hit landing).
@@ -118,6 +122,15 @@ struct SessionDetailView: View {
                 }
                 .environment(environment)
             }
+        }
+        .sheet(item: $termDraftBox) { box in
+            TermSaveSheet(draft: box.draft)
+        }
+        .sheet(item: $cardDraftBox) { box in
+            CardSaveSheet(draft: box.draft)
+        }
+        .sheet(item: $taskDraftBox) { box in
+            TaskSaveSheet(draft: box.draft, editingTask: nil)
         }
         .sheet(item: $noteEditor) { context in
             if let session = viewModel.session {
@@ -433,6 +446,27 @@ struct SessionDetailView: View {
             Button("删除笔记", role: .destructive) {
                 viewModel.deleteNote(note)
             }
+            Divider()
+            Button {
+                cardDraftBox = CardDraftBox(draft: CardDraft(
+                    front: note.text, back: "",
+                    courseID: viewModel.session?.courseID,
+                    sessionID: sessionID,
+                    sourceEntryID: note.anchorEntryID
+                ))
+            } label: {
+                Label("制作卡片", systemImage: "rectangle.on.rectangle")
+            }
+            Button {
+                taskDraftBox = TaskDraftBox(draft: TaskDraft(
+                    title: String(note.text.prefix(120)),
+                    courseID: viewModel.session?.courseID,
+                    sessionID: sessionID,
+                    sourceEntryID: note.anchorEntryID
+                ))
+            } label: {
+                Label("创建任务", systemImage: "checklist")
+            }
         }
         .accessibilityHint(Text(viewModel.anchorEntry(for: note) != nil ? "双击跳到对应段落" : ""))
     }
@@ -557,6 +591,33 @@ struct SessionDetailView: View {
                             onToggleBookmark: { _ = viewModel.toggleBookmark(entry) },
                             onAddNote: {
                                 noteEditor = NoteEditorContext(note: nil, anchorEntry: entry)
+                            },
+                            onSaveTerm: {
+                                termDraftBox = TermDraftBox(draft: TermDraft(
+                                    russian: entry.originalText,
+                                    chinese: entry.translatedText ?? "",
+                                    courseID: viewModel.session?.courseID,
+                                    sessionID: sessionID,
+                                    sourceEntryID: entry.id
+                                ))
+                            },
+                            onMakeCard: {
+                                cardDraftBox = CardDraftBox(draft: CardDraft(
+                                    front: entry.originalText,
+                                    back: entry.translatedText ?? "",
+                                    courseID: viewModel.session?.courseID,
+                                    sessionID: sessionID,
+                                    sourceEntryID: entry.id
+                                ))
+                            },
+                            onCreateTask: {
+                                taskDraftBox = TaskDraftBox(draft: TaskDraft(
+                                    title: (entry.translatedText ?? entry.originalText)
+                                        .prefix(120).description,
+                                    courseID: viewModel.session?.courseID,
+                                    sessionID: sessionID,
+                                    sourceEntryID: entry.id
+                                ))
                             }
                         )
                         .id(entry.sequenceID)
@@ -747,6 +808,9 @@ private struct DetailEntryRow: View {
     var anchoredNotes: [SessionNote] = []
     var onToggleBookmark: () -> Void = {}
     var onAddNote: () -> Void = {}
+    var onSaveTerm: () -> Void = {}
+    var onMakeCard: () -> Void = {}
+    var onCreateTask: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: LTSpacing.m) {
@@ -820,6 +884,16 @@ private struct DetailEntryRow: View {
             }
             Button("添加笔记") {
                 onAddNote()
+            }
+            Divider()
+            Button(action: onSaveTerm) {
+                Label("保存为术语", systemImage: "character.book.closed")
+            }
+            Button(action: onMakeCard) {
+                Label("制作学习卡片", systemImage: "rectangle.on.rectangle")
+            }
+            Button(action: onCreateTask) {
+                Label("创建任务", systemImage: "checklist")
             }
         }
     }

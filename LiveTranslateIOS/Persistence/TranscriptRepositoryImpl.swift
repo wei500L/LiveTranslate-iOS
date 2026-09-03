@@ -339,6 +339,24 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let attachment = try context.fetch(descriptor).first else { return }
             attachment.serverVersion = max(attachment.serverVersion, version)
+        case .term:
+            let descriptor = FetchDescriptor<GlossaryTerm>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let term = try context.fetch(descriptor).first else { return }
+            term.serverVersion = max(term.serverVersion, version)
+        case .studyCard:
+            let descriptor = FetchDescriptor<StudyCard>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let card = try context.fetch(descriptor).first else { return }
+            card.serverVersion = max(card.serverVersion, version)
+        case .studyTask:
+            let descriptor = FetchDescriptor<StudyTask>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let task = try context.fetch(descriptor).first else { return }
+            task.serverVersion = max(task.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -608,6 +626,39 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 progress?(index + 1, sessions.count)
             }
         }
+        // Learning entities are course-level (not session children), so
+        // they snapshot after the session loop. pendingConfirm tasks are
+        // device-local AI candidates — never uploaded.
+        let terms = (try? context.fetch(FetchDescriptor<GlossaryTerm>())) ?? []
+        for term in terms {
+            items.append(SyncOutboxItem(
+                entityType: .term,
+                entityID: term.id,
+                operation: .upsert,
+                baseServerVersion: term.serverVersion,
+                payload: CloudSyncService.payload(for: term)
+            ))
+        }
+        let cards = (try? context.fetch(FetchDescriptor<StudyCard>())) ?? []
+        for card in cards {
+            items.append(SyncOutboxItem(
+                entityType: .studyCard,
+                entityID: card.id,
+                operation: .upsert,
+                baseServerVersion: card.serverVersion,
+                payload: CloudSyncService.payload(for: card)
+            ))
+        }
+        let tasks = (try? context.fetch(FetchDescriptor<StudyTask>())) ?? []
+        for task in tasks where task.status != .pendingConfirm {
+            items.append(SyncOutboxItem(
+                entityType: .studyTask,
+                entityID: task.id,
+                operation: .upsert,
+                baseServerVersion: task.serverVersion,
+                payload: CloudSyncService.payload(for: task)
+            ))
+        }
         progress?(sessions.count, sessions.count)
         return items
     }
@@ -670,6 +721,35 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             session.courseID = nil
             session.updatedAt = .now
         }
+        // Learning material survives too — terms/cards/tasks keep their
+        // rows and schedule; only the course scoping reference is cleared
+        // (the server-side detach does the same and logs the change).
+        let terms = try context.fetch(FetchDescriptor<GlossaryTerm>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for term in terms {
+            term.courseID = nil
+            term.updatedAt = .now
+            mutationObserver?.termUpdated(term)
+        }
+        let cards = try context.fetch(FetchDescriptor<StudyCard>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for card in cards {
+            card.courseID = nil
+            card.updatedAt = .now
+            mutationObserver?.cardUpdated(card)
+        }
+        let tasks = try context.fetch(FetchDescriptor<StudyTask>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for task in tasks {
+            task.courseID = nil
+            task.updatedAt = .now
+            if task.status != .pendingConfirm {
+                mutationObserver?.taskUpdated(task)
+            }
+        }
         context.delete(course)
         try context.save()
         mutationObserver?.courseDeleted(id: courseID)
@@ -716,14 +796,27 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
 
     func deleteCourseByID(_ id: UUID) throws {
         // Mirror the server cascade: sessions of the deleted course become
-        // standalone. No mutation-observer notifications — this is the
-        // remote-applied side of a delete.
+        // standalone, learning material keeps its rows with the course
+        // reference cleared. No mutation-observer notifications — this is
+        // the remote-applied side of a delete.
         let sessions = try context.fetch(FetchDescriptor<ClassroomSession>(
             predicate: #Predicate { $0.courseID == id }
         ))
         for session in sessions {
             session.courseID = nil
         }
+        let terms = try context.fetch(FetchDescriptor<GlossaryTerm>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for term in terms { term.courseID = nil }
+        let cards = try context.fetch(FetchDescriptor<StudyCard>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for card in cards { card.courseID = nil }
+        let tasks = try context.fetch(FetchDescriptor<StudyTask>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for task in tasks { task.courseID = nil }
         let descriptor = FetchDescriptor<Course>(predicate: #Predicate { $0.id == id })
         guard let course = try context.fetch(descriptor).first else {
             try context.save()
@@ -1233,5 +1326,573 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         context.delete(attachment)
         try context.save()
         AttachmentFileStoreShared.store?.removeFiles(for: id, sessionID: sessionID)
+    }
+
+    // MARK: - Learning entities (review center)
+
+    // MARK: Terms
+
+    func terms(courseID: UUID?) throws -> [GlossaryTerm] {
+        let all = try context.fetch(FetchDescriptor<GlossaryTerm>())
+        let scoped: [GlossaryTerm]
+        if let courseID {
+            scoped = all.filter { $0.courseID == courseID }
+        } else {
+            scoped = all
+        }
+        return scoped.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func terms(matching query: String) throws -> [GlossaryTerm] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let lowered = trimmed.lowercased()
+        let all = try context.fetch(FetchDescriptor<GlossaryTerm>())
+        return all.filter { term in
+            term.russian.lowercased().contains(lowered)
+                || term.chinese.lowercased().contains(lowered)
+                || term.explanation.lowercased().contains(lowered)
+                || term.userNote.lowercased().contains(lowered)
+        }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func findTerm(courseID: UUID?, russian: String) throws -> GlossaryTerm? {
+        let normalized = russian
+            .lowercased()
+            .replacingOccurrences(of: "ё", with: "е")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        let all = try context.fetch(FetchDescriptor<GlossaryTerm>())
+        return all.first { term in
+            term.courseID == courseID && term.normalizedRussian == normalized
+        }
+    }
+
+    func addTerm(_ draft: TermDraft) throws -> GlossaryTerm {
+        let term = GlossaryTerm(
+            russian: draft.russian,
+            chinese: draft.chinese,
+            explanation: draft.explanation,
+            partOfSpeech: draft.partOfSpeech,
+            userNote: draft.userNote,
+            courseID: draft.courseID,
+            sessionID: draft.sessionID,
+            sourceEntryID: draft.sourceEntryID,
+            sourceAttachmentID: draft.sourceAttachmentID,
+            sourceReviewID: draft.sourceReviewID,
+            sourceSessionIDs: draft.sessionID.map { [$0] } ?? [],
+            isFavorite: draft.isFavorite,
+            status: draft.status
+        )
+        context.insert(term)
+        try context.save()
+        mutationObserver?.termCreated(term)
+        return term
+    }
+
+    func updateTerm(_ term: GlossaryTerm, with draft: TermDraft) throws {
+        term.russian = draft.russian
+        term.chinese = draft.chinese
+        term.explanation = draft.explanation
+        term.partOfSpeech = draft.partOfSpeech
+        term.userNote = draft.userNote
+        term.isFavorite = draft.isFavorite
+        term.status = draft.status
+        term.courseID = draft.courseID
+        term.updatedAt = .now
+        try context.save()
+        mutationObserver?.termUpdated(term)
+    }
+
+    func mergeTermSources(
+        _ term: GlossaryTerm, sessionID: UUID?,
+        entryID: UUID?, attachmentID: UUID?
+    ) throws {
+        var sessions = term.sourceSessionIDs
+        if let sessionID, !sessions.contains(sessionID) {
+            sessions.append(sessionID)
+        }
+        term.sourceSessionIDsJSON = Self.encodeSourceSessions(sessions)
+        if term.sessionID == nil { term.sessionID = sessionID }
+        if term.sourceEntryID == nil { term.sourceEntryID = entryID }
+        if term.sourceAttachmentID == nil { term.sourceAttachmentID = attachmentID }
+        term.updatedAt = .now
+        try context.save()
+        mutationObserver?.termUpdated(term)
+    }
+
+    func updateTermFavorite(_ term: GlossaryTerm, isFavorite: Bool) throws {
+        guard term.isFavorite != isFavorite else { return }
+        term.isFavorite = isFavorite
+        term.updatedAt = .now
+        try context.save()
+        mutationObserver?.termUpdated(term)
+    }
+
+    func updateTermStatus(_ term: GlossaryTerm, status: GlossaryTermStatus) throws {
+        guard term.status != status else { return }
+        term.status = status
+        term.updatedAt = .now
+        try context.save()
+        mutationObserver?.termUpdated(term)
+    }
+
+    func deleteTerm(_ term: GlossaryTerm) throws {
+        let termID = term.id
+        context.delete(term)
+        try context.save()
+        mutationObserver?.termDeleted(id: termID)
+    }
+
+    func applyRemoteTerm(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id,
+              let russian = record.termRussian, !russian.isEmpty else { return }
+        let descriptor = FetchDescriptor<GlossaryTerm>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let term: GlossaryTerm
+        if let existing {
+            term = existing
+            term.russian = russian
+            if let chinese = record.termChinese { term.chinese = chinese }
+            if let explanation = record.termExplanation { term.explanation = explanation }
+            if let partOfSpeech = record.termPartOfSpeech { term.partOfSpeech = partOfSpeech }
+            if let userNote = record.termUserNote { term.userNote = userNote }
+            if let favorite = record.termFavorite { term.isFavorite = favorite }
+            if let statusRaw = record.termStatus,
+               let status = GlossaryTermStatus(rawValue: statusRaw) {
+                term.status = status
+            }
+            // Full row state: absent references mean "no source" server-side.
+            term.courseID = record.courseId
+            term.sessionID = record.sessionId
+            term.sourceEntryID = record.entryId
+            term.sourceAttachmentID = record.sourceAttachmentId
+            term.sourceReviewID = record.sourceReviewId
+            term.sourceSessionIDsJSON = record.termSourceSessions ?? "[]"
+        } else {
+            term = GlossaryTerm(
+                id: recordID,
+                russian: russian,
+                chinese: record.termChinese ?? "",
+                explanation: record.termExplanation ?? "",
+                partOfSpeech: record.termPartOfSpeech ?? "",
+                userNote: record.termUserNote ?? "",
+                courseID: record.courseId,
+                sessionID: record.sessionId,
+                sourceEntryID: record.entryId,
+                sourceAttachmentID: record.sourceAttachmentId,
+                sourceReviewID: record.sourceReviewId,
+                sourceSessionIDs: Self.decodeSourceSessions(record.termSourceSessions),
+                isFavorite: record.termFavorite ?? false,
+                status: GlossaryTermStatus(rawValue: record.termStatus ?? "") ?? .new,
+                serverVersion: serverVersion
+            )
+            context.insert(term)
+        }
+        term.serverVersion = serverVersion
+        try context.save()
+    }
+
+    func deleteTermByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<GlossaryTerm>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let term = try context.fetch(descriptor).first else { return }
+        context.delete(term)
+        try context.save()
+    }
+
+    private static func encodeSourceSessions(_ ids: [UUID]) -> String {
+        guard let data = try? JSONEncoder().encode(ids),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+
+    private static func decodeSourceSessions(_ json: String?) -> [UUID] {
+        guard let json, let data = json.data(using: .utf8),
+              let ids = try? JSONDecoder().decode([UUID].self, from: data) else { return [] }
+        return ids
+    }
+
+    // MARK: Study cards
+
+    func cards(courseID: UUID?) throws -> [StudyCard] {
+        let all = try context.fetch(FetchDescriptor<StudyCard>())
+        let scoped: [StudyCard]
+        if let courseID {
+            scoped = all.filter { $0.courseID == courseID }
+        } else {
+            scoped = all
+        }
+        return scoped.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func dueCards(before date: Date, limit: Int) throws -> [StudyCard] {
+        let all = try context.fetch(FetchDescriptor<StudyCard>())
+        return all
+            .filter { card in
+                card.stage != .new && card.dueAt != nil && card.dueAt! <= date
+            }
+            .sorted { ($0.dueAt ?? .distantPast) < ($1.dueAt ?? .distantPast) }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    func cards(matching query: String) throws -> [StudyCard] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let lowered = trimmed.lowercased()
+        let all = try context.fetch(FetchDescriptor<StudyCard>())
+        return all.filter { card in
+            card.front.lowercased().contains(lowered)
+                || card.back.lowercased().contains(lowered)
+                || card.userNote.lowercased().contains(lowered)
+        }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func cards(forTermID id: UUID) throws -> [StudyCard] {
+        let all = try context.fetch(FetchDescriptor<StudyCard>())
+        return all
+            .filter { $0.sourceTermID == id }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func addCard(_ draft: CardDraft) throws -> StudyCard {
+        let card = StudyCard(
+            front: draft.front,
+            back: draft.back,
+            type: draft.type,
+            origin: draft.origin,
+            userNote: draft.userNote,
+            courseID: draft.courseID,
+            sessionID: draft.sessionID,
+            sourceEntryID: draft.sourceEntryID,
+            sourceAttachmentID: draft.sourceAttachmentID,
+            sourceTermID: draft.sourceTermID
+        )
+        context.insert(card)
+        try context.save()
+        mutationObserver?.cardCreated(card)
+        return card
+    }
+
+    func updateCard(_ card: StudyCard, with draft: CardDraft) throws {
+        card.front = draft.front
+        card.back = draft.back
+        card.type = draft.type
+        card.userNote = draft.userNote
+        card.courseID = draft.courseID
+        card.origin = draft.origin
+        card.updatedAt = .now
+        try context.save()
+        mutationObserver?.cardUpdated(card)
+    }
+
+    func reviewCard(_ card: StudyCard, grade: StudyCardGrade, at date: Date) throws {
+        StudyCardScheduler.apply(grade, to: card, at: date)
+        try context.save()
+        mutationObserver?.cardUpdated(card)
+    }
+
+    func restoreCardSchedule(_ card: StudyCard) throws {
+        card.updatedAt = .now
+        try context.save()
+        mutationObserver?.cardUpdated(card)
+    }
+
+    func resetCardSchedule(_ card: StudyCard) throws {
+        card.stage = .new
+        card.reviewCount = 0
+        card.intervalHours = 0
+        card.dueAt = nil
+        card.lastReviewedAt = nil
+        card.lastGrade = nil
+        card.updatedAt = .now
+        try context.save()
+        mutationObserver?.cardUpdated(card)
+    }
+
+    func enrollCard(_ card: StudyCard) throws {
+        StudyCardScheduler.enroll(card)
+        try context.save()
+        mutationObserver?.cardUpdated(card)
+    }
+
+    func deleteCard(_ card: StudyCard) throws {
+        let cardID = card.id
+        context.delete(card)
+        try context.save()
+        mutationObserver?.cardDeleted(id: cardID)
+    }
+
+    func applyRemoteStudyCard(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id,
+              let front = record.cardFront, !front.isEmpty else { return }
+        let descriptor = FetchDescriptor<StudyCard>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let card: StudyCard
+        if let existing {
+            card = existing
+            card.front = front
+            if let back = record.cardBack { card.back = back }
+            if let typeRaw = record.cardType, let type = StudyCardType(rawValue: typeRaw) {
+                card.type = type
+            }
+            if let note = record.cardUserNote { card.userNote = note }
+            if let originRaw = record.cardOrigin, let origin = StudyCardOrigin(rawValue: originRaw) {
+                card.origin = origin
+            }
+            card.courseID = record.courseId
+            card.sessionID = record.sessionId
+            card.sourceEntryID = record.entryId
+            card.sourceAttachmentID = record.sourceAttachmentId
+            card.sourceTermID = record.sourceTermId
+            // Review state: the newer lastReviewedAt wins (multi-device
+            // review merge — mirrors the server-side rule).
+            let remoteReviewed = record.cardLastReviewedAt ?? .distantPast
+            let localReviewed = card.lastReviewedAt ?? .distantPast
+            if remoteReviewed >= localReviewed {
+                if let stageRaw = record.cardStage, let stage = StudyCardStage(rawValue: stageRaw) {
+                    card.stage = stage
+                }
+                if let count = record.cardReviewCount { card.reviewCount = count }
+                if let interval = record.cardIntervalHours { card.intervalHours = interval }
+                card.dueAt = record.cardDueAt
+                card.lastReviewedAt = record.cardLastReviewedAt
+                if let gradeRaw = record.cardLastGrade {
+                    card.lastGrade = StudyCardGrade(rawValue: gradeRaw)
+                }
+            }
+        } else {
+            card = StudyCard(
+                id: recordID,
+                front: front,
+                back: record.cardBack ?? "",
+                type: StudyCardType(rawValue: record.cardType ?? "") ?? .qa,
+                origin: StudyCardOrigin(rawValue: record.cardOrigin ?? "") ?? .manual,
+                userNote: record.cardUserNote ?? "",
+                courseID: record.courseId,
+                sessionID: record.sessionId,
+                sourceEntryID: record.entryId,
+                sourceAttachmentID: record.sourceAttachmentId,
+                sourceTermID: record.sourceTermId,
+                stage: StudyCardStage(rawValue: record.cardStage ?? "") ?? .new,
+                reviewCount: record.cardReviewCount ?? 0,
+                intervalHours: record.cardIntervalHours ?? 0,
+                dueAt: record.cardDueAt,
+                lastReviewedAt: record.cardLastReviewedAt,
+                lastGrade: StudyCardGrade(rawValue: record.cardLastGrade ?? ""),
+                serverVersion: serverVersion
+            )
+            context.insert(card)
+        }
+        card.serverVersion = serverVersion
+        try context.save()
+    }
+
+    func deleteCardByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<StudyCard>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let card = try context.fetch(descriptor).first else { return }
+        context.delete(card)
+        try context.save()
+    }
+
+    // MARK: Study tasks
+
+    func tasks(courseID: UUID?, includeDone: Bool) throws -> [StudyTask] {
+        let all = try context.fetch(FetchDescriptor<StudyTask>())
+        var scoped = all.filter { $0.status != .pendingConfirm }
+        if let courseID {
+            scoped = scoped.filter { $0.courseID == courseID }
+        }
+        if !includeDone {
+            scoped = scoped.filter { $0.status != .done && $0.status != .ignored }
+        }
+        // Unfinished first, by due date (undated last), then newest.
+        return scoped.sorted { lhs, rhs in
+            let lhsDone = lhs.status == .done || lhs.status == .ignored
+            let rhsDone = rhs.status == .done || rhs.status == .ignored
+            if lhsDone != rhsDone { return rhsDone }
+            switch (lhs.dueAt, rhs.dueAt) {
+            case let (l?, r?): return l < r
+            case (.some, nil): return true
+            case (nil, .some): return false
+            default: return lhs.createdAt > rhs.createdAt
+            }
+        }
+    }
+
+    func pendingConfirmTasks() throws -> [StudyTask] {
+        let all = try context.fetch(FetchDescriptor<StudyTask>())
+        return all
+            .filter { $0.status == .pendingConfirm }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func tasks(matching query: String) throws -> [StudyTask] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let lowered = trimmed.lowercased()
+        let all = try context.fetch(FetchDescriptor<StudyTask>())
+        return all.filter { task in
+            task.status != .pendingConfirm
+                && (task.title.lowercased().contains(lowered)
+                    || task.detail.lowercased().contains(lowered)
+                    || task.userNote.lowercased().contains(lowered))
+        }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func addTask(_ draft: TaskDraft) throws -> StudyTask {
+        let task = StudyTask(
+            title: draft.title,
+            detail: draft.detail,
+            priority: draft.priority,
+            status: draft.status,
+            origin: draft.origin,
+            uncertainty: draft.uncertainty,
+            userNote: draft.userNote,
+            dueAt: draft.dueAt,
+            courseID: draft.courseID,
+            sessionID: draft.sessionID,
+            sourceEntryID: draft.sourceEntryID,
+            sourceAttachmentID: draft.sourceAttachmentID,
+            sourceReviewID: draft.sourceReviewID
+        )
+        context.insert(task)
+        try context.save()
+        // pendingConfirm candidates are device-local until confirmed.
+        if task.status != .pendingConfirm {
+            mutationObserver?.taskCreated(task)
+        }
+        return task
+    }
+
+    func updateTask(_ task: StudyTask, with draft: TaskDraft) throws {
+        task.title = draft.title
+        task.detail = draft.detail
+        task.priority = draft.priority
+        task.uncertainty = draft.uncertainty
+        task.userNote = draft.userNote
+        task.dueAt = draft.dueAt
+        task.courseID = draft.courseID
+        task.updatedAt = .now
+        try context.save()
+        if task.status != .pendingConfirm {
+            mutationObserver?.taskUpdated(task)
+        }
+    }
+
+    func confirmTask(_ task: StudyTask) throws {
+        guard task.status == .pendingConfirm else { return }
+        task.status = .pending
+        task.updatedAt = .now
+        try context.save()
+        // First push of a previously device-local candidate.
+        mutationObserver?.taskCreated(task)
+    }
+
+    func setTaskStatus(_ task: StudyTask, status: StudyTaskStatus) throws {
+        guard task.status != status else { return }
+        task.status = status
+        task.completedAt = status == .done ? .now : nil
+        task.updatedAt = .now
+        try context.save()
+        if task.status != .pendingConfirm {
+            mutationObserver?.taskUpdated(task)
+        }
+    }
+
+    func deleteTask(_ task: StudyTask) throws {
+        let taskID = task.id
+        let wasConfirmed = task.status != .pendingConfirm
+        context.delete(task)
+        try context.save()
+        // An unconfirmed AI candidate never reached the server — no
+        // tombstone needed.
+        if wasConfirmed {
+            mutationObserver?.taskDeleted(id: taskID)
+        }
+    }
+
+    func applyRemoteStudyTask(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id,
+              let title = record.title, !title.isEmpty else { return }
+        let descriptor = FetchDescriptor<StudyTask>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let task: StudyTask
+        if let existing {
+            task = existing
+            task.title = title
+            if let detail = record.taskDetail { task.detail = detail }
+            if let priorityRaw = record.taskPriority,
+               let priority = StudyTaskPriority(rawValue: priorityRaw) {
+                task.priority = priority
+            }
+            if let originRaw = record.taskOrigin, let origin = StudyTaskOrigin(rawValue: originRaw) {
+                task.origin = origin
+            }
+            if let uncertainty = record.taskUncertainty { task.uncertainty = uncertainty }
+            if let note = record.taskUserNote { task.userNote = note }
+            task.dueAt = record.taskDueAt
+            task.courseID = record.courseId
+            task.sessionID = record.sessionId
+            task.sourceEntryID = record.entryId
+            task.sourceAttachmentID = record.sourceAttachmentId
+            task.sourceReviewID = record.sourceReviewId
+            // Done is sticky: a stale non-done push must not reopen a
+            // locally completed task (mirrors the server-side rule).
+            let remoteStatus = StudyTaskStatus(rawValue: record.taskStatus ?? "") ?? .pending
+            if remoteStatus == .done || task.status != .done {
+                task.status = remoteStatus
+                task.completedAt = remoteStatus == .done
+                    ? (record.taskCompletedAt ?? task.completedAt ?? .now)
+                    : nil
+            }
+        } else {
+            task = StudyTask(
+                id: recordID,
+                title: title,
+                detail: record.taskDetail ?? "",
+                priority: StudyTaskPriority(rawValue: record.taskPriority ?? "") ?? .normal,
+                status: StudyTaskStatus(rawValue: record.taskStatus ?? "") ?? .pending,
+                origin: StudyTaskOrigin(rawValue: record.taskOrigin ?? "") ?? .manual,
+                uncertainty: record.taskUncertainty ?? "",
+                userNote: record.taskUserNote ?? "",
+                dueAt: record.taskDueAt,
+                completedAt: record.taskCompletedAt,
+                courseID: record.courseId,
+                sessionID: record.sessionId,
+                sourceEntryID: record.entryId,
+                sourceAttachmentID: record.sourceAttachmentId,
+                sourceReviewID: record.sourceReviewId,
+                serverVersion: serverVersion
+            )
+            context.insert(task)
+        }
+        task.serverVersion = serverVersion
+        try context.save()
+    }
+
+    func deleteTaskByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<StudyTask>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let task = try context.fetch(descriptor).first else { return }
+        context.delete(task)
+        try context.save()
     }
 }

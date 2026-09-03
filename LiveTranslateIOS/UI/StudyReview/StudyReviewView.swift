@@ -17,6 +17,12 @@ struct StudyReviewView: View {
     @State private var exportError = false
     @State private var pendingRegenerate = false
     @State private var viewedAttachmentID: UUID?
+    // Learning-material save flows (term book / cards / tasks). The draft
+    // wrappers make the sheets item-driven.
+    @State private var termDraftBox: TermDraftBox?
+    @State private var cardDraftBox: CardDraftBox?
+    @State private var taskDraftBox: TaskDraftBox?
+    @State private var showingAICards = false
 
     let sessionID: UUID
     /// Pops back to the classroom detail and scrolls to the entry.
@@ -92,6 +98,22 @@ struct StudyReviewView: View {
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
+        }
+        .sheet(item: $termDraftBox) { box in
+            TermSaveSheet(draft: box.draft)
+        }
+        .sheet(item: $cardDraftBox) { box in
+            CardSaveSheet(draft: box.draft)
+        }
+        .sheet(item: $taskDraftBox) { box in
+            TaskSaveSheet(draft: box.draft, editingTask: nil)
+        }
+        .sheet(isPresented: $showingAICards) {
+            AICardGenerationView(
+                preselectedCourseID: viewModel.session?.courseID,
+                courses: [],
+                preselectedSessionID: sessionID
+            )
         }
         .alert("导出失败", isPresented: $exportError) {
             Button("好", role: .cancel) {}
@@ -493,6 +515,25 @@ struct StudyReviewView: View {
         .contextMenu {
             Button("编辑") { onEdit(text) }
             Button("删除", role: .destructive) { onDelete() }
+            Divider()
+            Button {
+                cardDraftBox = CardDraftBox(draft: cardDraft(
+                    front: text, back: "",
+                    entryID: refEntryIDs.first,
+                    attachmentID: refAttachmentIDs.first
+                ))
+            } label: {
+                Label("制作学习卡片", systemImage: "rectangle.on.rectangle")
+            }
+            Button {
+                taskDraftBox = TaskDraftBox(draft: taskDraft(
+                    title: text,
+                    entryID: refEntryIDs.first,
+                    attachmentID: refAttachmentIDs.first
+                ))
+            } label: {
+                Label("转为任务", systemImage: "checklist")
+            }
             if let first = refEntryIDs.first {
                 Button("查看原文") { onJumpToEntry(first) }
             }
@@ -536,6 +577,31 @@ struct StudyReviewView: View {
             }
             Button("删除", role: .destructive) {
                 viewModel.deleteTerm(term)
+            }
+            Divider()
+            Button {
+                termDraftBox = TermDraftBox(draft: TermDraft(
+                    russian: term.russian,
+                    chinese: term.chinese,
+                    explanation: term.explanation,
+                    courseID: viewModel.session?.courseID,
+                    sessionID: sessionID,
+                    sourceEntryID: term.refEntryIDs.first,
+                    sourceAttachmentID: term.refAttachmentIDs.first,
+                    sourceReviewID: sessionID
+                ))
+            } label: {
+                Label("保存到术语本", systemImage: "character.book.closed")
+            }
+            Button {
+                cardDraftBox = CardDraftBox(draft: cardDraft(
+                    front: term.russian,
+                    back: term.chinese.isEmpty ? term.explanation : term.chinese,
+                    entryID: term.refEntryIDs.first,
+                    attachmentID: term.refAttachmentIDs.first
+                ))
+            } label: {
+                Label("制作术语卡片", systemImage: "rectangle.on.rectangle")
             }
             if let first = term.refEntryIDs.first {
                 Button("查看原文") { onJumpToEntry(first) }
@@ -646,12 +712,61 @@ struct StudyReviewView: View {
                             Button("删除", role: .destructive) {
                                 viewModel.deleteUserAddition(note)
                             }
+                            Divider()
+                            Button {
+                                cardDraftBox = CardDraftBox(draft: cardDraft(
+                                    front: note.text, back: "", entryID: nil
+                                ))
+                            } label: {
+                                Label("制作卡片", systemImage: "rectangle.on.rectangle")
+                            }
+                            Button {
+                                taskDraftBox = TaskDraftBox(draft: taskDraft(
+                                    title: note.text, entryID: nil
+                                ))
+                            } label: {
+                                Label("创建任务", systemImage: "checklist")
+                            }
                         }
                     }
                 }
                 .padding(.leading, LTSpacing.xxs)
             }
         }
+    }
+
+    // MARK: - Learning draft builders
+
+    /// Pre-fills a card draft with this session's source refs.
+    private func cardDraft(
+        front: String, back: String, entryID: UUID?, attachmentID: UUID?
+    ) -> CardDraft {
+        CardDraft(
+            front: front,
+            back: back,
+            courseID: viewModel.session?.courseID,
+            sessionID: sessionID,
+            sourceEntryID: entryID,
+            sourceAttachmentID: attachmentID
+        )
+    }
+
+    /// Pre-fills a task draft from review material. AI-sourced text
+    /// starts as a pendingConfirm candidate with its provenance note.
+    private func taskDraft(
+        title: String, entryID: UUID?, attachmentID: UUID?
+    ) -> TaskDraft {
+        TaskDraft(
+            title: title,
+            status: .pendingConfirm,
+            origin: .ai,
+            uncertainty: "来自 AI 学习整理的作业条目，确认后生效",
+            courseID: viewModel.session?.courseID,
+            sessionID: sessionID,
+            sourceEntryID: entryID,
+            sourceAttachmentID: attachmentID,
+            sourceReviewID: sessionID
+        )
     }
 
     // MARK: - Generation info + menu
@@ -680,6 +795,12 @@ struct StudyReviewView: View {
                     pendingRegenerate = true
                 } label: {
                     Label("重新整理", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(viewModel.progress != nil)
+                Button {
+                    showingAICards = true
+                } label: {
+                    Label("AI 制作复习卡片", systemImage: "sparkles")
                 }
                 .disabled(viewModel.progress != nil)
                 Button {
@@ -883,4 +1004,24 @@ private struct ReviewItemEditor: View {
         LTHaptics.success()
         dismiss()
     }
+}
+
+
+// MARK: - Learning draft boxes (item-driven sheets)
+
+/// Item wrappers for the draft-based sheets (drafts themselves are plain
+/// values without identity).
+struct TermDraftBox: Identifiable {
+    let id = UUID()
+    let draft: TermDraft
+}
+
+struct CardDraftBox: Identifiable {
+    let id = UUID()
+    let draft: CardDraft
+}
+
+struct TaskDraftBox: Identifiable {
+    let id = UUID()
+    let draft: TaskDraft
 }

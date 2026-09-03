@@ -23,6 +23,9 @@ struct HomeScreen: View {
                         startCard
                         quickStartSection
                         statusSection
+                        if viewModel.isLoaded && viewModel.hasTodayReview {
+                            todayReviewSection
+                        }
                         recentSection
                         statsSection
                     }
@@ -107,6 +110,39 @@ struct HomeScreen: View {
                 .font(.system(.largeTitle, design: .default).weight(.bold))
                 .foregroundStyle(LTColors.textPrimary)
         }
+    }
+
+    // MARK: - Today's review (only with real pending content)
+
+    /// Restrained home entry into the review center: real numbers, only
+    /// visible when there is something to do.
+    private var todayReviewSection: some View {
+        Button {
+            environment.flow.selectedTab = .review
+        } label: {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                HStack(spacing: LTSpacing.m) {
+                    LTIconBadge(symbol: "graduationcap.fill", tint: LTColors.accentGreen, size: 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("今日复习")
+                            .font(.cardTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                        Text(viewModel.todayReviewSummary)
+                            .font(.footnote)
+                            .foregroundStyle(LTColors.textSecondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+            .padding(LTSpacing.l)
+            .ltCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text("打开复习中心"))
     }
 
     // MARK: - Ongoing banner

@@ -19,6 +19,11 @@ enum SyncEntityType: String, Codable, Sendable {
     /// VARCHAR(16) entity_type columns ("session_attachment" would not).
     /// Binary files travel on /v1/attachments, never through push.
     case attachment
+    // Learning entities (review center). Wire names all fit the server's
+    // VARCHAR(16) entity_type column.
+    case term
+    case studyCard = "study_card"
+    case studyTask = "study_task"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -230,6 +235,43 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var attachmentAnalysisStatus: String?
     var attachmentAnalysis: String?
     var attachmentOcrText: String?
+    // learning entities (review center). Shared reference fields ride
+    // courseId/sessionId/entryId plus the source* fields below; the task
+    // title rides `title`. termSourceSessions is a JSON array of session
+    // UUID strings (the term's accumulated classroom sources) — the same
+    // string-in convention as attachmentAnalysis.
+    var termRussian: String?
+    var termChinese: String?
+    var termExplanation: String?
+    var termPartOfSpeech: String?
+    var termUserNote: String?
+    var termSourceSessions: String?
+    var termFavorite: Bool?
+    var termStatus: String?
+    var cardFront: String?
+    var cardBack: String?
+    var cardType: String?
+    var cardUserNote: String?
+    var cardOrigin: String?
+    var cardStage: String?
+    var cardReviewCount: Int?
+    var cardIntervalHours: Int?
+    var cardDueAt: Date?
+    var cardLastReviewedAt: Date?
+    var cardLastGrade: String?
+    var taskDetail: String?
+    var taskDueAt: Date?
+    var taskPriority: String?
+    var taskStatus: String?
+    var taskOrigin: String?
+    var taskUncertainty: String?
+    var taskUserNote: String?
+    var taskCompletedAt: Date?
+    // Shared source references for term/card/task. Absent (nil) keeps the
+    // server value; `UUID.nilSentinel` explicitly clears it.
+    var sourceAttachmentId: UUID?
+    var sourceReviewId: UUID?
+    var sourceTermId: UUID?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -302,6 +344,38 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var attachmentAnalysisStatus: String?
     var attachmentAnalysis: String?
     var attachmentOcrText: String?
+    // learning entities (review center) — names mirror the push payload
+    // so one CodingKeys set covers records and conflict payloads.
+    var termRussian: String?
+    var termChinese: String?
+    var termExplanation: String?
+    var termPartOfSpeech: String?
+    var termUserNote: String?
+    var termSourceSessions: String?
+    var termFavorite: Bool?
+    var termStatus: String?
+    var cardFront: String?
+    var cardBack: String?
+    var cardType: String?
+    var cardUserNote: String?
+    var cardOrigin: String?
+    var cardStage: String?
+    var cardReviewCount: Int?
+    var cardIntervalHours: Int?
+    var cardDueAt: Date?
+    var cardLastReviewedAt: Date?
+    var cardLastGrade: String?
+    var taskDetail: String?
+    var taskDueAt: Date?
+    var taskPriority: String?
+    var taskStatus: String?
+    var taskOrigin: String?
+    var taskUncertainty: String?
+    var taskUserNote: String?
+    var taskCompletedAt: Date?
+    var sourceAttachmentId: UUID?
+    var sourceReviewId: UUID?
+    var sourceTermId: UUID?
     var serverVersion: Int
     var deleted: Bool
 
@@ -351,6 +425,36 @@ struct SyncServerRecordDTO: Codable, Sendable {
         attachmentAnalysisStatus: String? = nil,
         attachmentAnalysis: String? = nil,
         attachmentOcrText: String? = nil,
+        termRussian: String? = nil,
+        termChinese: String? = nil,
+        termExplanation: String? = nil,
+        termPartOfSpeech: String? = nil,
+        termUserNote: String? = nil,
+        termSourceSessions: String? = nil,
+        termFavorite: Bool? = nil,
+        termStatus: String? = nil,
+        cardFront: String? = nil,
+        cardBack: String? = nil,
+        cardType: String? = nil,
+        cardUserNote: String? = nil,
+        cardOrigin: String? = nil,
+        cardStage: String? = nil,
+        cardReviewCount: Int? = nil,
+        cardIntervalHours: Int? = nil,
+        cardDueAt: Date? = nil,
+        cardLastReviewedAt: Date? = nil,
+        cardLastGrade: String? = nil,
+        taskDetail: String? = nil,
+        taskDueAt: Date? = nil,
+        taskPriority: String? = nil,
+        taskStatus: String? = nil,
+        taskOrigin: String? = nil,
+        taskUncertainty: String? = nil,
+        taskUserNote: String? = nil,
+        taskCompletedAt: Date? = nil,
+        sourceAttachmentId: UUID? = nil,
+        sourceReviewId: UUID? = nil,
+        sourceTermId: UUID? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -397,6 +501,36 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.attachmentAnalysisStatus = attachmentAnalysisStatus
         self.attachmentAnalysis = attachmentAnalysis
         self.attachmentOcrText = attachmentOcrText
+        self.termRussian = termRussian
+        self.termChinese = termChinese
+        self.termExplanation = termExplanation
+        self.termPartOfSpeech = termPartOfSpeech
+        self.termUserNote = termUserNote
+        self.termSourceSessions = termSourceSessions
+        self.termFavorite = termFavorite
+        self.termStatus = termStatus
+        self.cardFront = cardFront
+        self.cardBack = cardBack
+        self.cardType = cardType
+        self.cardUserNote = cardUserNote
+        self.cardOrigin = cardOrigin
+        self.cardStage = cardStage
+        self.cardReviewCount = cardReviewCount
+        self.cardIntervalHours = cardIntervalHours
+        self.cardDueAt = cardDueAt
+        self.cardLastReviewedAt = cardLastReviewedAt
+        self.cardLastGrade = cardLastGrade
+        self.taskDetail = taskDetail
+        self.taskDueAt = taskDueAt
+        self.taskPriority = taskPriority
+        self.taskStatus = taskStatus
+        self.taskOrigin = taskOrigin
+        self.taskUncertainty = taskUncertainty
+        self.taskUserNote = taskUserNote
+        self.taskCompletedAt = taskCompletedAt
+        self.sourceAttachmentId = sourceAttachmentId
+        self.sourceReviewId = sourceReviewId
+        self.sourceTermId = sourceTermId
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -446,6 +580,36 @@ struct SyncServerRecordDTO: Codable, Sendable {
         attachmentAnalysisStatus = try container.decodeIfPresent(String.self, forKey: .attachmentAnalysisStatus)
         attachmentAnalysis = try container.decodeIfPresent(String.self, forKey: .attachmentAnalysis)
         attachmentOcrText = try container.decodeIfPresent(String.self, forKey: .attachmentOcrText)
+        termRussian = try container.decodeIfPresent(String.self, forKey: .termRussian)
+        termChinese = try container.decodeIfPresent(String.self, forKey: .termChinese)
+        termExplanation = try container.decodeIfPresent(String.self, forKey: .termExplanation)
+        termPartOfSpeech = try container.decodeIfPresent(String.self, forKey: .termPartOfSpeech)
+        termUserNote = try container.decodeIfPresent(String.self, forKey: .termUserNote)
+        termSourceSessions = try container.decodeIfPresent(String.self, forKey: .termSourceSessions)
+        termFavorite = try container.decodeIfPresent(Bool.self, forKey: .termFavorite)
+        termStatus = try container.decodeIfPresent(String.self, forKey: .termStatus)
+        cardFront = try container.decodeIfPresent(String.self, forKey: .cardFront)
+        cardBack = try container.decodeIfPresent(String.self, forKey: .cardBack)
+        cardType = try container.decodeIfPresent(String.self, forKey: .cardType)
+        cardUserNote = try container.decodeIfPresent(String.self, forKey: .cardUserNote)
+        cardOrigin = try container.decodeIfPresent(String.self, forKey: .cardOrigin)
+        cardStage = try container.decodeIfPresent(String.self, forKey: .cardStage)
+        cardReviewCount = try container.decodeIfPresent(Int.self, forKey: .cardReviewCount)
+        cardIntervalHours = try container.decodeIfPresent(Int.self, forKey: .cardIntervalHours)
+        cardDueAt = try container.decodeIfPresent(Date.self, forKey: .cardDueAt)
+        cardLastReviewedAt = try container.decodeIfPresent(Date.self, forKey: .cardLastReviewedAt)
+        cardLastGrade = try container.decodeIfPresent(String.self, forKey: .cardLastGrade)
+        taskDetail = try container.decodeIfPresent(String.self, forKey: .taskDetail)
+        taskDueAt = try container.decodeIfPresent(Date.self, forKey: .taskDueAt)
+        taskPriority = try container.decodeIfPresent(String.self, forKey: .taskPriority)
+        taskStatus = try container.decodeIfPresent(String.self, forKey: .taskStatus)
+        taskOrigin = try container.decodeIfPresent(String.self, forKey: .taskOrigin)
+        taskUncertainty = try container.decodeIfPresent(String.self, forKey: .taskUncertainty)
+        taskUserNote = try container.decodeIfPresent(String.self, forKey: .taskUserNote)
+        taskCompletedAt = try container.decodeIfPresent(Date.self, forKey: .taskCompletedAt)
+        sourceAttachmentId = try container.decodeIfPresent(UUID.self, forKey: .sourceAttachmentId)
+        sourceReviewId = try container.decodeIfPresent(UUID.self, forKey: .sourceReviewId)
+        sourceTermId = try container.decodeIfPresent(UUID.self, forKey: .sourceTermId)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -492,4 +656,7 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var noteCount: Int?
     var reviewCount: Int?
     var attachmentCount: Int?
+    var termCount: Int?
+    var studyCardCount: Int?
+    var studyTaskCount: Int?
 }

@@ -61,6 +61,15 @@ struct AttachmentDetailView: View {
             }
         }
         .onAppear { reload() }
+        .sheet(item: $termDraftBox) { box in
+            TermSaveSheet(draft: box.draft)
+        }
+        .sheet(item: $cardDraftBox) { box in
+            CardSaveSheet(draft: box.draft)
+        }
+        .sheet(item: $taskDraftBox) { box in
+            TaskSaveSheet(draft: box.draft, editingTask: nil)
+        }
         .sheet(isPresented: $showEditor) {
             if let attachment {
                 AttachmentEditSheet(attachment: attachment, session: session) {
@@ -437,6 +446,41 @@ struct AnalysisResultView: View {
                         .font(.footnote)
                         .foregroundStyle(LTColors.textPrimary)
                         .textSelection(.enabled)
+                        .contextMenu {
+                            Button {
+                                termDraftBox = TermDraftBox(draft: TermDraft(
+                                    russian: item,
+                                    courseID: session.courseID,
+                                    sessionID: session.id,
+                                    sourceAttachmentID: attachmentID
+                                ))
+                            } label: {
+                                Label("保存为术语", systemImage: "character.book.closed")
+                            }
+                            Button {
+                                cardDraftBox = CardDraftBox(draft: CardDraft(
+                                    front: item, back: "",
+                                    courseID: session.courseID,
+                                    sessionID: session.id,
+                                    sourceAttachmentID: attachmentID
+                                ))
+                            } label: {
+                                Label("制作学习卡片", systemImage: "rectangle.on.rectangle")
+                            }
+                            Button {
+                                taskDraftBox = TaskDraftBox(draft: TaskDraft(
+                                    title: String(item.prefix(120)),
+                                    status: .pendingConfirm,
+                                    origin: .ai,
+                                    uncertainty: "从图片分析识别的作业候选，确认后生效",
+                                    courseID: session.courseID,
+                                    sessionID: session.id,
+                                    sourceAttachmentID: attachmentID
+                                ))
+                            } label: {
+                                Label("转为任务（待确认）", systemImage: "checklist")
+                            }
+                        }
                 }
             }
         }
@@ -456,6 +500,19 @@ struct AnalysisResultView: View {
                             .font(.system(.footnote, design: .monospaced))
                             .foregroundStyle(LTColors.textPrimary)
                             .textSelection(.enabled)
+                    }
+                    .contextMenu {
+                        Button {
+                            cardDraftBox = CardDraftBox(draft: CardDraft(
+                                front: item, back: "",
+                                type: title.contains("公式") ? .formula : .code,
+                                courseID: session.courseID,
+                                sessionID: session.id,
+                                sourceAttachmentID: attachmentID
+                            ))
+                        } label: {
+                            Label("制作学习卡片", systemImage: "rectangle.on.rectangle")
+                        }
                     }
                 }
             }

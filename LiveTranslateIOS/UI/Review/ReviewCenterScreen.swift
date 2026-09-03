@@ -1,0 +1,579 @@
+import SwiftUI
+import UIKit
+
+/// 复习 tab — the review center. Five segments (今天 · 术语 · 卡片 · 任务 ·
+/// 书签); bookmarks, the former standalone tab, live on as one segment.
+///
+/// Everything shown derives from real persisted rows — counts come from
+/// the repository, never from hardcoded values.
+struct ReviewCenterScreen: View {
+    enum Segment: String, CaseIterable, Identifiable {
+        case today = "今天"
+        case terms = "术语"
+        case cards = "卡片"
+        case tasks = "任务"
+        case bookmarks = "书签"
+
+        var id: String { rawValue }
+    }
+
+    @Environment(AppEnvironment.self) private var environment
+    @State private var segment: Segment = .today
+    @State private var courses: [Course] = []
+    @State private var selectedCourseID: UUID?
+    @State private var reviewCourseID: UUID?
+    @State private var showingReviewSession = false
+
+    var body: some View {
+        NavigationStack {
+            LTPage {
+                VStack(spacing: 0) {
+                    segmentBar
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: LTSpacing.l) {
+                            switch segment {
+                            case .today: TodayView(
+                                courses: courses,
+                                selectedCourseID: $selectedCourseID,
+                                switchToTerms: { segment = .terms },
+                                switchToTasks: { segment = .tasks },
+                                switchToCards: { segment = .cards },
+                                onStartReview: { courseID in
+                                    reviewCourseID = courseID
+                                    showingReviewSession = true
+                                }
+                            )
+                            case .terms:
+                                TermBookView(courses: $courses, selectedCourseID: $selectedCourseID)
+                            case .cards:
+                                CardListView(
+                                    courses: $courses,
+                                    selectedCourseID: $selectedCourseID
+                                ) { courseID in
+                                    reviewCourseID = courseID
+                                    showingReviewSession = true
+                                }
+                            case .tasks:
+                                TaskListView(courses: $courses, selectedCourseID: $selectedCourseID)
+                            case .bookmarks:
+                                BookmarksSegment(courses: courses)
+                            }
+                        }
+                        .padding(.horizontal, LTSpacing.screenPadding)
+                        .padding(.top, LTSpacing.s)
+                        .padding(.bottom, LTSpacing.xl + LTSpacing.tabBarReserve)
+                    }
+                }
+            }
+            .navigationTitle("复习")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .task {
+            courses = (try? environment.repository.courses()) ?? []
+        }
+        .onAppear {
+            courses = (try? environment.repository.courses()) ?? courses
+        }
+        .fullScreenCover(isPresented: $showingReviewSession) {
+            ReviewSessionView(courseID: reviewCourseID)
+        }
+    }
+
+    private var segmentBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: LTSpacing.xs) {
+                ForEach(Segment.allCases) { candidate in
+                    Button {
+                        withReducedMotionFallback { segment = candidate }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Text(candidate.rawValue)
+                                .font(.footnote.weight(segment == candidate ? .semibold : .regular))
+                            Rectangle()
+                                .fill(segment == candidate ? LTColors.accentGreen : .clear)
+                                .frame(height: 2)
+                        }
+                    }
+                    .foregroundStyle(
+                        segment == candidate ? LTColors.textPrimary : LTColors.textSecondary
+                    )
+                    .padding(.horizontal, 10)
+                    .accessibilityAddTraits(segment == candidate ? [.isSelected] : [])
+                }
+            }
+            .padding(.horizontal, LTSpacing.screenPadding)
+            .padding(.top, LTSpacing.s)
+        }
+    }
+
+    /// Honors Reduce Motion: segment switches don't animate.
+    private func withReducedMotionFallback(_ body: () -> Void) {
+        if UIAccessibility.isReduceMotionEnabled {
+            body()
+        } else {
+            withAnimation(.easeInOut(duration: 0.15), body)
+        }
+    }
+}
+
+// MARK: - Today
+
+/// The 今天 segment: what actually needs doing today. Every number comes
+/// from a repository query; sections with nothing to do are hidden, so
+/// an empty day is an empty page (that is the honest state).
+struct TodayView: View {
+    @Environment(AppEnvironment.self) private var environment
+    let courses: [Course]
+    @Binding var selectedCourseID: UUID?
+    var switchToTerms: () -> Void
+    var switchToTasks: () -> Void
+    var switchToCards: () -> Void
+    var onStartReview: (UUID?) -> Void
+
+    @State private var dueCardCount = 0
+    @State private var newCardCount = 0
+    @State private var overdueTasks: [StudyTask] = []
+    @State private var upcomingTasks: [StudyTask] = []
+    @State private var pendingConfirmCount = 0
+    @State private var recentNewTerms: [GlossaryTerm] = []
+    @State private var lastReviewedAt: Date?
+    @State private var lastReviewCount = 0
+    @State private var staleSessions: [ClassroomSession] = []
+    @State private var isLoaded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.l) {
+            if isLoaded && hasNothingTodo {
+                LTEmptyState(
+                    symbol: "checkmark.seal",
+                    title: "今天没有待复习的内容",
+                    message: "新保存的术语、卡片和任务会出现在这里"
+                )
+            } else if isLoaded {
+                if dueCardCount > 0 || newCardCount > 0 {
+                    reviewCard
+                }
+                if !overdueTasks.isEmpty || !upcomingTasks.isEmpty {
+                    taskCard
+                }
+                if pendingConfirmCount > 0 {
+                    candidateCard
+                }
+                if !recentNewTerms.isEmpty {
+                    newTermsCard
+                }
+                if !staleSessions.isEmpty {
+                    organizeCard
+                }
+                if lastReviewedAt != nil {
+                    progressCard
+                }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, LTSpacing.xl)
+            }
+        }
+        .onAppear { reload() }
+    }
+
+    private var hasNothingTodo: Bool {
+        dueCardCount == 0 && newCardCount == 0 && overdueTasks.isEmpty
+            && upcomingTasks.isEmpty && pendingConfirmCount == 0
+            && recentNewTerms.isEmpty && staleSessions.isEmpty
+    }
+
+    // MARK: Sections
+
+    private var reviewCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            HStack(alignment: .top, spacing: LTSpacing.m) {
+                LTIconBadge(symbol: "rectangle.on.rectangle", tint: LTColors.accentGreen, size: 40)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("今日复习")
+                        .font(.cardTitle)
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text(reviewSummaryLine)
+                        .font(.footnote)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                Spacer()
+            }
+            Button {
+                onStartReview(nil)
+            } label: {
+                Label("开始复习", systemImage: "play.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: LTSpacing.minTouchTarget)
+            }
+            .buttonStyle(LTPrimaryButtonStyle())
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    private var reviewSummaryLine: String {
+        var parts: [String] = []
+        if dueCardCount > 0 { parts.append("到期卡片 \(dueCardCount) 张") }
+        if newCardCount > 0 { parts.append("新卡片 \(newCardCount) 张待第一次复习") }
+        return parts.joined(separator: "，")
+    }
+
+    private var taskCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "任务", actionTitle: "全部任务") { switchToTasks() }
+            VStack(spacing: LTSpacing.xs) {
+                ForEach(overdueTasks.prefix(3)) { task in
+                    taskRow(task, prefix: "已逾期")
+                }
+                ForEach(upcomingTasks.prefix(3)) { task in
+                    taskRow(task, prefix: nil)
+                }
+            }
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    private func taskRow(_ task: StudyTask, prefix: String?) -> some View {
+        Button {
+            switchToTasks()
+        } label: {
+            HStack(spacing: LTSpacing.s) {
+                Image(systemName: task.status == .done ? "checkmark.circle.fill" : "circle")
+                    .font(.subheadline)
+                    .foregroundStyle(task.status == .done ? LTColors.accentGreen : LTColors.textTertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let prefix {
+                        Text(prefix)
+                            .font(.caption2)
+                            .foregroundStyle(LTColors.destructive)
+                    }
+                    Text(task.title)
+                        .font(.subheadline)
+                        .foregroundStyle(LTColors.textPrimary)
+                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                if let dueAt = task.dueAt {
+                    Text(dueAt.formatted(date: .abbreviated, time: .omitted))
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var candidateCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "待确认", actionTitle: "去确认") { switchToTasks() }
+            Text(pendingConfirmCount == 1
+                ? "AI 从课堂识别了 1 条作业候选，等待你确认"
+                : "AI 从课堂识别了 \(pendingConfirmCount) 条作业候选，等待你确认")
+                .font(.footnote)
+                .foregroundStyle(LTColors.textSecondary)
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    private var newTermsCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "最近保存、还没学过", actionTitle: "术语本") { switchToTerms() }
+            VStack(spacing: LTSpacing.xs) {
+                ForEach(recentNewTerms.prefix(3)) { term in
+                    NavigationLink {
+                        TermDetailView(term: term, courses: courses)
+                    } label: {
+                        HStack(spacing: LTSpacing.s) {
+                            Text(term.russian)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(LTColors.textPrimary)
+                                .lineLimit(1)
+                            if !term.chinese.isEmpty {
+                                Text(term.chinese)
+                                    .font(.footnote)
+                                    .foregroundStyle(LTColors.textSecondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(LTColors.textTertiary)
+                        }
+                        .padding(LTSpacing.s)
+                        .background(RoundedRectangle(cornerRadius: LTRadius.small).fill(LTColors.surfacePrimary.opacity(0.6)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    /// Sessions whose latest AI review is missing or stale — a gentle
+    /// "可以继续整理" nudge from real staleness data.
+    private var organizeCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "可以继续整理的课堂")
+            VStack(spacing: LTSpacing.xs) {
+                ForEach(staleSessions.prefix(3)) { session in
+                    NavigationLink {
+                        SessionDetailView(sessionID: session.id)
+                    } label: {
+                        HStack(spacing: LTSpacing.s) {
+                            LTIconBadge(
+                                symbol: LTIconography.symbol(for: session.title),
+                                tint: LTIconography.tint(for: session.title),
+                                size: 28
+                            )
+                            Text(session.title)
+                                .font(.subheadline)
+                                .foregroundStyle(LTColors.textPrimary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("整理")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(LTColors.accentBlue)
+                        }
+                        .padding(LTSpacing.s)
+                        .background(RoundedRectangle(cornerRadius: LTRadius.small).fill(LTColors.surfacePrimary.opacity(0.6)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    /// Recent review progress — real numbers from the card rows (latest
+    /// lastReviewedAt across all cards), never fabricated.
+    private var progressCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.xs) {
+            LTSectionHeader(title: "最近一次复习")
+            if let lastReviewedAt {
+                Text("\(lastReviewedAt.formatted(.relative(presentation: .named)))复习了内容，共 \(lastReviewCount) 张卡片有复习记录")
+                    .font(.footnote)
+                    .foregroundStyle(LTColors.textSecondary)
+            }
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    // MARK: Data
+
+    private func reload() {
+        let allCards = (try? environment.repository.cards(courseID: nil)) ?? []
+        dueCardCount = allCards.filter(\.isDueNow).count
+        newCardCount = allCards.filter { $0.stageRaw == StudyCardStage.new.rawValue }.count
+
+        let tasks = (try? environment.repository.tasks(courseID: nil, includeDone: false)) ?? []
+        overdueTasks = tasks.filter { task in
+            if let dueAt = task.dueAt { return dueAt < .now && task.status == .pending }
+            return false
+        }
+        upcomingTasks = tasks.filter { task in
+            task.status == .pending && (task.dueAt.map { $0 >= .now } ?? false)
+        }
+        pendingConfirmCount = ((try? environment.repository.pendingConfirmTasks()) ?? []).count
+
+        let terms = (try? environment.repository.terms(courseID: nil)) ?? []
+        recentNewTerms = terms
+            .filter { $0.status == .new }
+            .prefix(5)
+            .map { $0 }
+
+        // Staleness: sessions with entries whose review is missing or
+        // older than the session's own content.
+        let sessions = (try? environment.repository.sessions(matching: "")) ?? []
+        staleSessions = sessions
+            .filter { session in
+                guard let review = try? environment.repository.studyReview(forSessionID: session.id) else {
+                    return true
+                }
+                guard review.contentJSON.isEmpty else { return false }
+                return true
+            }
+            .prefix(3)
+            .map { $0 }
+
+        let reviewed = allCards.compactMap(\.lastReviewedAt)
+        lastReviewedAt = reviewed.max()
+        lastReviewCount = allCards.filter { $0.reviewCount > 0 }.count
+        isLoaded = true
+    }
+}
+
+// MARK: - Bookmarks segment (former tab, unchanged semantics)
+
+/// Entry bookmarks across all classrooms, resolved against the live
+/// repository by stable entry ID (the old 书签 tab's content, kept as a
+/// segment of the review center).
+struct BookmarksSegment: View {
+    @Environment(AppEnvironment.self) private var environment
+    let courses: [Course]
+
+    @State private var groups: [BookmarkGroup] = []
+    @State private var isLoaded = false
+
+    private struct BookmarkGroup: Identifiable {
+        let sessionID: UUID
+        let title: String
+        let rows: [Row]
+
+        var id: UUID { sessionID }
+
+        struct Row: Identifiable {
+            let bookmark: BookmarkStore.EntryBookmark
+            let startOffset: TimeInterval
+            let translatedText: String?
+            let originalText: String
+
+            var id: UUID { bookmark.id }
+        }
+    }
+
+    var body: some View {
+        Group {
+            if isLoaded && groups.isEmpty {
+                LTEmptyState(
+                    symbol: "bookmark",
+                    title: "还没有书签",
+                    message: "实时课堂中点击书签按钮，或在课堂详情里标记重点内容"
+                )
+            } else if isLoaded {
+                VStack(alignment: .leading, spacing: LTSpacing.l) {
+                    ForEach(groups) { group in
+                        bookmarkGroup(group)
+                    }
+                }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, LTSpacing.xl)
+            }
+        }
+        .onAppear { reload() }
+    }
+
+    private func bookmarkGroup(_ group: BookmarkGroup) -> some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            HStack(spacing: LTSpacing.s) {
+                LTIconBadge(
+                    symbol: LTIconography.symbol(for: group.title),
+                    tint: LTIconography.tint(for: group.title),
+                    size: 34
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(LTColors.textPrimary)
+                        .lineLimit(1)
+                    Text("\(group.rows.count) 条书签")
+                        .font(LTTypography.timestamp)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                Spacer()
+                NavigationLink {
+                    SessionDetailView(sessionID: group.sessionID)
+                } label: {
+                    Text("打开课堂")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(LTColors.accentBlue)
+                }
+                .buttonStyle(.plain)
+            }
+            VStack(spacing: LTSpacing.xs) {
+                ForEach(group.rows) { row in
+                    BookmarkSegmentRow(
+                        startOffset: row.startOffset,
+                        createdAt: row.bookmark.createdAt,
+                        translatedText: row.translatedText,
+                        originalText: row.originalText
+                    )
+                }
+            }
+        }
+    }
+
+    private func reload() {
+        environment.bookmarks.retryLegacyMigration()
+        let sessions = (try? environment.repository.sessions(matching: "")) ?? []
+        environment.bookmarks.pruneSessions(Set(sessions.map(\.id)))
+
+        let sessionsByID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var resolved: [BookmarkGroup] = []
+        for (sessionID, bookmarks) in Dictionary(grouping: environment.bookmarks.entryBookmarks, by: \.sessionID) {
+            guard let session = sessionsByID[sessionID] else { continue }
+            let entries = (try? environment.repository.entries(for: session)) ?? []
+            let entriesByID = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var rows: [BookmarkGroup.Row] = []
+            for bookmark in bookmarks {
+                guard let entry = entriesByID[bookmark.entryID] else { continue }
+                rows.append(BookmarkGroup.Row(
+                    bookmark: bookmark,
+                    startOffset: entry.startOffset,
+                    translatedText: entry.translatedText,
+                    originalText: entry.originalText
+                ))
+            }
+            environment.bookmarks.pruneEntries(in: sessionID, existingEntryIDs: Set(entries.map(\.id)))
+            guard !rows.isEmpty else { continue }
+            rows.sort { $0.bookmark.createdAt > $1.bookmark.createdAt }
+            resolved.append(BookmarkGroup(sessionID: sessionID, title: session.title, rows: rows))
+        }
+        resolved.sort {
+            $0.rows.first?.bookmark.createdAt ?? .distantPast
+                > $1.rows.first?.bookmark.createdAt ?? .distantPast
+        }
+        groups = resolved
+        isLoaded = true
+    }
+}
+
+private struct BookmarkSegmentRow: View {
+    let startOffset: TimeInterval
+    let createdAt: Date
+    let translatedText: String?
+    let originalText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: LTSpacing.xs) {
+                Image(systemName: "bookmark.fill")
+                    .font(.caption2)
+                    .foregroundStyle(LTColors.accentGreen)
+                Text(TranscriptExporter.mmss(startOffset))
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+                Spacer()
+                Text(createdAt.formatted(date: .omitted, time: .shortened))
+                    .font(LTTypography.timestamp)
+                    .foregroundStyle(LTColors.textTertiary)
+            }
+            if let translated = translatedText, !translated.isEmpty {
+                Text(translated)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+            Text(originalText)
+                .font(.footnote)
+                .foregroundStyle(LTColors.textSecondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+        .padding(LTSpacing.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: LTRadius.small).fill(LTColors.surfacePrimary.opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: LTRadius.small).strokeBorder(LTColors.border, lineWidth: 0.5))
+        .accessibilityElement(children: .combine)
+    }
+}

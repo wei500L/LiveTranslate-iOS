@@ -164,6 +164,95 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Cloud-sync apply for an attachment record.
     func applyRemoteAttachment(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteAttachmentByID(_ id: UUID) throws
+
+    // MARK: Learning entities (review center)
+    // Glossary terms, study cards and study tasks. Learning material
+    // SURVIVES its sources: deleting a session/attachment never deletes
+    // these rows (dangling source refs are shown as 来源已不存在), and
+    // deleting a course clears their `courseID` reference (matching the
+    // server's detach semantics). AI task candidates are created with
+    // status `pendingConfirm` and never notify the sync observer until
+    // the user confirms them.
+
+    // Glossary terms
+
+    /// All terms (nil courseID = every course), newest first.
+    func terms(courseID: UUID?) throws -> [GlossaryTerm]
+    /// Terms whose russian/chinese/explanation/note contains the query.
+    func terms(matching query: String) throws -> [GlossaryTerm]
+    /// Dedup lookup within a course: same normalized russian word.
+    func findTerm(courseID: UUID?, russian: String) throws -> GlossaryTerm?
+    func addTerm(_ draft: TermDraft) throws -> GlossaryTerm
+    /// Applies every draft field (edit sheet save). Notifies sync.
+    func updateTerm(_ term: GlossaryTerm, with draft: TermDraft) throws
+    /// Records an extra classroom source on an existing term (duplicate
+    /// merge — "合并新的来源"). Unions the session list, never overwrites
+    /// the user's edited text. Notifies sync.
+    func mergeTermSources(
+        _ term: GlossaryTerm, sessionID: UUID?,
+        entryID: UUID?, attachmentID: UUID?
+    ) throws
+    func updateTermFavorite(_ term: GlossaryTerm, isFavorite: Bool) throws
+    func updateTermStatus(_ term: GlossaryTerm, status: GlossaryTermStatus) throws
+    func deleteTerm(_ term: GlossaryTerm) throws
+    /// Cloud-sync apply for a term record.
+    func applyRemoteTerm(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteTermByID(_ id: UUID) throws
+
+    // Study cards
+
+    /// All cards (nil courseID = every course), newest first.
+    func cards(courseID: UUID?) throws -> [StudyCard]
+    /// Cards due at `date` (scheduled stage + dueAt <= date), oldest due
+    /// first. New cards are excluded until enrolled by their first
+    /// review-session queue build.
+    func dueCards(before date: Date, limit: Int) throws -> [StudyCard]
+    /// Cards whose front/back/note contains the query.
+    func cards(matching query: String) throws -> [StudyCard]
+    /// Cards derived from a term (term detail's card list).
+    func cards(forTermID id: UUID) throws -> [StudyCard]
+    func addCard(_ draft: CardDraft) throws -> StudyCard
+    /// Applies every draft field; leaves the schedule untouched (the
+    /// caller offers an explicit reset separately). Notifies sync.
+    func updateCard(_ card: StudyCard, with draft: CardDraft) throws
+    /// Applies one review grade via the scheduler. Notifies sync.
+    func reviewCard(_ card: StudyCard, grade: StudyCardGrade, at date: Date) throws
+    /// Persists scheduling fields the caller restored on the model (the
+    /// review session's 撤销 path mutates the card then calls this).
+    func restoreCardSchedule(_ card: StudyCard) throws
+    /// Explicit, user-confirmed schedule reset after editing content.
+    func resetCardSchedule(_ card: StudyCard) throws
+    /// Puts new cards into the review queue (due now, stage learning).
+    func enrollCard(_ card: StudyCard) throws
+    func deleteCard(_ card: StudyCard) throws
+    /// Cloud-sync apply for a card record.
+    func applyRemoteStudyCard(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteCardByID(_ id: UUID) throws
+
+    // Study tasks
+
+    /// Confirmed tasks (pending/done/ignored — pendingConfirm candidates
+    /// are only in `pendingConfirmTasks`). Sorted: unfinished first, by
+    /// due date then created.
+    func tasks(courseID: UUID?, includeDone: Bool) throws -> [StudyTask]
+    /// AI candidates awaiting the user's confirmation.
+    func pendingConfirmTasks() throws -> [StudyTask]
+    /// Tasks whose title/detail/note contains the query (confirmed only).
+    func tasks(matching query: String) throws -> [StudyTask]
+    func addTask(_ draft: TaskDraft) throws -> StudyTask
+    /// Applies every draft field. Notifies sync only for confirmed tasks.
+    func updateTask(_ task: StudyTask, with draft: TaskDraft) throws
+    /// Promotes a pendingConfirm candidate to `pending` — its FIRST sync
+    /// push (the row existed only locally until now).
+    func confirmTask(_ task: StudyTask) throws
+    func setTaskStatus(_ task: StudyTask, status: StudyTaskStatus) throws
+    /// Deletes the row. A pendingConfirm candidate was never pushed, so
+    /// its delete is local-only (no tombstone); confirmed tasks notify
+    /// sync.
+    func deleteTask(_ task: StudyTask) throws
+    /// Cloud-sync apply for a task record.
+    func applyRemoteStudyTask(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteTaskByID(_ id: UUID) throws
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).
@@ -228,6 +317,65 @@ struct AttachmentDraft: Sendable {
     var sortIndex: Int
     var anchorEntryID: UUID?
     var courseID: UUID?
+}
+
+/// A new glossary term (russian required; sources optional).
+struct TermDraft: Sendable, Equatable {
+    var russian: String
+    var chinese: String = ""
+    var explanation: String = ""
+    var partOfSpeech: String = ""
+    var userNote: String = ""
+    var courseID: UUID? = nil
+    var sessionID: UUID? = nil
+    var sourceEntryID: UUID? = nil
+    var sourceAttachmentID: UUID? = nil
+    var sourceReviewID: UUID? = nil
+    var isFavorite: Bool = false
+    var status: GlossaryTermStatus = .new
+}
+
+/// A new study card (front + back required; sources optional).
+struct CardDraft: Sendable, Equatable {
+    var front: String
+    var back: String
+    var type: StudyCardType = .qa
+    var userNote: String = ""
+    var courseID: UUID? = nil
+    var sessionID: UUID? = nil
+    var sourceEntryID: UUID? = nil
+    var sourceAttachmentID: UUID? = nil
+    var sourceTermID: UUID? = nil
+    var origin: StudyCardOrigin = .manual
+}
+
+/// A new study task (title required). AI candidates pass
+/// `status: .pendingConfirm` — the row stays local until confirmed.
+struct TaskDraft: Sendable, Equatable {
+    var title: String
+    var detail: String = ""
+    var priority: StudyTaskPriority = .normal
+    var status: StudyTaskStatus = .pending
+    var origin: StudyTaskOrigin = .manual
+    var uncertainty: String = ""
+    var userNote: String = ""
+    var dueAt: Date? = nil
+    var courseID: UUID? = nil
+    var sessionID: UUID? = nil
+    var sourceEntryID: UUID? = nil
+    var sourceAttachmentID: UUID? = nil
+    var sourceReviewID: UUID? = nil
+}
+
+extension GlossaryTerm {
+    /// Case-insensitive, whitespace/ё-normalized russian used for dedup
+    /// ("дифференциал" == "Дифференциал " == "диференциал"-lite).
+    var normalizedRussian: String {
+        russian
+            .lowercased()
+            .replacingOccurrences(of: "ё", with: "е")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 extension UUID {

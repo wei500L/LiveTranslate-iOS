@@ -215,6 +215,7 @@ final class GuestDataMigration {
             copyGuestNotes(guestNotes)
             copyGuestReviews(guestReviews)
             copyGuestAttachments()
+            copyGuestLearningData()
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -363,6 +364,79 @@ final class GuestDataMigration {
                 serverVersion: 0
             )
             try? repository.applyRemoteStudyReview(record: record, serverVersion: 0)
+        }
+    }
+
+    /// Copies the guest review-center material (terms, cards, tasks) into
+    /// the account store, add-only union: an account row with the same id
+    /// always wins, so a re-run never duplicates. Rows keep their guest
+    /// UUIDs and arrive with serverVersion 0 — the initial upload picks
+    /// them up like every other copied row. Review progress rides with
+    /// the cards; unconfirmed AI task candidates stay unconfirmed.
+    private func copyGuestLearningData() {
+        for term in reader.termSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: term.id,
+                termRussian: term.russian,
+                termChinese: term.chinese,
+                termExplanation: term.explanation.isEmpty ? nil : term.explanation,
+                termPartOfSpeech: term.partOfSpeech.isEmpty ? nil : term.partOfSpeech,
+                termUserNote: term.userNote.isEmpty ? nil : term.userNote,
+                termSourceSessions: term.sourceSessionIDsJSON.isEmpty ? nil : term.sourceSessionIDsJSON,
+                termFavorite: term.isFavorite,
+                termStatus: term.statusRaw,
+                courseId: term.courseID,
+                sessionId: term.sessionID,
+                entryId: term.sourceEntryID,
+                sourceAttachmentId: term.sourceAttachmentID,
+                sourceReviewId: term.sourceReviewID,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteTerm(record: record, serverVersion: 0)
+        }
+        for card in reader.cardSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: card.id,
+                cardFront: card.front,
+                cardBack: card.back,
+                cardType: card.typeRaw,
+                cardUserNote: card.userNote.isEmpty ? nil : card.userNote,
+                cardOrigin: card.originRaw,
+                cardStage: card.stageRaw,
+                cardReviewCount: card.reviewCount,
+                cardIntervalHours: card.intervalHours,
+                cardDueAt: card.dueAt,
+                cardLastReviewedAt: card.lastReviewedAt,
+                cardLastGrade: card.lastGradeRaw.isEmpty ? nil : card.lastGradeRaw,
+                courseId: card.courseID,
+                sessionId: card.sessionID,
+                entryId: card.sourceEntryID,
+                sourceAttachmentId: card.sourceAttachmentID,
+                sourceTermId: card.sourceTermID,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteStudyCard(record: record, serverVersion: 0)
+        }
+        for task in reader.taskSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: task.id,
+                title: task.title,
+                taskDetail: task.detail.isEmpty ? nil : task.detail,
+                taskDueAt: task.dueAt,
+                taskPriority: task.priorityRaw,
+                taskStatus: task.statusRaw,
+                taskOrigin: task.originRaw,
+                taskUncertainty: task.uncertainty.isEmpty ? nil : task.uncertainty,
+                taskUserNote: task.userNote.isEmpty ? nil : task.userNote,
+                taskCompletedAt: task.completedAt,
+                courseId: task.courseID,
+                sessionId: task.sessionID,
+                entryId: task.sourceEntryID,
+                sourceAttachmentId: task.sourceAttachmentID,
+                sourceReviewId: task.sourceReviewID,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteStudyTask(record: record, serverVersion: 0)
         }
     }
 
@@ -572,10 +646,69 @@ struct GuestLibraryReader {
         var ocrText: String
     }
 
+    /// Sendable snapshot of one guest glossary term.
+    struct TermSnapshot: Sendable {
+        var id: UUID
+        var russian: String
+        var chinese: String
+        var explanation: String
+        var partOfSpeech: String
+        var userNote: String
+        var courseID: UUID?
+        var sessionID: UUID?
+        var sourceEntryID: UUID?
+        var sourceAttachmentID: UUID?
+        var sourceReviewID: UUID?
+        var sourceSessionIDsJSON: String
+        var isFavorite: Bool
+        var statusRaw: String
+    }
+
+    /// Sendable snapshot of one guest study card.
+    struct CardSnapshot: Sendable {
+        var id: UUID
+        var front: String
+        var back: String
+        var typeRaw: String
+        var originRaw: String
+        var userNote: String
+        var courseID: UUID?
+        var sessionID: UUID?
+        var sourceEntryID: UUID?
+        var sourceAttachmentID: UUID?
+        var sourceTermID: UUID?
+        var stageRaw: String
+        var reviewCount: Int
+        var intervalHours: Int
+        var dueAt: Date?
+        var lastReviewedAt: Date?
+        var lastGradeRaw: String
+    }
+
+    /// Sendable snapshot of one guest study task.
+    struct TaskSnapshot: Sendable {
+        var id: UUID
+        var title: String
+        var detail: String
+        var priorityRaw: String
+        var statusRaw: String
+        var originRaw: String
+        var uncertainty: String
+        var userNote: String
+        var dueAt: Date?
+        var completedAt: Date?
+        var courseID: UUID?
+        var sessionID: UUID?
+        var sourceEntryID: UUID?
+        var sourceAttachmentID: UUID?
+        var sourceReviewID: UUID?
+    }
+
     private static let schema = Schema([
         ClassroomSession.self, TranscriptEntry.self,
         Course.self, SessionNote.self, StudyReview.self,
-        SessionAttachment.self
+        SessionAttachment.self,
+        GlossaryTerm.self, StudyCard.self, StudyTask.self
     ])
 
     private var guestURL: URL { AccountScope.guestDatabaseURL }
@@ -735,6 +868,91 @@ struct GuestLibraryReader {
                 analysisStatusRaw: row.analysisStatusRaw,
                 analysisJSON: row.analysisJSON,
                 ocrText: row.ocrText
+            )
+        }
+    }
+
+    /// All guest glossary terms, values only.
+    func termSnapshots() -> [TermSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<GlossaryTerm>())) ?? []
+        return rows.map { row in
+            TermSnapshot(
+                id: row.id,
+                russian: row.russian,
+                chinese: row.chinese,
+                explanation: row.explanation,
+                partOfSpeech: row.partOfSpeech,
+                userNote: row.userNote,
+                courseID: row.courseID,
+                sessionID: row.sessionID,
+                sourceEntryID: row.sourceEntryID,
+                sourceAttachmentID: row.sourceAttachmentID,
+                sourceReviewID: row.sourceReviewID,
+                sourceSessionIDsJSON: row.sourceSessionIDsJSON,
+                isFavorite: row.isFavorite,
+                statusRaw: row.statusRaw
+            )
+        }
+    }
+
+    /// All guest study cards, values only (scheduling state included —
+    /// review progress migrates with the card).
+    func cardSnapshots() -> [CardSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<StudyCard>())) ?? []
+        return rows.map { row in
+            CardSnapshot(
+                id: row.id,
+                front: row.front,
+                back: row.back,
+                typeRaw: row.typeRaw,
+                originRaw: row.originRaw,
+                userNote: row.userNote,
+                courseID: row.courseID,
+                sessionID: row.sessionID,
+                sourceEntryID: row.sourceEntryID,
+                sourceAttachmentID: row.sourceAttachmentID,
+                sourceTermID: row.sourceTermID,
+                stageRaw: row.stageRaw,
+                reviewCount: row.reviewCount,
+                intervalHours: row.intervalHours,
+                dueAt: row.dueAt,
+                lastReviewedAt: row.lastReviewedAt,
+                lastGradeRaw: row.lastGradeRaw
+            )
+        }
+    }
+
+    /// All guest study tasks, values only. Unconfirmed AI candidates
+    /// (pendingConfirm) migrate too — they stay unconfirmed in the
+    /// account store until the user acts on them.
+    func taskSnapshots() -> [TaskSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<StudyTask>())) ?? []
+        return rows.map { row in
+            TaskSnapshot(
+                id: row.id,
+                title: row.title,
+                detail: row.detail,
+                priorityRaw: row.priorityRaw,
+                statusRaw: row.statusRaw,
+                originRaw: row.originRaw,
+                uncertainty: row.uncertainty,
+                userNote: row.userNote,
+                dueAt: row.dueAt,
+                completedAt: row.completedAt,
+                courseID: row.courseID,
+                sessionID: row.sessionID,
+                sourceEntryID: row.sourceEntryID,
+                sourceAttachmentID: row.sourceAttachmentID,
+                sourceReviewID: row.sourceReviewID
             )
         }
     }

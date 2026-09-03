@@ -174,9 +174,12 @@ struct LTActivityDot: View {
 
 // MARK: - Floating tab bar
 
-/// The five global tabs. Reference order: 首页 · 课堂记录 · 书签 · 搜索 · 我的.
+/// The five global tabs. Reference order: 首页 · 课堂记录 · 复习 · 搜索 · 我的.
+/// The review center (复习) replaced 书签 as a main tab: bookmarks live on
+/// as one of its segments — long-term learning value outranks re-reading
+/// saved lines.
 enum LTTab: String, CaseIterable, Identifiable {
-    case home, records, bookmarks, search, profile
+    case home, records, review, search, profile
 
     var id: String { rawValue }
 
@@ -184,7 +187,7 @@ enum LTTab: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "首页"
         case .records: return "课堂记录"
-        case .bookmarks: return "书签"
+        case .review: return "复习"
         case .search: return "搜索"
         case .profile: return "我的"
         }
@@ -194,7 +197,7 @@ enum LTTab: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "house.fill"
         case .records: return "list.bullet.rectangle.fill"
-        case .bookmarks: return "bookmark.fill"
+        case .review: return "graduationcap.fill"
         case .search: return "magnifyingglass"
         case .profile: return "person.crop.circle.fill"
         }
@@ -204,7 +207,7 @@ enum LTTab: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "house"
         case .records: return "list.bullet.rectangle"
-        case .bookmarks: return "bookmark"
+        case .review: return "graduationcap"
         case .search: return "magnifyingglass"
         case .profile: return "person.crop.circle"
         }

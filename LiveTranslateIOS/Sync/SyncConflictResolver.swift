@@ -84,6 +84,59 @@ enum SyncConflictResolver {
                 merged.attachmentAnalysis = serverAnalysis
                 merged.attachmentAnalysisStatus = server.attachmentAnalysisStatus
             }
+        case .term:
+            // Text fields: local (newer user intent) wins when non-empty;
+            // fall back to the server's so a rebase never blanks a field.
+            if (merged.termChinese ?? "").isEmpty, let serverChinese = server.termChinese {
+                merged.termChinese = serverChinese
+            }
+            if (merged.termExplanation ?? "").isEmpty,
+               let serverExplanation = server.termExplanation {
+                merged.termExplanation = serverExplanation
+            }
+            if (merged.termUserNote ?? "").isEmpty, let serverNote = server.termUserNote {
+                merged.termUserNote = serverNote
+            }
+        case .studyCard:
+            // Content fields: local wins, server fallback for empties.
+            if (merged.cardFront ?? "").isEmpty, let serverFront = server.cardFront {
+                merged.cardFront = serverFront
+            }
+            if (merged.cardBack ?? "").isEmpty, let serverBack = server.cardBack {
+                merged.cardBack = serverBack
+            }
+            // Review state: newest lastReviewedAt wins — the OTHER
+            // device may have reviewed this card after we last did, and
+            // its schedule must survive our content edit (mirrors the
+            // server-side merge rule in applyStudyCard).
+            let localReviewed = merged.cardLastReviewedAt ?? .distantPast
+            let serverReviewed = server.cardLastReviewedAt ?? .distantPast
+            if serverReviewed > localReviewed {
+                merged.cardStage = server.cardStage
+                merged.cardReviewCount = server.cardReviewCount
+                merged.cardIntervalHours = server.cardIntervalHours
+                merged.cardDueAt = server.cardDueAt
+                merged.cardLastReviewedAt = server.cardLastReviewedAt
+                merged.cardLastGrade = server.cardLastGrade
+            }
+        case .studyTask:
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.taskDetail ?? "").isEmpty, let serverDetail = server.taskDetail {
+                merged.taskDetail = serverDetail
+            }
+            if (merged.taskUserNote ?? "").isEmpty, let serverNote = server.taskUserNote {
+                merged.taskUserNote = serverNote
+            }
+            // Done is sticky: once the server says the task is completed,
+            // a stale non-done local push never reopens it.
+            if server.taskStatus == StudyTaskStatus.done.rawValue {
+                merged.taskStatus = StudyTaskStatus.done.rawValue
+                if let completedAt = server.taskCompletedAt {
+                    merged.taskCompletedAt = completedAt
+                }
+            }
         }
         return merged
     }

@@ -445,6 +445,44 @@ final class CloudSyncService: AuthenticationService {
         scheduleAttachmentFileUpload()
     }
 
+    private func enqueueTermUpsert(_ term: GlossaryTerm) {
+        let item = SyncOutboxItem(
+            entityType: .term,
+            entityID: term.id,
+            operation: .upsert,
+            baseServerVersion: term.serverVersion,
+            payload: Self.payload(for: term)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueCardUpsert(_ card: StudyCard) {
+        let item = SyncOutboxItem(
+            entityType: .studyCard,
+            entityID: card.id,
+            operation: .upsert,
+            baseServerVersion: card.serverVersion,
+            payload: Self.payload(for: card)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueTaskUpsert(_ task: StudyTask) {
+        // An unconfirmed AI candidate is device-local — never pushed.
+        guard task.status != .pendingConfirm else { return }
+        let item = SyncOutboxItem(
+            entityType: .studyTask,
+            entityID: task.id,
+            operation: .upsert,
+            baseServerVersion: task.serverVersion,
+            payload: Self.payload(for: task)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -750,7 +788,8 @@ final class CloudSyncService: AuthenticationService {
         entityType: SyncEntityType, entityID: UUID, version: Int
     ) {
         switch entityType {
-        case .session, .entry, .course, .note, .studyReview, .attachment:
+        case .session, .entry, .course, .note, .studyReview, .attachment,
+             .term, .studyCard, .studyTask:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -799,6 +838,12 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteStudyReviewByID(entityID)
         case .attachment:
             try? repository.deleteAttachmentByID(entityID)
+        case .term:
+            try? repository.deleteTermByID(entityID)
+        case .studyCard:
+            try? repository.deleteCardByID(entityID)
+        case .studyTask:
+            try? repository.deleteTaskByID(entityID)
         }
     }
 
@@ -837,6 +882,12 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteAttachment(record: record, serverVersion: serverVersion)
             // Newly-learned attachments sync their previews on demand —
             // the file upload pass picks up anything local worth pushing.
+        case .term:
+            try? repository.applyRemoteTerm(record: record, serverVersion: serverVersion)
+        case .studyCard:
+            try? repository.applyRemoteStudyCard(record: record, serverVersion: serverVersion)
+        case .studyTask:
+            try? repository.applyRemoteStudyTask(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -1174,6 +1225,72 @@ final class CloudSyncService: AuthenticationService {
             attachmentOcrText: attachment.ocrText.isEmpty ? nil : attachment.ocrText
         )
     }
+
+    /// Glossary term. Source references follow the sentinel rule (a nil
+    /// course means 未分类 and explicitly clears); the accumulated source
+    /// sessions ride as a JSON array string.
+    static func payload(for term: GlossaryTerm) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            termRussian: term.russian,
+            termChinese: term.chinese,
+            termExplanation: term.explanation.isEmpty ? nil : term.explanation,
+            termPartOfSpeech: term.partOfSpeech.isEmpty ? nil : term.partOfSpeech,
+            termUserNote: term.userNote.isEmpty ? nil : term.userNote,
+            termSourceSessions: term.sourceSessionIDsJSON.isEmpty ? nil : term.sourceSessionIDsJSON,
+            termFavorite: term.isFavorite,
+            termStatus: term.statusRaw,
+            courseId: term.courseID ?? .nilSentinel,
+            sessionId: term.sessionID ?? .nilSentinel,
+            entryId: term.sourceEntryID ?? .nilSentinel,
+            sourceAttachmentId: term.sourceAttachmentID ?? .nilSentinel,
+            sourceReviewId: term.sourceReviewID ?? .nilSentinel
+        )
+    }
+
+    /// Study card: content + scheduling state. The full state rides every
+    /// upsert; the server merges review fields newest-lastReviewedAt-wins.
+    static func payload(for card: StudyCard) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            cardFront: card.front,
+            cardBack: card.back,
+            cardType: card.typeRaw,
+            cardUserNote: card.userNote.isEmpty ? nil : card.userNote,
+            cardOrigin: card.originRaw,
+            cardStage: card.stageRaw,
+            cardReviewCount: card.reviewCount,
+            cardIntervalHours: card.intervalHours,
+            cardDueAt: card.dueAt,
+            cardLastReviewedAt: card.lastReviewedAt,
+            cardLastGrade: card.lastGradeRaw.isEmpty ? nil : card.lastGradeRaw,
+            courseId: card.courseID ?? .nilSentinel,
+            sessionId: card.sessionID ?? .nilSentinel,
+            entryId: card.sourceEntryID ?? .nilSentinel,
+            sourceAttachmentId: card.sourceAttachmentID ?? .nilSentinel,
+            sourceTermId: card.sourceTermID ?? .nilSentinel
+        )
+    }
+
+    /// Study task (title rides the shared `title` field — course/
+    /// attachment convention). Only confirmed tasks are ever enqueued, so
+    /// `pendingConfirm` never reaches the wire.
+    static func payload(for task: StudyTask) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: task.title,
+            taskDetail: task.detail.isEmpty ? nil : task.detail,
+            taskDueAt: task.dueAt,
+            taskPriority: task.priorityRaw,
+            taskStatus: task.statusRaw,
+            taskOrigin: task.originRaw,
+            taskUncertainty: task.uncertainty.isEmpty ? nil : task.uncertainty,
+            taskUserNote: task.userNote.isEmpty ? nil : task.userNote,
+            taskCompletedAt: task.completedAt,
+            courseId: task.courseID ?? .nilSentinel,
+            sessionId: task.sessionID ?? .nilSentinel,
+            entryId: task.sourceEntryID ?? .nilSentinel,
+            sourceAttachmentId: task.sourceAttachmentID ?? .nilSentinel,
+            sourceReviewId: task.sourceReviewID ?? .nilSentinel
+        )
+    }
 }
 
 // MARK: - TranscriptMutationObserving
@@ -1199,6 +1316,15 @@ protocol TranscriptMutationObserving: AnyObject {
     func attachmentCreated(_ attachment: SessionAttachment)
     func attachmentUpdated(_ attachment: SessionAttachment)
     func attachmentDeleted(id: UUID)
+    func termCreated(_ term: GlossaryTerm)
+    func termUpdated(_ term: GlossaryTerm)
+    func termDeleted(id: UUID)
+    func cardCreated(_ card: StudyCard)
+    func cardUpdated(_ card: StudyCard)
+    func cardDeleted(id: UUID)
+    func taskCreated(_ task: StudyTask)
+    func taskUpdated(_ task: StudyTask)
+    func taskDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -1264,5 +1390,41 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func attachmentDeleted(id: UUID) {
         enqueueDelete(entityType: .attachment, entityID: id)
+    }
+
+    func termCreated(_ term: GlossaryTerm) {
+        enqueueTermUpsert(term)
+    }
+
+    func termUpdated(_ term: GlossaryTerm) {
+        enqueueTermUpsert(term)
+    }
+
+    func termDeleted(id: UUID) {
+        enqueueDelete(entityType: .term, entityID: id)
+    }
+
+    func cardCreated(_ card: StudyCard) {
+        enqueueCardUpsert(card)
+    }
+
+    func cardUpdated(_ card: StudyCard) {
+        enqueueCardUpsert(card)
+    }
+
+    func cardDeleted(id: UUID) {
+        enqueueDelete(entityType: .studyCard, entityID: id)
+    }
+
+    func taskCreated(_ task: StudyTask) {
+        enqueueTaskUpsert(task)
+    }
+
+    func taskUpdated(_ task: StudyTask) {
+        enqueueTaskUpsert(task)
+    }
+
+    func taskDeleted(id: UUID) {
+        enqueueDelete(entityType: .studyTask, entityID: id)
     }
 }

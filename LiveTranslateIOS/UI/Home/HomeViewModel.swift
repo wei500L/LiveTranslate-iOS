@@ -66,6 +66,11 @@ final class HomeViewModel {
     var dailyMinutes: [Double] = []
     var todayTotalSeconds: TimeInterval = 0
     var weekSessionCount = 0
+    /// Today's review-center numbers (real repository reads; the home
+    /// section only appears when at least one is non-zero).
+    var dueCardCount = 0
+    var overdueTaskCount = 0
+    var pendingConfirmTaskCount = 0
     /// Presentation override for the greeting line (Debug UI demo only;
     /// nil in production keeps the real time-of-day greeting).
     var greetingOverride: String?
@@ -131,10 +136,35 @@ final class HomeViewModel {
             .reduce(0.0) { $0 + max($1.duration, 0) }
         weekSessionCount = sessions.filter { $0.startTime >= today.addingTimeInterval(-7 * 86_400) }.count
 
+        // Review center: due cards + overdue confirmed tasks + AI
+        // candidates. All real counts; zero across the board hides the
+        // home section entirely.
+        let cards = (try? environment.repository.cards(courseID: nil)) ?? []
+        dueCardCount = cards.filter(\.isDueNow).count
+        let tasks = (try? environment.repository.tasks(courseID: nil, includeDone: false)) ?? []
+        overdueTaskCount = tasks.filter { task in
+            task.status == .pending && (task.dueAt.map { $0 < .now } ?? false)
+        }.count
+        pendingConfirmTaskCount = ((try? environment.repository.pendingConfirmTasks()) ?? []).count
+
         isLoaded = true
     }
 
     // MARK: - Derived
+
+    /// Whether the home 今日复习 card should render at all (any real
+    /// pending content — never an always-on placeholder).
+    var hasTodayReview: Bool {
+        dueCardCount > 0 || overdueTaskCount > 0 || pendingConfirmTaskCount > 0
+    }
+
+    var todayReviewSummary: String {
+        var parts: [String] = []
+        if dueCardCount > 0 { parts.append("\(dueCardCount) 张卡片待复习") }
+        if overdueTaskCount > 0 { parts.append("\(overdueTaskCount) 项作业已逾期") }
+        if pendingConfirmTaskCount > 0 { parts.append("\(pendingConfirmTaskCount) 条 AI 作业待确认") }
+        return parts.joined(separator: "，")
+    }
 
     /// Whether the classroom can start right now with everything green.
     var isFullyReady: Bool {

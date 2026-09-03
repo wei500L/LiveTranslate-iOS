@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Root layout: native `TabView(selection:)` keeps all five tabs alive
-/// (首页 · 课堂记录 · 书签 · 搜索 · 我的) so each tab's scroll position,
+/// (首页 · 课堂记录 · 复习 · 搜索 · 我的) so each tab's scroll position,
 /// search text, filters and its own `NavigationStack` path survive tab
 /// switches — the system tab bar is hidden and the reference design's
 /// floating dark bar is overlaid instead. A live classroom is presented
@@ -27,9 +27,9 @@ struct RootTabView: View {
                 RecordsScreen()
                     .toolbar(.hidden, for: .tabBar)
                     .tag(LTTab.records)
-                BookmarksScreen()
+                ReviewCenterScreen()
                     .toolbar(.hidden, for: .tabBar)
-                    .tag(LTTab.bookmarks)
+                    .tag(LTTab.review)
                 SearchScreen()
                     .toolbar(.hidden, for: .tabBar)
                     .tag(LTTab.search)

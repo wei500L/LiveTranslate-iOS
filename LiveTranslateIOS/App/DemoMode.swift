@@ -69,7 +69,8 @@ extension AppEnvironment {
         let schema = Schema([
             ClassroomSession.self, TranscriptEntry.self,
             Course.self, SessionNote.self, StudyReview.self,
-            SessionAttachment.self
+            SessionAttachment.self,
+            GlossaryTerm.self, StudyCard.self, StudyTask.self
         ])
         let configuration = ModelConfiguration(
             "ui-demo", schema: schema, isStoredInMemoryOnly: true
@@ -123,6 +124,9 @@ extension AppEnvironment {
             translationService: service,
             translationServiceBox: box,
             bookmarks: BookmarkStore(defaults: defaults, repository: repository),
+            // Demo reminders use the wiped demo defaults (and never fire:
+            // the demo never grants notification permission).
+            taskReminders: TaskReminderScheduler(defaults: defaults),
             // Demo mode never touches the production sync server.
             cloudSync: nil,
             studyReviewService: studyService,
@@ -907,6 +911,109 @@ enum DemoSeed {
                     ] {
                         context.insert(note)
                     }
+
+                    // Demo learning material (review center): terms saved
+                    // from the seeded review, one card already mid-schedule,
+                    // one new card awaiting its first review, one confirmed
+                    // task with a deadline and one AI candidate awaiting
+                    // confirmation. All rows go through direct context
+                    // inserts (no repository, no mutation observer) — demo
+                    // data never reaches a real account's outbox.
+                    let mathCourseID = courseID(forTitle: "高等数学")
+                    let terms: [GlossaryTerm] = [
+                        GlossaryTerm(
+                            russian: "частная производная",
+                            chinese: "偏导数",
+                            explanation: "多元函数对单一自变量的导数（其余变量固定）",
+                            courseID: mathCourseID,
+                            sessionID: session.id,
+                            sourceEntryID: detailEntryIDs[1],
+                            sourceReviewID: session.id,
+                            sourceSessionIDs: [session.id],
+                            isFavorite: true,
+                            status: .learning
+                        ),
+                        GlossaryTerm(
+                            russian: "дифференцируемая функция",
+                            chinese: "可微函数",
+                            explanation: "在该点可用线性逼近良好近似的函数",
+                            courseID: mathCourseID,
+                            sessionID: session.id,
+                            sourceEntryID: detailEntryIDs[5],
+                            sourceReviewID: session.id,
+                            sourceSessionIDs: [session.id],
+                            status: .new
+                        ),
+                    ]
+                    for term in terms { context.insert(term) }
+
+                    let reviewedCard = StudyCard(
+                        front: "частная производная",
+                        back: "偏导数：其余变量固定时，函数对单一自变量的变化率",
+                        type: .ru2zh,
+                        origin: .manual,
+                        courseID: mathCourseID,
+                        sessionID: session.id,
+                        sourceEntryID: detailEntryIDs[1],
+                        sourceTermID: terms[0].id,
+                        stage: .young,
+                        reviewCount: 3,
+                        intervalHours: 24,
+                        dueAt: Date().addingTimeInterval(-2 * 3600),
+                        lastReviewedAt: Date().addingTimeInterval(-26 * 3600),
+                        lastGrade: .good
+                    )
+                    context.insert(reviewedCard)
+                    let newCard = StudyCard(
+                        front: "偏导数存在且连续 ⇒ ？",
+                        back: "函数在该点可微（充分条件，不必要）",
+                        type: .qa,
+                        origin: .manual,
+                        courseID: mathCourseID,
+                        sessionID: session.id,
+                        sourceEntryID: detailEntryIDs[5]
+                    )
+                    context.insert(newCard)
+                    // A card whose source session is gone — exercises the
+                    // 来源已不存在 display path.
+                    context.insert(StudyCard(
+                        front: "Формула Тейлора",
+                        back: "泰勒公式：用多项式逼近函数，余项刻画误差",
+                        type: .formula,
+                        origin: .manual,
+                        stage: .learning,
+                        reviewCount: 1,
+                        intervalHours: 8,
+                        dueAt: Date().addingTimeInterval(-3600),
+                        lastReviewedAt: Date().addingTimeInterval(-9 * 3600),
+                        lastGrade: .hard
+                    ))
+
+                    context.insert(StudyTask(
+                        title: "完成习题集第 4 章第 1–8 题",
+                        detail: "下节课检查，助教收作业本",
+                        priority: .high,
+                        status: .pending,
+                        origin: .ai,
+                        uncertainty: "老师口头布置，段落 7 有明确截止表述",
+                        dueAt: Calendar.current.date(byAdding: .day, value: 2, to: Date()),
+                        courseID: mathCourseID,
+                        sessionID: session.id,
+                        sourceEntryID: detailEntryIDs[6],
+                        sourceReviewID: session.id
+                    ))
+                    context.insert(StudyTask(
+                        title: "预习全微分一节（建议）",
+                        detail: "老师提到下一讲会从全微分讲起",
+                        priority: .low,
+                        status: .pendingConfirm,
+                        origin: .ai,
+                        uncertainty: "原话是«有时间可以看»，可能不是强制作业",
+                        courseID: mathCourseID,
+                        sessionID: session.id,
+                        sourceEntryID: detailEntryIDs[4],
+                        sourceReviewID: session.id
+                    ))
                 }
             }
             if spec.favorite {

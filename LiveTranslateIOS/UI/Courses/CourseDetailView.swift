@@ -15,6 +15,10 @@ struct CourseDetailView: View {
     @State private var shareItem: SharedFile?
     @State private var exportError = false
     @State private var failedExport: (session: ClassroomSession, format: ExportFormat)?
+    /// Course-scoped flashcard review presentation.
+    @State private var showingCourseReview = false
+    /// Learning-material export picker.
+    @State private var showingLearningExport = false
 
     let courseID: UUID
 
@@ -39,14 +43,28 @@ struct CourseDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showEditForm = true
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(LTColors.textSecondary)
+                HStack(spacing: LTSpacing.m) {
+                    Menu {
+                        ForEach(LearningExporter.LearningExportKind.allCases) { kind in
+                            Button(kind.rawValue) {
+                                exportLearning(kind)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(LTColors.textSecondary)
+                    }
+                    .accessibilityLabel(Text("导出学习资料"))
+                    Button {
+                        showEditForm = true
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(LTColors.textSecondary)
+                    }
+                    .accessibilityLabel(Text("编辑课程"))
                 }
-                .accessibilityLabel(Text("编辑课程"))
             }
         }
         .task {
@@ -72,6 +90,9 @@ struct CourseDetailView: View {
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
+        }
+        .fullScreenCover(isPresented: $showingCourseReview) {
+            ReviewSessionView(courseID: courseID)
         }
         .alert("导出失败", isPresented: $exportError) {
             if failedExport != nil {
@@ -129,6 +150,7 @@ struct CourseDetailView: View {
                 VStack(spacing: LTSpacing.l) {
                     headerCard(course)
                     statsCard
+                    learningSpaceCard
                     if viewModel.sessions.isEmpty {
                         LTEmptyState(
                             symbol: "mic",
@@ -199,76 +221,76 @@ struct CourseDetailView: View {
         .ltCard()
     }
 
-    /// Course-level review aggregation — collected from each classroom's
-    /// EXISTING review (no new model calls). Terms and assignments from
-    /// every reviewed class of this course, each jumping to its classroom.
+    /// The course's learning space: real counts + entries into the review
+    /// center. Visible for archived courses too (archived courses can
+    /// still be reviewed); hidden entirely when the course has no
+    /// learning material yet.
     @ViewBuilder
-    private var reviewAggregationCard: some View {
-        if viewModel.hasAnyReview {
+    private var learningSpaceCard: some View {
+        if viewModel.hasLearningMaterial {
             VStack(alignment: .leading, spacing: LTSpacing.s) {
-                HStack(spacing: LTSpacing.xs) {
-                    LTSectionHeader(title: "课程复习")
-                    Text("\(viewModel.reviewsBySessionID.count)/\(viewModel.sessions.count) 堂已整理")
-                        .font(LTTypography.timestamp)
-                        .foregroundStyle(LTColors.textTertiary)
-                    Spacer()
+                LTSectionHeader(title: "学习资料")
+                HStack(spacing: LTSpacing.l) {
+                    Button {
+                        environment.flow.selectedTab = .review
+                    } label: {
+                        statTile(value: "\(viewModel.courseTerms.count)", caption: "术语")
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        environment.flow.selectedTab = .review
+                    } label: {
+                        statTile(
+                            value: viewModel.dueCardCount > 0 ? "\(viewModel.dueCardCount)" : "0",
+                            caption: "今日待复习"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        environment.flow.selectedTab = .review
+                    } label: {
+                        statTile(value: "\(viewModel.openTasks.count)", caption: "未完成任务")
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
                 }
-                if !viewModel.courseTerms.isEmpty {
-                    Text("累计术语 \(viewModel.courseTerms.count) 个")
-                        .font(LTTypography.caption)
-                        .foregroundStyle(LTColors.textSecondary)
+                if !viewModel.recentTerms.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: LTSpacing.s) {
-                            ForEach(viewModel.courseTerms) { term in
-                                Text(term.russian)
-                                    .font(LTTypography.caption)
-                                    .foregroundStyle(LTColors.textPrimary)
+                            ForEach(viewModel.recentTerms) { term in
+                                NavigationLink {
+                                    TermDetailView(term: term, courses: viewModel.course.map { [$0] } ?? [])
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(term.russian)
+                                            .font(LTTypography.caption)
+                                            .foregroundStyle(LTColors.textPrimary)
+                                        if !term.chinese.isEmpty {
+                                            Text(term.chinese)
+                                                .font(LTTypography.caption)
+                                                .foregroundStyle(LTColors.textSecondary)
+                                        }
+                                    }
                                     .padding(.horizontal, LTSpacing.m)
                                     .padding(.vertical, LTSpacing.xs)
                                     .background(Capsule().fill(LTColors.surfacePrimary))
                                     .overlay(Capsule().strokeBorder(LTColors.border, lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.vertical, 1)
                     }
                 }
-                if !viewModel.courseAssignments.isEmpty {
-                    Text("待办作业")
-                        .font(LTTypography.caption)
-                        .foregroundStyle(LTColors.textSecondary)
-                    VStack(spacing: LTSpacing.s) {
-                        ForEach(viewModel.courseAssignments, id: \.item.id) { pair in
-                            NavigationLink {
-                                SessionDetailView(sessionID: pair.session.id)
-                            } label: {
-                                HStack(alignment: .top, spacing: LTSpacing.s) {
-                                    Image(systemName: "checklist")
-                                        .font(.caption)
-                                        .foregroundStyle(LTColors.warning)
-                                        .padding(.top, 2)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(pair.item.text)
-                                            .font(.subheadline)
-                                            .foregroundStyle(LTColors.textPrimary)
-                                            .lineLimit(2)
-                                            .multilineTextAlignment(.leading)
-                                        Text(pair.session.title)
-                                            .font(LTTypography.timestamp)
-                                            .foregroundStyle(LTColors.textTertiary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption2)
-                                        .foregroundStyle(LTColors.textTertiary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
+                if viewModel.dueCardCount > 0 {
+                    Button {
+                        showingCourseReview = true
+                    } label: {
+                        Label("复习本课程卡片", systemImage: "play.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: LTSpacing.minTouchTarget)
                     }
-                } else {
-                    Text("各堂课未识别到老师明确布置的任务")
-                        .font(LTTypography.caption)
-                        .foregroundStyle(LTColors.textTertiary)
+                    .buttonStyle(LTPrimaryButtonStyle())
                 }
             }
             .ltCard()
@@ -365,6 +387,23 @@ struct CourseDetailView: View {
 
     // MARK: - Export
 
+    /// Learning-material export (terms/cards/tasks) — real saved data
+    /// only, no model calls.
+    private func exportLearning(_ kind: LearningExporter.LearningExportKind) {
+        guard let course = viewModel.course else { return }
+        guard let url = LearningExporter.writeTemporaryFile(
+            kind: kind,
+            course: course,
+            terms: viewModel.courseTerms,
+            cards: viewModel.courseCards,
+            tasks: viewModel.courseTasks
+        ) else {
+            exportError = true
+            return
+        }
+        shareItem = SharedFile(url: url)
+    }
+
     private func exportSession(_ session: ClassroomSession, format: ExportFormat) async {
         let entries = (try? environment.repository.entries(for: session)) ?? []
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []
@@ -403,8 +442,6 @@ final class CourseDetailViewModel {
     private(set) var totalEntries = 0
     private(set) var lastSessionDate: Date?
     private var statsBySessionID: [UUID: RecordsViewModel.SessionStats] = [:]
-    /// Sessions that have a readable review (id → content).
-    private(set) var reviewsBySessionID: [UUID: StudyReviewContent] = [:]
     var isLoaded = false
 
     func attach(_ environment: AppEnvironment) {
@@ -445,46 +482,38 @@ final class CourseDetailViewModel {
         totalDuration = duration
         totalEntries = entries
         lastSessionDate = lastDate
-        // Aggregate the course's study reviews — pure local aggregation
-        // over already-generated reviews; nothing is re-sent to a model.
-        var reviews: [UUID: StudyReviewContent] = [:]
-        for session in sessions {
-            if let review = try? environment.repository.studyReview(forSessionID: session.id),
-               !review.contentJSON.isEmpty,
-               let content = StudyReviewContent.decode(review.contentJSON) {
-                reviews[session.id] = content
-            }
-        }
-        reviewsBySessionID = reviews
+        // Learning space: the course's REAL saved learning material —
+        // terms, cards and tasks that live in the review center.
+        courseTerms = (try? environment.repository.terms(courseID: id)) ?? []
+        courseCards = (try? environment.repository.cards(courseID: id)) ?? []
+        courseTasks = (try? environment.repository.tasks(courseID: id, includeDone: true)) ?? []
         isLoaded = true
     }
 
-    // MARK: Review aggregation (existing reviews only — no new generation)
+    // MARK: Learning space (real saved learning material)
 
-    var hasAnyReview: Bool { !reviewsBySessionID.isEmpty }
+    var courseTerms: [GlossaryTerm] = []
+    var courseCards: [StudyCard] = []
+    var courseTasks: [StudyTask] = []
 
-    /// Distinct terms across the course's reviews (by Russian term).
-    var courseTerms: [StudyReviewContent.TermItem] {
-        var seen = Set<String>()
-        var result: [StudyReviewContent.TermItem] = []
-        for session in sessions {
-            guard let content = reviewsBySessionID[session.id] else { continue }
-            for term in content.terms where !term.russian.isEmpty {
-                if seen.insert(term.russian.lowercased()).inserted {
-                    result.append(term)
-                }
-            }
-        }
-        return result
+    /// Cards of this course due right now (includes enrolled-new).
+    var dueCardCount: Int {
+        courseCards.filter(\.isDueNow).count
     }
 
-    /// Explicit assignments across the course, newest classroom first.
-    var courseAssignments: [(session: ClassroomSession, item: StudyReviewContent.AssignmentItem)] {
-        sessions.compactMap { session -> [(ClassroomSession, StudyReviewContent.AssignmentItem)] in
-            guard let content = reviewsBySessionID[session.id] else { return [] }
-            return content.assignments.map { (session, $0) }
-        }
-        .flatMap { $0 }
+    /// Confirmed, unfinished tasks.
+    var openTasks: [StudyTask] {
+        courseTasks.filter { $0.status == .pending }
+    }
+
+    /// Terms saved recently, newest first.
+    var recentTerms: [GlossaryTerm] {
+        Array(courseTerms.prefix(5))
+    }
+
+    /// Whether the learning-space card should render at all.
+    var hasLearningMaterial: Bool {
+        !courseTerms.isEmpty || !courseCards.isEmpty || !courseTasks.isEmpty
     }
 
     func reload() {
