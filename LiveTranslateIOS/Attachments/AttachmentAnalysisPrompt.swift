@@ -75,9 +75,7 @@ enum AttachmentAnalysisPrompt {
             lines.append(contentsOf: context.transcriptLines)
             lines.append("")
             lines.append(
-                "transcriptReferences 只能使用上面 \(
-                    max(context.citationCount, 0)
-                ) 个编号（[1] 到 [\(max(context.citationCount, 1))]）中与图片直接相关的条目。"
+                "transcriptReferences 只能使用上面 \(max(context.citationCount, 0)) 个编号（[1] 到 [\(max(context.citationCount, 1))]）中与图片直接相关的条目。"
             )
             lines.append("")
         } else {
