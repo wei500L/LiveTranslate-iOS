@@ -75,7 +75,7 @@ struct HomeScreen: View {
             ) {
                 Button("再开一堂") {
                     if let occurrence = pendingExtraStart {
-                        Task { await scheduleViewModel.startOccurrence(occurrence, force: true) }
+                        Task { @MainActor in await scheduleViewModel.startOccurrence(occurrence, force: true) }
                     }
                     pendingExtraStart = nil
                 }

@@ -797,6 +797,7 @@ struct CourseDetailView: View {
 
     /// Learning-material export (terms/cards/tasks/materials) — real
     /// saved data only, no model calls.
+    @MainActor
     private func exportLearning(_ kind: LearningExporter.LearningExportKind) {
         guard let course = viewModel.course else { return }
         guard let url = LearningExporter.writeTemporaryFile(
@@ -814,6 +815,7 @@ struct CourseDetailView: View {
         shareItem = SharedFile(url: url)
     }
 
+    @MainActor
     private func exportSession(_ session: ClassroomSession, format: ExportFormat) async {
         let entries = (try? environment.repository.entries(for: session)) ?? []
         let notes = (try? environment.repository.notes(forSessionID: session.id)) ?? []

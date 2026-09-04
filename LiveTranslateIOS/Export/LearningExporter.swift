@@ -7,6 +7,11 @@ import Foundation
 ///
 /// All content comes from REAL saved rows only — exports never call a
 /// model and never fabricate data.
+///
+/// @MainActor: writeTemporaryFile reads through the MainActor repository
+/// (lazy material/assistant loads); every caller is UI-side, and the pure
+/// formatting helpers being main-isolated costs nothing.
+@MainActor
 enum LearningExporter {
 
     // MARK: Term book

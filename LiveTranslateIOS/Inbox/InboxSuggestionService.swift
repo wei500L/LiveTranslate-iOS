@@ -69,7 +69,7 @@ struct InboxSuggestionService {
                     imageMIME = "image/jpeg"
                 }
             case .image:
-                imageData = try? Data(contentsOf: payloadURL)
+                imageData = payloadURL.flatMap { try? Data(contentsOf: $0) }
                 imageMIME = item.fileHints.mimeType.isEmpty
                     ? "image/jpeg" : item.fileHints.mimeType
             case .text, .markdown, .other:

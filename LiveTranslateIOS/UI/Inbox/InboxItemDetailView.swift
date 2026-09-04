@@ -498,22 +498,30 @@ struct InboxItemDetailView: View {
         .ltCard()
     }
 
+    /// Options that cannot apply to this payload kind are not offered
+    /// (dead options are worse than hidden ones).
+    private static func isApplicable(
+        _ kind: InboxActionKind, to item: SharedInboxItem
+    ) -> Bool {
+        switch kind {
+        case .saveAsMaterial: return item.payloadKind == .file
+        case .linkAsMaterial: return item.payloadKind == .url
+        case .attachToSession:
+            return item.payloadKind == .file && item.fileHints.family == .image
+        case .saveAsNote:
+            return item.payloadKind == .text || item.payloadKind == .url
+        case .createTaskCandidate:
+            return true
+        case .importSchedule:
+            return true
+        case .createExamCandidate:
+            return false
+        }
+    }
+
     @ViewBuilder
     private func manualOption(_ kind: InboxActionKind, for item: SharedInboxItem) -> some View {
-        // Options that cannot apply to this payload kind are not offered
-        // (dead options are worse than hidden ones).
-        let applicable: Bool
-        switch kind {
-        case .saveAsMaterial: applicable = item.payloadKind == .file
-        case .linkAsMaterial: applicable = item.payloadKind == .url
-        case .attachToSession: applicable = item.payloadKind == .file && item.fileHints.family == .image
-        case .saveAsNote: applicable = item.payloadKind == .text || item.payloadKind == .url
-        case .createTaskCandidate:
-            applicable = true
-        case .importSchedule: applicable = true
-        case .createExamCandidate: applicable = false
-        }
-        if applicable {
+        if Self.isApplicable(kind, to: item) {
             Text(kind.displayName).tag(kind)
         }
     }

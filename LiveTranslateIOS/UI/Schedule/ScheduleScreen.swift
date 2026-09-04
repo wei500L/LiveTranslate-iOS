@@ -160,7 +160,7 @@ struct ScheduleScreen: View {
         ) {
             Button("再开一堂") {
                 if let occurrence = pendingExtraStart {
-                    Task { await viewModel.startOccurrence(occurrence, force: true) }
+                    Task { @MainActor in await viewModel.startOccurrence(occurrence, force: true) }
                 }
                 pendingExtraStart = nil
             }
