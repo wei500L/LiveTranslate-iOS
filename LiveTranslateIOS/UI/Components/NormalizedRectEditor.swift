@@ -102,18 +102,20 @@ struct NormalizedRectEditor: View {
     }
 
     /// The mode-dependent drag: select/resize in select mode, zoom-pan in
-    /// browse mode. Type-erased via AnyGesture — the two branch gestures
-    /// are distinct opaque `some Gesture` types (SwiftUI has no gesture
-    /// result builder for if/else).
+    /// browse mode. Both branch functions return an already-erased
+    /// AnyGesture (erasing INSIDE them keeps the concrete gesture type
+    /// visible to AnyGesture's init — an opaque `some Gesture` hides
+    /// `.Value`, and SwiftUI has no gesture result builder for if/else).
     private func modeDrag(in frame: CGRect) -> AnyGesture<DragGesture.Value> {
         if isSelecting {
-            return AnyGesture(selectDrag(in: frame))
+            return selectDrag(in: frame)
         }
-        return AnyGesture(panDrag(in: frame))
+        return panDrag(in: frame)
     }
 
-    private func selectDrag(in frame: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: 2)
+    private func selectDrag(in frame: CGRect) -> AnyGesture<DragGesture.Value> {
+        AnyGesture(
+            DragGesture(minimumDistance: 2)
             .onChanged { value in
                 let start = value.startLocation
                 if dragKind == .none {
@@ -154,6 +156,7 @@ struct NormalizedRectEditor: View {
                 rect = rect.clamped()
                 dragKind = .none
             }
+        )
     }
 
     private func hitTest(_ point: CGPoint, in frame: CGRect) -> DragKind {
@@ -207,20 +210,22 @@ struct NormalizedRectEditor: View {
 
     // MARK: - Browse mode
 
-    private func panDrag(in frame: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: 4)
-            .onChanged { value in
-                guard zoomScale > 1.01 else { return }
-                // Accumulate from the gesture start's steady offset so
-                // consecutive pans don't snap back.
-                zoomOffset = CGSize(
-                    width: steadyOffset.width + value.translation.width,
-                    height: steadyOffset.height + value.translation.height
-                )
-            }
-            .onEnded { _ in
-                steadyOffset = zoomOffset
-            }
+    private func panDrag(in frame: CGRect) -> AnyGesture<DragGesture.Value> {
+        AnyGesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { value in
+                    guard zoomScale > 1.01 else { return }
+                    // Accumulate from the gesture start's steady offset so
+                    // consecutive pans don't snap back.
+                    zoomOffset = CGSize(
+                        width: steadyOffset.width + value.translation.width,
+                        height: steadyOffset.height + value.translation.height
+                    )
+                }
+                .onEnded { _ in
+                    steadyOffset = zoomOffset
+                }
+        )
     }
 
     // MARK: - Geometry
