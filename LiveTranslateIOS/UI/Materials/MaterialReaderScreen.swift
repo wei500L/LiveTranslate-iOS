@@ -21,6 +21,7 @@ struct MaterialReaderScreen: View {
     @State private var showDigest = false
     @State private var showNotes = false
     @State private var showAssistant = false
+    @State private var showVisualAsk = false
     @State private var showMetadataEditor = false
     @State private var showDeleteConfirm = false
     @State private var shareItem: SharedFile?
@@ -28,6 +29,9 @@ struct MaterialReaderScreen: View {
     @State private var showSearch = false
 
     let materialID: UUID
+    /// Evidence-chip jump target (visual Q&A citations); wins over the
+    /// synced reading position.
+    var initialPage: Int? = nil
 
     var body: some View {
         LTPage {
@@ -103,7 +107,7 @@ struct MaterialReaderScreen: View {
         }
         .task {
             viewModel.attach(environment)
-            viewModel.load(materialID: materialID)
+            viewModel.load(materialID: materialID, initialPage: initialPage)
         }
         .onAppear {
             if viewModel.isLoaded {
@@ -136,6 +140,15 @@ struct MaterialReaderScreen: View {
                 .environment(environment)
             }
             .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showVisualAsk) {
+            VisualAskSheet(
+                scope: .page(materialID: materialID, pageNumber: viewModel.currentPage),
+                courseID: viewModel.material?.courseID,
+                initialEvidence: visualAskEvidence,
+                contextTitle: "资料提问"
+            )
+            .environment(environment)
         }
         .sheet(isPresented: $showMetadataEditor) {
             NavigationStack {
@@ -499,7 +512,8 @@ struct MaterialReaderScreen: View {
         .padding(.vertical, LTSpacing.l)
     }
 
-    /// Current-page actions: bookmark toggle, note, ask about this page.
+    /// Current-page actions: bookmark toggle, note, ask about this page
+    /// (visually — the page image rides the ask — or text-only).
     private func annotationsCard(_ material: CourseMaterial) -> some View {
         VStack(spacing: LTSpacing.s) {
             HStack(spacing: LTSpacing.m) {
@@ -525,14 +539,28 @@ struct MaterialReaderScreen: View {
                 }
                 .buttonStyle(LTSecondaryButtonStyle())
             }
+            // Visual ask on the CURRENT page (image rides the request;
+            // the composer shows the send scope and context toggles).
+            if !visualAskEvidence.isEmpty {
+                Button {
+                    showVisualAsk = true
+                } label: {
+                    Label(
+                        material.format == .pdf ? "询问此页" : "询问此图",
+                        systemImage: "text.viewfinder"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(LTPrimaryButtonStyle())
+            }
             if environment.isTranslationConfigured {
                 Button {
                     showAssistant = true
                 } label: {
-                    Label("就本页提问", systemImage: "bubble.left.and.text.bubble.right")
+                    Label("就本页文字提问", systemImage: "bubble.left.and.text.bubble.right")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(LTPrimaryButtonStyle())
+                .buttonStyle(LTSecondaryButtonStyle())
             }
             if !viewModel.annotations.isEmpty {
                 VStack(alignment: .leading, spacing: LTSpacing.xs) {
@@ -558,6 +586,25 @@ struct MaterialReaderScreen: View {
         viewModel.canDownloadFromCloud
             ? "云端可能保留了这份文件，可以尝试下载。"
             : "这份文件只保存在导入它的设备上，或尚未上传到云端。"
+    }
+
+    /// The current page as visual-ask evidence. PDFs contribute the
+    /// current page; image materials the image itself. Empty for text
+    /// formats (no image to ask about) — those keep the text-only entry.
+    private var visualAskEvidence: [VisualEvidence] {
+        guard let material = viewModel.material else { return [] }
+        switch material.format {
+        case .pdf:
+            guard viewModel.currentPage >= 1,
+                  viewModel.currentPage <= max(material.pageCount, 1) else { return [] }
+            return [VisualAskEvidenceLoader.materialPageEvidence(
+                material, pageNumber: viewModel.currentPage
+            )]
+        case .image:
+            return [VisualAskEvidenceLoader.materialImageEvidence(material)]
+        case .text, .markdown, .other:
+            return []
+        }
     }
 }
 

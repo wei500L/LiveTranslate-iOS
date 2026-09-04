@@ -171,6 +171,75 @@ enum LearningExporter {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    // MARK: Course assistant Q&A
+
+    /// 课程问答与视觉问答 Markdown: every thread of the course — questions,
+    /// answers (with their structured extras), citations, evidence
+    /// sources (with their deleted-state markers) and uncertainties.
+    /// Real rows only; evidence carries titles and page numbers, never
+    /// image bytes, file paths or request payloads.
+    static func assistantQAMarkdown(
+        course: Course,
+        threads: [CourseAssistantThread],
+        messagesByThread: [UUID: [CourseAssistantMessage]],
+        evidenceExists: (VisualEvidence) -> Bool = { _ in true }
+    ) -> String {
+        var lines: [String] = []
+        lines.append("# \(course.name) · 课程问答")
+        lines.append("")
+        lines.append("> 共 \(threads.count) 个对话 · 导出于 \(Self.dateStamp())")
+        lines.append("")
+        if threads.isEmpty {
+            lines.append("（还没有提问记录）")
+            return lines.joined(separator: "\n") + "\n"
+        }
+        for thread in threads {
+            lines.append("## \(thread.title)")
+            lines.append("")
+            let messages = messagesByThread[thread.id] ?? []
+            if messages.isEmpty {
+                lines.append("（空对话）")
+                lines.append("")
+                continue
+            }
+            for message in messages {
+                let who = message.role == .user ? "问" : "答"
+                lines.append("**\(who)**：\(message.text)")
+                if message.role == .assistant, let answer = message.visualAnswer {
+                    if let steps = answer.steps, !steps.isEmpty {
+                        lines.append("- 推导：" + steps.joined(separator: " → "))
+                    }
+                    if let formulas = answer.formulas, !formulas.isEmpty {
+                        lines.append("- 公式：`" + formulas.joined(separator: "` · `") + "`")
+                    }
+                    if let visible = answer.visibleText, !visible.isEmpty {
+                        lines.append("- 图片文字：" + visible.joined(separator: " / "))
+                    }
+                    if let uncertainties = answer.uncertainties, !uncertainties.isEmpty {
+                        lines.append("- 不确定：\(uncertainties.joined(separator: "；"))")
+                    }
+                }
+                let evidence = message.visualEvidence
+                if !evidence.isEmpty {
+                    var chips: [String] = []
+                    for item in evidence {
+                        let state = evidenceExists(item) ? "" : "（原图片已不存在）"
+                        var chip = "\(item.kind.displayName) \(item.title)"
+                        if let page = item.pageNumber { chip += " 第 \(page) 页" }
+                        chips.append(chip + state)
+                    }
+                    lines.append("> 来源：" + chips.joined(separator: "；"))
+                }
+                let citations = message.citations
+                if !citations.isEmpty {
+                    lines.append("> 引用：" + citations.map { $0.label }.joined(separator: "；"))
+                }
+                lines.append("")
+            }
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     // MARK: Full learning material JSON
 
     /// 完整课程学习资料 JSON（terms + cards + tasks with their real
@@ -262,6 +331,7 @@ enum LearningExporter {
         case cardsCSV = "卡片 CSV"
         case tasksMarkdown = "作业清单 Markdown"
         case materialsMarkdown = "资料目录与导读 Markdown"
+        case assistantQAMarkdown = "课程问答与视觉问答 Markdown"
         case fullJSON = "完整学习资料 JSON"
 
         var id: String { rawValue }
@@ -291,6 +361,17 @@ enum LearningExporter {
                 )) ?? []
             }
         }
+        // Assistant threads/messages load lazily for the Q&A export.
+        var assistantThreads: [CourseAssistantThread] = []
+        var messagesByThread: [UUID: [CourseAssistantMessage]] = [:]
+        if kind == .assistantQAMarkdown, let repository {
+            assistantThreads = (try? repository.assistantThreads(courseID: course.id)) ?? []
+            for thread in assistantThreads {
+                messagesByThread[thread.id] = (try? repository.assistantMessages(
+                    threadID: thread.id
+                )) ?? []
+            }
+        }
         let content: String
         let fileName: String
         let safeName = course.name.replacingOccurrences(of: "/", with: "-")
@@ -316,6 +397,26 @@ enum LearningExporter {
                 pagesByMaterial: pageMap, annotationsByMaterial: annotationMap
             )
             fileName = "\(safeName)-资料目录与导读.md"
+        case .assistantQAMarkdown:
+            content = assistantQAMarkdown(
+                course: course,
+                threads: assistantThreads,
+                messagesByThread: messagesByThread,
+                evidenceExists: { item in
+                    guard let repository else { return true }
+                    switch item.kind {
+                    case .sessionAttachment, .ocr, .analysis:
+                        return ((try? repository.attachment(id: item.sourceID)) ?? nil) != nil
+                    case .materialImage, .materialPage:
+                        return ((try? repository.material(
+                            id: item.materialID ?? item.sourceID
+                        )) ?? nil) != nil
+                    case .transcript, .note:
+                        return true
+                    }
+                }
+            )
+            fileName = "\(safeName)-课程问答.md"
         case .fullJSON:
             content = fullJSON(course: course, terms: terms, cards: cards, tasks: tasks)
             fileName = "\(safeName)-学习资料.json"

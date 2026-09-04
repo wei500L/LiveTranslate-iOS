@@ -150,6 +150,9 @@ struct AttachmentSectionView: View {
     @State private var selectedAttachmentID: UUID?
     @State private var showCapture = false
     @State private var analysisMode: AttachmentAnalysisGenerator.Mode?
+    @State private var selectMode = false
+    @State private var selectedIDs: [UUID] = []
+    @State private var showCompareAsk = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
@@ -163,7 +166,7 @@ struct AttachmentSectionView: View {
                         .foregroundStyle(LTColors.textTertiary)
                 }
                 Spacer()
-                if !attachments.isEmpty {
+                if !attachments.isEmpty && !selectMode {
                     Menu {
                         ForEach(AttachmentAnalysisGenerator.Mode.allCases) { mode in
                             Button(mode.displayName) {
@@ -180,15 +183,32 @@ struct AttachmentSectionView: View {
                         .font(.footnote)
                     }
                     .disabled(pendingAnalysisCount == 0 && failedCount == 0)
+                    Button {
+                        selectMode = true
+                        selectedIDs = []
+                    } label: {
+                        Label("比较提问", systemImage: "square.on.square")
+                            .font(.footnote)
+                    }
+                    .accessibilityLabel(Text("多选图片一起提问"))
                 }
-                Button {
-                    showCapture = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LTColors.textSecondary)
+                if selectMode {
+                    Button("取消选择") {
+                        selectMode = false
+                        selectedIDs = []
+                    }
+                    .font(.footnote)
                 }
-                .accessibilityLabel(Text("添加课堂图片"))
+                if !selectMode {
+                    Button {
+                        showCapture = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(LTColors.textSecondary)
+                    }
+                    .accessibilityLabel(Text("添加课堂图片"))
+                }
             }
 
             if attachments.isEmpty {
@@ -203,10 +223,50 @@ struct AttachmentSectionView: View {
                             attachment: attachment,
                             progress: environment.attachmentAnalysisGenerator.progressByID[attachment.id]
                         )
-                        .onTapGesture { selectedAttachmentID = attachment.id }
+                        .onTapGesture {
+                            if selectMode {
+                                toggleSelection(attachment.id)
+                            } else {
+                                selectedAttachmentID = attachment.id
+                            }
+                        }
+                        .overlay(alignment: .topLeading) {
+                            if selectMode {
+                                Image(systemName: selectedIDs.contains(attachment.id)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(
+                                        selectedIDs.contains(attachment.id)
+                                            ? LTColors.accentGreen
+                                            : LTColors.textTertiary
+                                    )
+                                    .padding(4)
+                            }
+                        }
                     }
                 }
-                if let summary = analysisSummary {
+                if selectMode {
+                    Button {
+                        showCompareAsk = true
+                    } label: {
+                        Label(
+                            selectedIDs.isEmpty
+                                ? "比较提问（先选择图片）"
+                                : "比较提问（\(selectedIDs.count) 张）",
+                            systemImage: "text.viewfinder"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(LTPrimaryButtonStyle())
+                    .disabled(selectedIDs.isEmpty
+                        || selectedIDs.count > VisualAskImagePipeline.maxEvidenceCount)
+                    if selectedIDs.count > VisualAskImagePipeline.maxEvidenceCount {
+                        Text("一次最多 \(VisualAskImagePipeline.maxEvidenceCount) 张图片。")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.warning)
+                    }
+                }
+                if let summary = analysisSummary, !selectMode {
                     Text(summary)
                         .font(LTTypography.caption)
                         .foregroundStyle(LTColors.textTertiary)
@@ -229,6 +289,15 @@ struct AttachmentSectionView: View {
                 onImported: { onAttachmentSetChanged() }
             )
         }
+        .sheet(isPresented: $showCompareAsk) {
+            VisualAskSheet(
+                scope: .session(sessionID: session.id),
+                courseID: session.courseID,
+                initialEvidence: compareEvidence,
+                contextTitle: "图片比较"
+            )
+            .environment(environment)
+        }
         .sheet(item: Binding(
             get: { analysisMode.map { AnalysisModeBox(mode: $0) } },
             set: { analysisMode = $0?.mode }
@@ -250,6 +319,23 @@ struct AttachmentSectionView: View {
                 onChanged: onAttachmentSetChanged
             )
         }
+    }
+
+    private func toggleSelection(_ id: UUID) {
+        if let index = selectedIDs.firstIndex(of: id) {
+            selectedIDs.remove(at: index)
+        } else {
+            guard selectedIDs.count < VisualAskImagePipeline.maxEvidenceCount else { return }
+            selectedIDs.append(id)
+        }
+    }
+
+    /// The multi-select compare ask's evidence, in selection order.
+    private var compareEvidence: [VisualEvidence] {
+        selectedIDs.compactMap { id in
+            attachments.first { $0.id == id }
+        }
+        .map { VisualAskEvidenceLoader.attachmentEvidence($0) }
     }
 
     private var pendingAnalysisCount: Int {

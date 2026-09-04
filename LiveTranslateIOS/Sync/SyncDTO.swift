@@ -372,11 +372,18 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     // course assistant: the thread's parent rides `threadId`; a message's
     // question scope rides the shared materialId/sessionId/materialPageNumber
     // fields; the answer's citations ride as a JSON STRING in
-    // `assistantCitations`.
+    // `assistantCitations`. Visual Q&A adds the turn mode, the evidence
+    // snapshot (JSON string — stable ids + normalized crops, never image
+    // bytes), the structured answer payload (JSON string) and the answer
+    // model name.
     var threadId: UUID?
     var assistantRole: String?
     var assistantText: String?
     var assistantCitations: String?
+    var assistantMode: String?
+    var assistantEvidence: String?
+    var assistantAnswer: String?
+    var assistantModel: String?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -540,6 +547,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var assistantRole: String?
     var assistantText: String?
     var assistantCitations: String?
+    var assistantMode: String?
+    var assistantEvidence: String?
+    var assistantAnswer: String?
+    var assistantModel: String?
     var serverVersion: Int
     var deleted: Bool
 
@@ -673,6 +684,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
         assistantRole: String? = nil,
         assistantText: String? = nil,
         assistantCitations: String? = nil,
+        assistantMode: String? = nil,
+        assistantEvidence: String? = nil,
+        assistantAnswer: String? = nil,
+        assistantModel: String? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -802,6 +817,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.assistantRole = assistantRole
         self.assistantText = assistantText
         self.assistantCitations = assistantCitations
+        self.assistantMode = assistantMode
+        self.assistantEvidence = assistantEvidence
+        self.assistantAnswer = assistantAnswer
+        self.assistantModel = assistantModel
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -935,6 +954,10 @@ struct SyncServerRecordDTO: Codable, Sendable {
         assistantRole = try container.decodeIfPresent(String.self, forKey: .assistantRole)
         assistantText = try container.decodeIfPresent(String.self, forKey: .assistantText)
         assistantCitations = try container.decodeIfPresent(String.self, forKey: .assistantCitations)
+        assistantMode = try container.decodeIfPresent(String.self, forKey: .assistantMode)
+        assistantEvidence = try container.decodeIfPresent(String.self, forKey: .assistantEvidence)
+        assistantAnswer = try container.decodeIfPresent(String.self, forKey: .assistantAnswer)
+        assistantModel = try container.decodeIfPresent(String.self, forKey: .assistantModel)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }

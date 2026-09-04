@@ -15,6 +15,8 @@ struct CourseAssistantScreen: View {
     /// Fixed material scope (entered from the reader: 就本页提问).
     var fixedMaterialID: UUID? = nil
     var fixedPageNumber: Int? = nil
+    /// Open this thread directly (search hits jump into the thread).
+    var initialThreadID: UUID? = nil
 
     @State private var threads: [CourseAssistantThread] = []
     @State private var activeThread: CourseAssistantThread?
@@ -59,9 +61,15 @@ struct CourseAssistantScreen: View {
             reloadThreads()
             loaded = true
             // A fixed material scope opens the course's most recent
-            // thread directly (the reader's 就本页提问 path).
-            if fixedMaterialID != nil, activeThread == nil {
-                activeThread = threads.first
+            // thread directly (the reader's 就本页提问 path); a search hit
+            // opens ITS thread.
+            if activeThread == nil {
+                if let initialThreadID,
+                   let thread = threads.first(where: { $0.id == initialThreadID }) {
+                    activeThread = thread
+                } else if fixedMaterialID != nil {
+                    activeThread = threads.first
+                }
             }
         }
         .onAppear {
@@ -197,13 +205,21 @@ private struct NewAssistantThreadSheet: View {
 // MARK: - Chat view
 
 /// One thread's conversation: durable history (offline-readable), a
-/// question input, REAL stage states (检索 / 提问 / 保存 — no streaming
-/// animation), and citations that tap through to their sources.
-private struct AssistantChatView: View {
+/// question input with image evidence attachment (visual Q&A), REAL
+/// stage states (准备图片 / 检索 / 提问 / 保存 — no streaming animation),
+/// citations that tap through to their sources, and structured visual
+/// answers with learning-loop actions.
+struct AssistantChatView: View {
     @Environment(AppEnvironment.self) private var environment
     let thread: CourseAssistantThread
     /// The reader's fixed scope (本资料 / 本页); nil = course-wide.
     let fixedScope: CourseAssistantService.Scope?
+    /// A handoff from the visual-ask composer: the question and evidence
+    /// to send immediately on appear (the user already confirmed the
+    /// send scope in the composer).
+    var initialQuestion: String = ""
+    var initialEvidence: [VisualEvidence] = []
+    var initialOptions: CourseAssistantService.VisualAskOptions = .all
 
     @State private var messages: [CourseAssistantMessage] = []
     @State private var question = ""
@@ -211,6 +227,10 @@ private struct AssistantChatView: View {
     @State private var renameText = ""
     @State private var showRename = false
     @State private var showDeleteConfirm = false
+    @State private var pendingEvidence: [VisualEvidence] = []
+    @State private var showEvidencePicker = false
+    @State private var options = CourseAssistantService.VisualAskOptions.all
+    @State private var firedInitialAsk = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -219,7 +239,9 @@ private struct AssistantChatView: View {
         }
         .task {
             scope = fixedScope ?? .course(courseID: thread.courseID)
+            options = initialOptions
             reload()
+            fireInitialAskIfNeeded()
         }
         .onAppear { reload() }
         .toolbar {
@@ -260,6 +282,17 @@ private struct AssistantChatView: View {
         } message: {
             Text("对话历史会一并删除。")
         }
+        .sheet(isPresented: $showEvidencePicker) {
+            VisualEvidencePickerSheet(
+                courseID: thread.courseID,
+                focusSessionID: scope?.sessionIDValue,
+                focusMaterialID: scope?.materialIDValue,
+                existing: pendingEvidence
+            ) { picked in
+                pendingEvidence = picked
+            }
+            .environment(environment)
+        }
     }
 
     private var messageList: some View {
@@ -284,7 +317,10 @@ private struct AssistantChatView: View {
                 ForEach(messages) { message in
                     AssistantMessageBubble(
                         message: message,
-                        citations: message.citations
+                        citations: message.citations,
+                        onFollowUp: { followUp in
+                            question = followUp
+                        }
                     )
                 }
                 if let stage = environment.courseAssistant.stage(threadID: thread.id) {
@@ -305,16 +341,63 @@ private struct AssistantChatView: View {
     }
 
     /// The question input. Offline / unconfigured states are honest:
-    /// asking is unavailable; READING history stays possible.
+    /// asking is unavailable; READING history stays possible. Image
+    /// evidence chips ride above the field (multi-image asks up to 4).
     private var inputBar: some View {
         VStack(spacing: LTSpacing.xs) {
-            if !environment.isTranslationConfigured {
-                Text("课程助手需要先在设置中配置兼容模型；历史回答仍可查看。")
+            if !pendingEvidence.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: LTSpacing.xs) {
+                        ForEach(Array(pendingEvidence.enumerated()), id: \.element.id) { index, item in
+                            VisualEvidenceChip(evidence: item, order: item.kind.isImageKind ? index : nil, compact: true)
+                            Button {
+                                pendingEvidence.removeAll { $0.id == item.id }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(LTColors.textTertiary)
+                            }
+                            .accessibilityLabel(Text("移除图片"))
+                        }
+                    }
+                }
+            }
+            if !modelReadyHint.isEmpty {
+                Text(modelReadyHint)
                     .font(LTTypography.caption)
                     .foregroundStyle(LTColors.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(spacing: LTSpacing.s) {
+                Button {
+                    showEvidencePicker = true
+                } label: {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 18))
+                        .foregroundStyle(
+                            pendingEvidence.count >= VisualAskImagePipeline.maxEvidenceCount
+                                ? LTColors.textTertiary
+                                : LTColors.accentCyan
+                        )
+                }
+                .disabled(pendingEvidence.count >= VisualAskImagePipeline.maxEvidenceCount)
+                .accessibilityLabel(Text("添加图片"))
+                Menu {
+                    Toggle(isOn: $options.includeTranscript) {
+                        Label("结合课堂讲解", systemImage: "text.bubble")
+                    }
+                    Toggle(isOn: $options.includeNotes) {
+                        Label("结合本堂课笔记", systemImage: "note.text")
+                    }
+                    Toggle(isOn: $options.includeRetrieval) {
+                        Label("结合课程资料检索", systemImage: "books.vertical")
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                .accessibilityLabel(Text("回答上下文范围"))
                 TextField("问这门课…", text: $question, axis: .vertical)
                     .font(Font.subheadline)
                     .lineLimit(1...4)
@@ -340,8 +423,25 @@ private struct AssistantChatView: View {
         .background(.ultraThinMaterial)
     }
 
+    /// Honest unconfigured guidance: text asks need the text model,
+    /// image asks need the image model; history always stays readable.
+    private var modelReadyHint: String {
+        let hasImages = !pendingEvidence.isEmpty
+        if hasImages && !environment.isImageModelConfigured {
+            return "图片问答需要先在设置中配置「图片理解」模型；历史回答与图片 OCR 不受影响。"
+        }
+        if !hasImages && !environment.isTranslationConfigured {
+            return "课程助手需要先在设置中配置兼容模型；历史回答仍可查看。"
+        }
+        return ""
+    }
+
     private var canAsk: Bool {
-        environment.isTranslationConfigured
+        let hasImages = !pendingEvidence.filter { $0.kind.isImageKind }.isEmpty
+        let configured = hasImages
+            ? environment.isImageModelConfigured
+            : environment.isTranslationConfigured
+        return configured
             && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !environment.courseAssistant.isAsking(threadID: thread.id)
     }
@@ -375,12 +475,37 @@ private struct AssistantChatView: View {
         messages = (try? environment.repository.assistantMessages(threadID: thread.id)) ?? []
     }
 
+    /// The composer handoff: send immediately (the user already chose
+    /// what to send there).
+    private func fireInitialAskIfNeeded() {
+        guard !firedInitialAsk,
+              !initialQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        firedInitialAsk = true
+        question = initialQuestion
+        pendingEvidence = initialEvidence
+        options = initialOptions
+        ask()
+    }
+
     private func ask() {
         let text = question
         let currentScope = scope ?? .course(courseID: thread.courseID)
+        let evidence = pendingEvidence
+        let currentOptions = options
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let hasImages = !evidence.filter { $0.kind.isImageKind }.isEmpty
+        guard hasImages ? environment.isImageModelConfigured : environment.isTranslationConfigured else { return }
         question = ""
-        environment.courseAssistant.ask(thread: thread, question: text, scope: currentScope)
+        pendingEvidence = []
+        environment.courseAssistant.ask(
+            thread: thread,
+            question: text,
+            scope: currentScope,
+            evidence: evidence,
+            options: currentOptions
+        )
         // The user message lands immediately; poll-free observation is
         // enough for v1 (the stage row reflects the run; onAppear and
         // the run's completion both reload).
@@ -400,30 +525,61 @@ private struct AssistantMessageBubble: View {
     @Environment(AppEnvironment.self) private var environment
     let message: CourseAssistantMessage
     let citations: [AssistantMessageCitation]
+    /// Suggested-action taps prefill the input (never auto-send).
+    var onFollowUp: (String) -> Void = { _ in }
+
+    /// Visual answers render as the structured reading card; visual
+    /// questions attach their evidence chips.
+    private var isVisual: Bool {
+        message.assistantMode == .visual
+    }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: LTSpacing.xs) {
-            Text(message.text)
-                .font(Font.subheadline)
-                .foregroundStyle(LTColors.textPrimary)
-                .textSelection(.enabled)
-                .lineSpacing(4)
-                .padding(LTSpacing.m)
-                .background(
-                    message.role == .user
-                        ? LTColors.accentGreen.opacity(0.16)
-                        : LTColors.surfacePrimary.opacity(0.85)
+            if message.role == .assistant, isVisual, let answer = message.visualAnswer {
+                VisualAnswerCard(
+                    message: message,
+                    answer: answer,
+                    evidence: message.visualEvidence,
+                    citations: citations,
+                    onFollowUp: onFollowUp
                 )
-                .clipShape(RoundedRectangle(cornerRadius: LTRadius.medium))
-            if !citations.isEmpty {
-                VStack(alignment: .leading, spacing: LTSpacing.xxs) {
-                    ForEach(citations) { citation in
-                        citationLink(citation)
+            } else {
+                Text(message.text)
+                    .font(Font.subheadline)
+                    .foregroundStyle(LTColors.textPrimary)
+                    .textSelection(.enabled)
+                    .lineSpacing(4)
+                    .padding(LTSpacing.m)
+                    .background(
+                        message.role == .user
+                            ? LTColors.accentGreen.opacity(0.16)
+                            : LTColors.surfacePrimary.opacity(0.85)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: LTRadius.medium))
+                if !citations.isEmpty {
+                    VStack(alignment: .leading, spacing: LTSpacing.xxs) {
+                        ForEach(citations) { citation in
+                            citationLink(citation)
+                        }
+                    }
+                    .padding(LTSpacing.s)
+                    .background(LTColors.surfaceElevated.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: LTRadius.small))
+                }
+            }
+
+            // The question's evidence chips (image kinds only — the
+            // 图片 n references of the answer below).
+            if message.role == .user, isVisual {
+                let images = message.visualEvidence.filter { $0.kind.isImageKind }
+                if !images.isEmpty {
+                    VStack(alignment: .trailing, spacing: LTSpacing.xxs) {
+                        ForEach(Array(images.enumerated()), id: \.element.id) { index, item in
+                            VisualEvidenceChip(evidence: item, order: index, compact: true)
+                        }
                     }
                 }
-                .padding(LTSpacing.s)
-                .background(LTColors.surfaceElevated.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: LTRadius.small))
             }
         }
         .frame(

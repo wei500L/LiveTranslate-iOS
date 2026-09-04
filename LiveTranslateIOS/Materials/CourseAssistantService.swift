@@ -2,25 +2,37 @@ import Foundation
 import OSLog
 
 /// The course assistant (问这门课): a grounded question-answering flow,
-/// not a chatbot.
+/// not a chatbot — and its visual extension (图片问答). Three question
+/// shapes ride ONE thread system:
 ///
-///     ask(question)
-///     → save the user message (history is durable immediately)
+///     text ask    — the original retrieval-grounded flow
+///     visual ask  — question + evidence images (attachments / material
+///                   pages / crop selections), optionally combined with
+///                   retrieved course text: ONE multimodal request
+///     follow-ups  — reuse the thread; only bounded history and the
+///                   turn's own evidence ride the request
+///
+///     ask(question, evidence, options)
+///     → save the user message with its evidence references (durable
+///       immediately)
+///     → prepare bounded upright JPEGs from the evidence (crop, HEIC→
+///       JPEG, budget-enforced — request lifecycle only)
 ///     → build the scope's source snapshots (repository reads, main
-///       actor, value types only)
+///       actor, value types only; bounded by the user's context toggles)
 ///     → LOCAL retrieval (CourseAssistantRetriever: explainable TF-IDF
 ///       over ru/zh/mixed text — no vector DB, no network)
-///     → no hit ⇒ honest 没有找到足够依据 answer, NO model request
-///     → hit ⇒ one model call over the SELECTED sources only (never the
-///       whole course database)
-///     → parse [n] markers against the retrieval snapshot; invalid or
-///       fabricated numbers are dropped — a citation must point at a
-///       chunk that was actually sent
-///     → save the answer with its citations (jump-back provenance)
+///     → no image AND no hit ⇒ honest 没有找到足够依据 answer, NO model
+///       request; image present but no hit ⇒ pure visual answer
+///     → ONE model call over the SELECTED sources and evidence only
+///     → validate [n] markers against the retrieval snapshot and 图片
+///       citations against the evidence list; fabricated numbers are
+///       dropped — a citation must point at something actually sent
+///     → save the answer with its citations + evidence snapshot +
+///       structured payload (jump-back provenance)
 ///
-/// Status comes from the real stages (检索中 / 正在提问 / 正在保存), never
-/// a streaming animation. Offline: history, materials and extracted
-/// text stay readable; only asking is marked unavailable.
+/// Status comes from the real stages (准备图片 / 检索中 / 正在提问 / 正在
+/// 保存), never a streaming animation. Offline: history, materials and
+/// extracted text stay readable; only asking is marked unavailable.
 @MainActor
 @Observable
 final class CourseAssistantService {
@@ -30,12 +42,14 @@ final class CourseAssistantService {
 
     /// Real pipeline stages for the UI (no fake streaming).
     enum AskingStage: Equatable, Sendable {
+        case preparingImages
         case retrieving
         case asking
         case saving
 
         var label: String {
             switch self {
+            case .preparingImages: return "正在准备图片…"
             case .retrieving: return "正在检索课程内容…"
             case .asking: return "正在整理回答…"
             case .saving: return "正在保存…"
@@ -45,13 +59,33 @@ final class CourseAssistantService {
 
     enum AskError: LocalizedError, Equatable {
         case notConfigured
+        case imageModelNotConfigured
 
         var errorDescription: String? {
             switch self {
             case .notConfigured:
                 return "课程助手需要先在设置中配置兼容模型。"
+            case .imageModelNotConfigured:
+                return "图片问答需要先在设置中配置图片理解模型。"
             }
         }
+    }
+
+    /// What context a visual question may pull in besides the images
+    /// themselves. The user chooses per question (the composer's toggles);
+    /// nothing beyond these bounds is ever sent.
+    struct VisualAskOptions: Sendable, Equatable {
+        /// 课堂转录（讲解）上下文。
+        var includeTranscript: Bool = true
+        /// 本堂课笔记。
+        var includeNotes: Bool = true
+        /// 课程资料检索（资料页、导读、学习行）。
+        var includeRetrieval: Bool = true
+
+        static let all = VisualAskOptions()
+        static let imagesOnly = VisualAskOptions(
+            includeTranscript: false, includeNotes: false, includeRetrieval: false
+        )
     }
 
     /// The scope one question is asked in.
@@ -83,20 +117,31 @@ final class CourseAssistantService {
 
     private let repository: any ClassroomRepositoryProtocol
     private let textServiceProvider: () -> (any StudyReviewModelService)?
+    /// The unified multimodal service (visual Q&A rides the SAME image
+    /// model config as attachment analysis — one key, one transport).
+    private let imageServiceProvider: () -> (any AttachmentAnalysisModelService)?
     /// In-flight ask per thread (one question at a time per thread).
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private(set) var stageByThread: [UUID: AskingStage] = [:]
 
     init(
         repository: any ClassroomRepositoryProtocol,
-        textServiceProvider: @escaping () -> (any StudyReviewModelService)?
+        textServiceProvider: @escaping () -> (any StudyReviewModelService)?,
+        imageServiceProvider: @escaping () -> (any AttachmentAnalysisModelService)? = { nil }
     ) {
         self.repository = repository
         self.textServiceProvider = textServiceProvider
+        self.imageServiceProvider = imageServiceProvider
     }
 
     var isModelConfigured: Bool {
         textServiceProvider()?.isConfiguredNow ?? false
+    }
+
+    /// Whether visual Q&A can run (the image-understanding model is
+    /// configured). Views may still show history and OCR when false.
+    var isImageModelConfigured: Bool {
+        imageServiceProvider()?.isConfiguredNow ?? false
     }
 
     func isAsking(threadID: UUID) -> Bool {
@@ -119,6 +164,21 @@ final class CourseAssistantService {
     func ask(
         thread: CourseAssistantThread, question: String, scope: Scope
     ) {
+        ask(thread: thread, question: question, scope: scope, evidence: [])
+    }
+
+    /// Text + image grounded ask. `evidence` carries image references
+    /// (attachments / material pages / selections) and text context;
+    /// `options` bound what else rides the request. With images present
+    /// the request goes to the unified multimodal service; without
+    /// images this is the original retrieval-grounded text ask.
+    func ask(
+        thread: CourseAssistantThread,
+        question: String,
+        scope: Scope,
+        evidence: [VisualEvidence],
+        options: VisualAskOptions = .all
+    ) {
         let threadID = thread.id
         guard tasks[threadID] == nil else { return }
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -132,51 +192,147 @@ final class CourseAssistantService {
         }
         tasks[threadID] = Task { [weak self] in
             await self?.run(
-                threadID: threadID, question: trimmed, scope: effectiveScope
+                threadID: threadID, question: trimmed, scope: effectiveScope,
+                evidence: evidence, options: options
             )
             self?.tasks[threadID] = nil
         }
     }
 
-    private func run(threadID: UUID, question: String, scope: Scope) async {
-        stageByThread[threadID] = .retrieving
+    private func run(
+        threadID: UUID,
+        question: String,
+        scope: Scope,
+        evidence: [VisualEvidence],
+        options: VisualAskOptions
+    ) async {
+        let imageEvidence = evidence.filter { $0.kind.isImageKind }
+        let isVisual = !imageEvidence.isEmpty
+        stageByThread[threadID] = isVisual ? .preparingImages : .retrieving
         defer { stageByThread[threadID] = nil }
 
         // The user message is durable from the start; a failed answer
-        // never loses the question.
-        let userMessage = try? repository.addAssistantMessage(
-            AssistantMessageDraft(
-                threadID: threadID,
-                role: .user,
-                text: question,
-                scopeMaterialID: scope.materialID,
-                scopeSessionID: scope.sessionID
-            )
-        )
-        _ = userMessage
+        // never loses the question (or its evidence references).
+        _ = try? repository.addAssistantMessage(AssistantMessageDraft(
+            threadID: threadID,
+            role: .user,
+            text: question,
+            scopeMaterialID: scope.materialID,
+            scopeSessionID: scope.sessionID,
+            mode: isVisual ? .visual : .text,
+            evidence: isVisual ? evidence : []
+        ))
 
         do {
-            guard let service = textServiceProvider(), service.isConfiguredNow else {
-                throw AskError.notConfigured
+            // ---- Image preparation (visual asks only) ------------------
+            var preparedImages: [VisualAskImagePipeline.PreparedImage] = []
+            var imageContext: [VisualAskPrompt.ImageContextLine] = []
+            var contextEvidence: [VisualEvidence] = []
+            if isVisual {
+                guard let imageService = imageServiceProvider(),
+                      imageService.isConfiguredNow else {
+                    throw AskError.imageModelNotConfigured
+                }
+                stageByThread[threadID] = .preparingImages
+                let sources = imageEvidence.compactMap {
+                    VisualAskEvidenceLoader.imageSource(for: $0, repository: repository)
+                }
+                guard !sources.isEmpty else {
+                    throw VisualAskImagePipeline.PrepareError.emptyImage
+                }
+                // Bounded re-encode off the main actor; the request bytes
+                // exist for the request lifecycle only.
+                preparedImages = try await Task.detached(priority: .userInitiated) {
+                    try VisualAskImagePipeline.prepare(sources)
+                }.value
+                imageContext = VisualAskEvidenceLoader.imageContextLines(
+                    for: evidence, repository: repository
+                )
+                contextEvidence = textContextEvidence(for: evidence)
+            } else {
+                guard let service = textServiceProvider(), service.isConfiguredNow else {
+                    throw AskError.notConfigured
+                }
             }
 
             // ---- Retrieval (local) --------------------------------------
-            let snapshots = buildSourceSnapshots(scope: scope)
-            let retrievalTask = Task.detached(priority: .userInitiated) {
-                CourseAssistantRetriever.search(
-                    query: question, chunks: snapshots, limit: Self.sourceLimit
-                )
+            var hits: [CourseAssistantRetriever.ScoredChunk] = []
+            if options.includeRetrieval {
+                stageByThread[threadID] = .retrieving
+                let snapshots = buildSourceSnapshots(scope: scope, options: options)
+                let retrievalTask = Task.detached(priority: .userInitiated) {
+                    CourseAssistantRetriever.search(
+                        query: question, chunks: snapshots, limit: Self.sourceLimit
+                    )
+                }
+                hits = await retrievalTask.value
             }
-            let hits = await retrievalTask.value
 
+            // Neither images nor retrievable text: the honest answer, NO
+            // model request.
+            if preparedImages.isEmpty && hits.isEmpty {
+                stageByThread[threadID] = .saving
+                _ = try repository.addAssistantMessage(AssistantMessageDraft(
+                    threadID: threadID,
+                    role: .assistant,
+                    text: CourseAssistantPrompt.noEvidenceAnswer,
+                    scopeMaterialID: scope.materialID,
+                    scopeSessionID: scope.sessionID
+                ))
+                return
+            }
+
+            // ---- Model request over the SELECTED material only ----------
+            stageByThread[threadID] = .asking
+            let history = recentHistory(threadID: threadID, excluding: question)
             let answerText: String
             var citations: [AssistantMessageCitation] = []
-            if hits.isEmpty {
-                // No evidence at all: the honest answer, NO model request.
-                answerText = CourseAssistantPrompt.noEvidenceAnswer
+            var visualAnswer: VisualAnswer?
+            var answerModel: String?
+            if isVisual {
+                let sources = hits.map { hit in
+                    VisualAskPrompt.SourceLine(
+                        number: hit.number,
+                        label: hit.chunk.label,
+                        text: excerpt(hit.chunk.text, question: question)
+                    )
+                }
+                let prompt = VisualAskPrompt.userPrompt(
+                    question: question,
+                    imageCount: preparedImages.count,
+                    imageContext: imageContext,
+                    sources: sources,
+                    history: history
+                )
+                guard let imageService = imageServiceProvider() else {
+                    throw AskError.imageModelNotConfigured
+                }
+                let raw = try await imageService.complete(
+                    systemPrompt: VisualAskPrompt.systemPrompt(),
+                    userPrompt: prompt,
+                    images: preparedImages.map(\.payload),
+                    maxTokens: 2_400
+                )
+                // [n] markers validate against the retrieval snapshot;
+                // 图片 citations validate against the evidence list.
+                let cleaned: String
+                if hits.isEmpty {
+                    cleaned = Self.stripAllMarkers(raw)
+                } else {
+                    let resolved = Self.resolveCitations(raw, hits: hits)
+                    cleaned = resolved.text
+                    citations = resolved.citations
+                }
+                var parsed = VisualAnswerParser.parse(
+                    text: cleaned, evidenceCount: imageEvidence.count
+                )
+                if (parsed.citations ?? []).isEmpty && citations.isEmpty {
+                    parsed.answer = "（此回答未能生成可验证出处）\n\n" + parsed.answer
+                }
+                visualAnswer = parsed
+                answerText = parsed.answer
+                answerModel = imageService.modelName
             } else {
-                // ---- Model request over the SELECTED sources only -----
-                stageByThread[threadID] = .asking
                 let sources = hits.map { hit in
                     CourseAssistantPrompt.SourceLine(
                         number: hit.number,
@@ -184,38 +340,39 @@ final class CourseAssistantService {
                         text: excerpt(hit.chunk.text, question: question)
                     )
                 }
-                let history = recentHistory(threadID: threadID, excluding: question)
                 let prompt = CourseAssistantPrompt.userPrompt(
                     scope: scope.scopeLabel,
                     sources: sources,
                     history: history,
                     question: question
                 )
+                guard let service = textServiceProvider() else {
+                    throw AskError.notConfigured
+                }
                 let raw = try await service.complete(
                     systemPrompt: CourseAssistantPrompt.systemPrompt(),
                     userPrompt: prompt,
                     maxTokens: 2_000
                 )
-                // ---- Citation validation --------------------------------
-                let (text, parsedCitations) = Self.resolveCitations(
-                    raw, hits: hits
-                )
+                let (text, parsedCitations) = Self.resolveCitations(raw, hits: hits)
                 answerText = text
                 citations = parsedCitations
             }
 
             // ---- Save ---------------------------------------------------
             stageByThread[threadID] = .saving
-            _ = try repository.addAssistantMessage(
-                AssistantMessageDraft(
-                    threadID: threadID,
-                    role: .assistant,
-                    text: answerText,
-                    scopeMaterialID: scope.materialID,
-                    scopeSessionID: scope.sessionID,
-                    citations: citations
-                )
-            )
+            _ = try repository.addAssistantMessage(AssistantMessageDraft(
+                threadID: threadID,
+                role: .assistant,
+                text: answerText,
+                scopeMaterialID: scope.materialID,
+                scopeSessionID: scope.sessionID,
+                citations: citations,
+                mode: isVisual ? .visual : .text,
+                evidence: isVisual ? imageEvidence + contextEvidence : [],
+                answer: visualAnswer,
+                answerModel: answerModel
+            ))
         } catch is CancellationError {
             return
         } catch {
@@ -223,15 +380,13 @@ final class CourseAssistantService {
             // silent disappearance of the question.
             let message = (error as? LocalizedError)?.errorDescription
                 ?? String(localized: "回答生成失败，请稍后再试。")
-            _ = try? repository.addAssistantMessage(
-                AssistantMessageDraft(
-                    threadID: threadID,
-                    role: .assistant,
-                    text: message,
-                    scopeMaterialID: scope.materialID,
-                    scopeSessionID: scope.sessionID
-                )
-            )
+            _ = try? repository.addAssistantMessage(AssistantMessageDraft(
+                threadID: threadID,
+                role: .assistant,
+                text: message,
+                scopeMaterialID: scope.materialID,
+                scopeSessionID: scope.sessionID
+            ))
             Self.logger.error(
                 "assistant ask failed: \(String(describing: error), privacy: .public)"
             )
@@ -302,6 +457,12 @@ final class CourseAssistantService {
         )
     }
 
+    /// Strips every [n] marker (visual asks with no retrieval snapshot:
+    /// fabricated numbers are removed instead of validated).
+    static func stripAllMarkers(_ text: String) -> String {
+        stripMarkers(text)
+    }
+
     private static func dropInvalidMarkers(_ text: String, valid: Set<Int>) -> String {
         guard let regex = try? NSRegularExpression(pattern: #"\[(\d{1,3})\]"#) else {
             return text
@@ -321,8 +482,11 @@ final class CourseAssistantService {
     // MARK: - Corpus building (main actor → Sendable snapshots)
 
     /// Builds the scope's retrieval corpus as VALUE snapshots (the
-    /// detached search never touches SwiftData models).
-    private func buildSourceSnapshots(scope: Scope) -> [CourseAssistantRetriever.SourceChunk] {
+    /// detached search never touches SwiftData models). `options` bounds
+    /// what a visual question may pull in (transcript / notes toggles).
+    private func buildSourceSnapshots(
+        scope: Scope, options: VisualAskOptions = .all
+    ) -> [CourseAssistantRetriever.SourceChunk] {
         var chunks: [CourseAssistantRetriever.SourceChunk] = []
         let courseID = scope.courseIDValue
 
@@ -398,7 +562,12 @@ final class CourseAssistantService {
             sessions = []
         }
         for session in sessions {
-            appendSessionChunks(session: session, into: &chunks)
+            appendSessionChunks(
+                session: session,
+                includeTranscript: options.includeTranscript,
+                includeNotes: options.includeNotes,
+                into: &chunks
+            )
         }
 
         // Learning rows (terms/cards/tasks of the course scope).
@@ -449,61 +618,68 @@ final class CourseAssistantService {
     /// Appends one session's retrieval chunks: transcript groups
     /// (effective text), notes, attachments and the study review.
     private func appendSessionChunks(
-        session: ClassroomSession, into chunks: inout [CourseAssistantRetriever.SourceChunk]
+        session: ClassroomSession,
+        includeTranscript: Bool = true,
+        includeNotes: Bool = true,
+        into chunks: inout [CourseAssistantRetriever.SourceChunk]
     ) {
         let sessionLabel = session.title
-        let entries = (try? repository.entries(for: session)) ?? []
-        let corrections = (try? repository.corrections(forSessionID: session.id)) ?? []
-        let correctionsByEntry = Dictionary(
-            corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
-        )
-        // Group adjacent entries into ~600-char chunks — a citation lands
-        // on the FIRST entry of its group (jump target), the group text
-        // is all four entries' effective text.
-        var groupEntries: [TranscriptEntry] = []
-        var groupChars = 0
-        func flushGroup() {
-            guard let first = groupEntries.first else { return }
-            let text = groupEntries.map { entry -> String in
-                let russian = entry.effectiveRussianText(correction: correctionsByEntry[entry.id])
-                let chinese = entry.effectiveChineseText(correction: correctionsByEntry[entry.id]) ?? ""
-                return chinese.isEmpty ? russian : "\(russian)\n\(chinese)"
-            }.joined(separator: "\n")
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        if includeTranscript {
+            let entries = (try? repository.entries(for: session)) ?? []
+            let corrections = (try? repository.corrections(forSessionID: session.id)) ?? []
+            let correctionsByEntry = Dictionary(
+                corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+            )
+            // Group adjacent entries into ~600-char chunks — a citation lands
+            // on the FIRST entry of its group (jump target), the group text
+            // is all four entries' effective text.
+            var groupEntries: [TranscriptEntry] = []
+            var groupChars = 0
+            func flushGroup() {
+                guard let first = groupEntries.first else { return }
+                let text = groupEntries.map { entry -> String in
+                    let russian = entry.effectiveRussianText(correction: correctionsByEntry[entry.id])
+                    let chinese = entry.effectiveChineseText(correction: correctionsByEntry[entry.id]) ?? ""
+                    return chinese.isEmpty ? russian : "\(russian)\n\(chinese)"
+                }.joined(separator: "\n")
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    groupEntries = []
+                    groupChars = 0
+                    return
+                }
+                chunks.append(.init(
+                    kind: .transcript,
+                    label: "\(sessionLabel) · \(TranscriptExporter.mmss(first.startOffset))",
+                    text: text,
+                    sessionID: session.id,
+                    entryID: first.id
+                ))
                 groupEntries = []
                 groupChars = 0
-                return
             }
-            chunks.append(.init(
-                kind: .transcript,
-                label: "\(sessionLabel) · \(TranscriptExporter.mmss(first.startOffset))",
-                text: text,
-                sessionID: session.id,
-                entryID: first.id
-            ))
-            groupEntries = []
-            groupChars = 0
-        }
-        for entry in entries {
-            let cost = entry.originalText.count + (entry.translatedText?.count ?? 0)
-            if !groupEntries.isEmpty && groupChars + cost > 600 {
-                flushGroup()
+            for entry in entries {
+                let cost = entry.originalText.count + (entry.translatedText?.count ?? 0)
+                if !groupEntries.isEmpty && groupChars + cost > 600 {
+                    flushGroup()
+                }
+                groupEntries.append(entry)
+                groupChars += cost
             }
-            groupEntries.append(entry)
-            groupChars += cost
+            flushGroup()
         }
-        flushGroup()
 
         // Notes.
-        let notes = (try? repository.notes(forSessionID: session.id)) ?? []
-        for note in notes where !note.text.isEmpty {
-            chunks.append(.init(
-                kind: .note,
-                label: "\(sessionLabel) · 课堂笔记",
-                text: note.text,
-                sessionID: session.id,
-                noteID: note.id
-            ))
+        if includeNotes {
+            let notes = (try? repository.notes(forSessionID: session.id)) ?? []
+            for note in notes where !note.text.isEmpty {
+                chunks.append(.init(
+                    kind: .note,
+                    label: "\(sessionLabel) · 课堂笔记",
+                    text: note.text,
+                    sessionID: session.id,
+                    noteID: note.id
+                ))
+            }
         }
         // Attachments (analysis + OCR searchable text).
         let attachments = (try? repository.attachments(forSessionID: session.id)) ?? []
@@ -547,6 +723,41 @@ final class CourseAssistantService {
                 text: message.text
             )
         }
+    }
+
+    /// Snapshots the text-context evidence (existing OCR / structured
+    /// analysis of the turn's image evidence) as recoverable evidence
+    /// rows — the answer's 图片 chips and the learning loop can cite
+    /// the LOCAL text layers, not just the images.
+    private func textContextEvidence(for evidence: [VisualEvidence]) -> [VisualEvidence] {
+        var rows: [VisualEvidence] = []
+        for item in evidence where item.kind.isImageKind {
+            guard let attachment = VisualAskEvidenceLoader.attachmentFor(
+                item, repository: repository
+            ) else { continue }
+            if !attachment.ocrText.isEmpty {
+                rows.append(VisualEvidence(
+                    kind: .ocr,
+                    sourceID: attachment.id,
+                    sessionID: attachment.sessionID,
+                    courseID: attachment.courseID,
+                    title: "图片文字 · \(item.title)",
+                    snippet: String(attachment.ocrText.prefix(160))
+                ))
+            }
+            if let analysis = AttachmentAnalysisResult.decode(attachment.analysisJSON),
+               !analysis.searchableText.isEmpty {
+                rows.append(VisualEvidence(
+                    kind: .analysis,
+                    sourceID: attachment.id,
+                    sessionID: attachment.sessionID,
+                    courseID: attachment.courseID,
+                    title: "图片分析 · \(item.title)",
+                    snippet: String(analysis.searchableText.prefix(160))
+                ))
+            }
+        }
+        return rows
     }
 
     // MARK: - Text helpers

@@ -297,7 +297,8 @@ final class AppEnvironment {
         )
         let courseAssistant = CourseAssistantService(
             repository: repository,
-            textServiceProvider: { [weak studyBox] in studyBox?.get() }
+            textServiceProvider: { [weak studyBox] in studyBox?.get() },
+            imageServiceProvider: { [weak attachmentBox] in attachmentBox?.get() }
         )
         let playback = ClassroomPlaybackService()
         let waveformStore = RecordingWaveformStore()
@@ -472,7 +473,8 @@ final class AppEnvironment {
         } else {
             self.courseAssistant = CourseAssistantService(
                 repository: repository,
-                textServiceProvider: { [weak studyServiceBox] in studyServiceBox?.get() }
+                textServiceProvider: { [weak studyServiceBox] in studyServiceBox?.get() },
+                imageServiceProvider: { [weak attachmentServiceBox] in attachmentServiceBox?.get() }
             )
         }
         self.playback = playback ?? ClassroomPlaybackService()
@@ -514,6 +516,14 @@ final class AppEnvironment {
     /// API key itself never leaves the service — views only see this Bool.
     var isTranslationConfigured: Bool {
         translationService.isConfiguredNow
+    }
+
+    /// Whether the image-understanding model is configured (visual Q&A
+    /// gate). Reads the LIVE box — settings changes rebuild the service
+    /// in place, so UI and dispatch can never disagree. Views only see
+    /// this Bool; the key never leaves the service.
+    var isImageModelConfigured: Bool {
+        attachmentServiceBox.get()?.isConfiguredNow ?? false
     }
 
     /// Build a translator from current settings; the API key comes from the

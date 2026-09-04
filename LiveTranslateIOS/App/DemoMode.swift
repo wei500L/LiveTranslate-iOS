@@ -115,9 +115,13 @@ extension AppEnvironment {
             textServiceProvider: { [weak studyBox] in studyBox?.get() },
             imageServiceProvider: { [weak attachmentBox] in attachmentBox?.get() }
         )
+        let demoAttachmentService = DemoAttachmentAnalysisService()
+        let demoAttachmentBox = AttachmentServiceBox()
+        demoAttachmentBox.set(demoAttachmentService)
         let demoAssistant = CourseAssistantService(
             repository: repository,
-            textServiceProvider: { [weak studyBox] in studyBox?.get() }
+            textServiceProvider: { [weak studyBox] in studyBox?.get() },
+            imageServiceProvider: { [weak demoAttachmentBox] in demoAttachmentBox?.get() }
         )
         let attachmentService = DemoAttachmentAnalysisService()
         let attachmentBox = AttachmentServiceBox()

@@ -443,6 +443,12 @@ final class CourseAssistantThread {
 /// (material page / transcript entry / note / attachment / review). An
 /// answer with no usable evidence carries no citations and the honest
 /// 没有找到足够依据 text instead of fabricated sources.
+///
+/// Visual Q&A (mode .visual) extends the SAME row — never a second chat
+/// system: `visualEvidenceJSON` snapshots the evidence references (stable
+/// source ids + normalized crop rects; no base64, no file paths) and
+/// `answerJSON` the loosely-structured answer payload. Deleted sources
+/// never invalidate history — chips render 原图片已不存在 and jump nowhere.
 @Model
 final class CourseAssistantMessage {
     @Attribute(.unique) var id: UUID
@@ -457,6 +463,18 @@ final class CourseAssistantMessage {
     /// AssistantMessageCitation list JSON (empty for user messages and
     /// no-evidence answers).
     var citationsJSON: String
+    /// Raw value of `AssistantMessageMode` (added with a default so
+    /// existing stores lightweight-migrate in place).
+    var modeRaw: String = AssistantMessageMode.text.rawValue
+    /// VisualEvidence list JSON — the turn's evidence snapshot (metadata
+    /// only; images ride the request, never the row).
+    var visualEvidenceJSON: String = ""
+    /// VisualAnswer JSON — the structured answer payload (empty for text
+    /// asks and plain user messages).
+    var answerJSON: String = ""
+    /// The model that produced the answer (provenance; empty on user
+    /// messages and text asks).
+    var answerModel: String = ""
     var createdAt: Date
     var updatedAt: Date
     /// Cloud-sync metadata (0 = never synced).
@@ -470,6 +488,10 @@ final class CourseAssistantMessage {
         scopeMaterialID: UUID? = nil,
         scopeSessionID: UUID? = nil,
         citationsJSON: String = "",
+        mode: AssistantMessageMode = .text,
+        visualEvidenceJSON: String = "",
+        answerJSON: String = "",
+        answerModel: String = "",
         serverVersion: Int = 0
     ) {
         self.id = id
@@ -479,6 +501,10 @@ final class CourseAssistantMessage {
         self.scopeMaterialID = scopeMaterialID
         self.scopeSessionID = scopeSessionID
         self.citationsJSON = citationsJSON
+        self.modeRaw = mode.rawValue
+        self.visualEvidenceJSON = visualEvidenceJSON
+        self.answerJSON = answerJSON
+        self.answerModel = answerModel
         self.createdAt = .now
         self.updatedAt = .now
         self.serverVersion = serverVersion
@@ -496,11 +522,34 @@ final class CourseAssistantMessage {
         else { return [] }
         return list
     }
+
+    var assistantMode: AssistantMessageMode {
+        get { AssistantMessageMode(rawValue: modeRaw) ?? .text }
+        set { modeRaw = newValue.rawValue }
+    }
+
+    /// The turn's evidence snapshot (stable ids + normalized crops only).
+    var visualEvidence: [VisualEvidence] {
+        VisualEvidenceCodec.decode(visualEvidenceJSON)
+    }
+
+    /// The structured visual answer payload (nil when this is a text ask
+    /// or a plain user message).
+    var visualAnswer: VisualAnswer? {
+        guard !answerJSON.isEmpty else { return nil }
+        return VisualAnswer.decode(answerJSON)
+    }
 }
 
 enum AssistantMessageRole: String, Codable, Sendable {
     case user
     case assistant
+}
+
+/// Whether a message belongs to a text or a visual turn.
+enum AssistantMessageMode: String, Codable, Sendable {
+    case text
+    case visual
 }
 
 // MARK: - Digest result (AI layer, JSON payload)

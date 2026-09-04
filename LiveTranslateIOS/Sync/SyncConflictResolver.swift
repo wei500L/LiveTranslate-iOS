@@ -246,11 +246,38 @@ enum SyncConflictResolver {
         case .assistantMessage:
             // Messages are immutable once written (append-only history);
             // the conflict path only fires on a same-id race — local
-            // intent wins, server fallback for an empty local text.
+            // intent wins, server fallback for an empty local text. The
+            // visual payloads follow the same rule: a server answer
+            // never blanks, and an empty local payload falls back to the
+            // server's.
             if (merged.assistantText ?? "").isEmpty,
                let serverText = server.assistantText, !serverText.isEmpty {
                 merged.assistantText = server.assistantText
                 merged.assistantCitations = server.assistantCitations
+                merged.assistantMode = server.assistantMode
+                merged.assistantEvidence = server.assistantEvidence
+                merged.assistantAnswer = server.assistantAnswer
+                merged.assistantModel = server.assistantModel
+            } else {
+                if (merged.assistantCitations ?? "").isEmpty,
+                   let serverCitations = server.assistantCitations, !serverCitations.isEmpty {
+                    merged.assistantCitations = serverCitations
+                }
+                if (merged.assistantEvidence ?? "").isEmpty,
+                   let serverEvidence = server.assistantEvidence, !serverEvidence.isEmpty {
+                    merged.assistantEvidence = server.assistantEvidence
+                }
+                if (merged.assistantAnswer ?? "").isEmpty,
+                   let serverAnswer = server.assistantAnswer, !serverAnswer.isEmpty {
+                    merged.assistantAnswer = server.assistantAnswer
+                }
+                if (merged.assistantModel ?? "").isEmpty,
+                   let serverModel = server.assistantModel, !serverModel.isEmpty {
+                    merged.assistantModel = server.assistantModel
+                }
+                if merged.assistantMode == nil {
+                    merged.assistantMode = server.assistantMode
+                }
             }
         }
         return merged

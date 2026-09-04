@@ -1,17 +1,23 @@
 import Foundation
 import OSLog
 
-/// Model service for classroom-image understanding (multimodal). A
-/// separate domain from both the live translator and the study-review
-/// service: image requests carry content parts, have their own payload
-/// budget, and must never share configuration assumptions with the
-/// real-time pipeline. It reuses the OpenAI-compatible transport
-/// primitives (base-URL normalization, status classification, response
-/// extraction) — but composes its own request shape.
+/// The unified multimodal model service: image understanding (附件分析),
+/// PDF scanned-page understanding and visual Q&A all ride this ONE
+/// protocol and its ONE OpenAI-compatible implementation. A separate
+/// domain from both the live translator and the study-review service:
+/// image requests carry content parts, have their own payload budget,
+/// and must never share configuration assumptions with the real-time
+/// pipeline. It reuses the OpenAI-compatible transport primitives
+/// (base-URL normalization, status classification, response extraction)
+/// — but composes its own request shape.
 protocol AttachmentAnalysisModelService: Sendable {
     /// Synchronous configuration check (base + model resolved; the key is
     /// never exposed).
     var isConfiguredNow: Bool { get }
+
+    /// The configured model's name (for answer provenance; nil when the
+    /// conformer cannot report it).
+    var modelName: String? { get }
 
     /// One non-streaming multimodal chat completion: text prompt + one
     /// JPEG payload. The image bytes are base64-embedded for the request
@@ -20,6 +26,52 @@ protocol AttachmentAnalysisModelService: Sendable {
         systemPrompt: String, userPrompt: String,
         imageData: Data, imageMIME: String, maxTokens: Int
     ) async throws -> String
+
+    /// Multi-image completion (visual Q&A, page comparison): the text
+    /// prompt plus an ordered list of image payloads. Images ride as
+    /// content parts in the given order; labeled payloads get a
+    /// `label` text part emitted before the image so answers can
+    /// reference 图片 1 / 图片 2.
+    func complete(
+        systemPrompt: String, userPrompt: String,
+        images: [ModelImagePayload], maxTokens: Int
+    ) async throws -> String
+}
+
+/// One image riding a multimodal request. Bytes exist for the request
+/// lifecycle only.
+struct ModelImagePayload: Sendable, Equatable {
+    var data: Data
+    var mimeType: String
+    /// Optional marker part emitted before the image (e.g. "[图片 1]").
+    var label: String?
+
+    init(data: Data, mimeType: String = "image/jpeg", label: String? = nil) {
+        self.data = data
+        self.mimeType = mimeType
+        self.label = label
+    }
+}
+
+extension AttachmentAnalysisModelService {
+    var modelName: String? { nil }
+
+    /// Default multi-image transport: falls back to the single-image
+    /// method with the first image, so existing conformers (and test
+    /// doubles) keep working without knowing about lists.
+    func complete(
+        systemPrompt: String, userPrompt: String,
+        images: [ModelImagePayload], maxTokens: Int
+    ) async throws -> String {
+        guard let first = images.first else {
+            throw TranslationError.fatal("多模态请求缺少图片。")
+        }
+        return try await complete(
+            systemPrompt: systemPrompt, userPrompt: userPrompt,
+            imageData: first.data, imageMIME: first.mimeType,
+            maxTokens: maxTokens
+        )
+    }
 }
 
 /// Configuration assembled from settings: the image-understanding model
@@ -48,15 +100,30 @@ struct OpenAICompatibleAttachmentService: AttachmentAnalysisModelService {
 
     var isConfiguredNow: Bool { config.isConfigured }
 
+    var modelName: String? { config.model }
+
     func complete(
         systemPrompt: String, userPrompt: String,
         imageData: Data, imageMIME: String, maxTokens: Int
+    ) async throws -> String {
+        // The single-image request is a one-element multi-image request —
+        // ONE transport path, not a second client.
+        try await complete(
+            systemPrompt: systemPrompt, userPrompt: userPrompt,
+            images: [ModelImagePayload(data: imageData, mimeType: imageMIME)],
+            maxTokens: maxTokens
+        )
+    }
+
+    func complete(
+        systemPrompt: String, userPrompt: String,
+        images: [ModelImagePayload], maxTokens: Int
     ) async throws -> String {
         guard config.isConfigured else { throw TranslationError.notConfigured }
         do {
             return try await completeOnce(
                 systemPrompt: systemPrompt, userPrompt: userPrompt,
-                imageData: imageData, imageMIME: imageMIME, maxTokens: maxTokens
+                images: images, maxTokens: maxTokens
             )
         } catch let error as TranslationError where TranslationRetryPolicy.shouldRetry(error) {
             // One bounded retry for network-class failures only.
@@ -64,27 +131,34 @@ struct OpenAICompatibleAttachmentService: AttachmentAnalysisModelService {
             try? await Task.sleep(nanoseconds: 750_000_000)
             return try await completeOnce(
                 systemPrompt: systemPrompt, userPrompt: userPrompt,
-                imageData: imageData, imageMIME: imageMIME, maxTokens: maxTokens
+                images: images, maxTokens: maxTokens
             )
         }
     }
 
     private func completeOnce(
         systemPrompt: String, userPrompt: String,
-        imageData: Data, imageMIME: String, maxTokens: Int
+        images: [ModelImagePayload], maxTokens: Int
     ) async throws -> String {
-        let dataURL = "data:\(imageMIME);base64,\(imageData.base64EncodedString())"
+        // Content parts: the prompt text first, then each labeled image
+        // (marker part + image part) so multi-image answers can say
+        // 图片 1 / 图片 2 unambiguously.
+        var userParts: [[String: Any]] = [["type": "text", "text": userPrompt]]
+        for image in images {
+            if let label = image.label, !label.isEmpty {
+                userParts.append(["type": "text", "text": label])
+            }
+            let dataURL = "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"
+            userParts.append([
+                "type": "image_url",
+                "image_url": ["url": dataURL],
+            ])
+        }
         let body: [String: Any] = [
             "model": config.model,
             "messages": [
                 ["role": "system", "content": systemPrompt],
-                [
-                    "role": "user",
-                    "content": [
-                        ["type": "text", "text": userPrompt],
-                        ["type": "image_url", "image_url": ["url": dataURL]],
-                    ],
-                ],
+                ["role": "user", "content": userParts],
             ],
             "max_tokens": maxTokens,
             "temperature": 0.2,

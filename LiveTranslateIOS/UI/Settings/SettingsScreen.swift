@@ -345,9 +345,12 @@ struct SettingsScreen: View {
 
     /// 图片理解 (multimodal): inherits the translation API base + key; the
     /// model falls back to the study-review model, then the translation
-    /// model. The footer is honest about capability: whether a model
-    /// actually accepts images is decided by the server at request time —
-    /// we never claim support we cannot verify.
+    /// model. ONE model covers both image analysis AND visual Q&A
+    /// (询问图片) — there is deliberately no second near-identical
+    /// "question image model" setting. The footer is honest about
+    /// capability: whether a model actually accepts images is decided by
+    /// the server at request time — we never claim support we cannot
+    /// verify.
     private var attachmentAnalysisSection: some View {
         Section {
             TextField(
@@ -359,7 +362,7 @@ struct SettingsScreen: View {
         } header: {
             Text(String(localized: "Image understanding"))
         } footer: {
-            Text("分析课堂图片（板书、课件、手写笔记）时，会将压缩后的图片发送到上方配置的模型服务。请填写支持图片输入的模型；如果不确定，模型会在请求时告诉我们是否支持。")
+            Text("分析课堂图片（板书、课件、手写笔记）和图片问答（询问图片、圈选提问、多图比较）共用这一个模型；分析或提问时，会将压缩后的图片发送到上方配置的模型服务。请填写支持图片输入的模型；如果不确定，模型会在请求时告诉我们是否支持。")
         }
     }
 

@@ -16,6 +16,7 @@ struct AttachmentDetailView: View {
     @State private var showEditor = false
     @State private var showCropper = false
     @State private var showDeleteConfirmation = false
+    @State private var showVisualAsk = false
     @State private var analysisMode: AttachmentAnalysisGenerator.Mode?
     @State private var originalLoaded = false
     @State private var downloadingOriginal = false
@@ -89,6 +90,17 @@ struct AttachmentDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showVisualAsk) {
+            if let attachment {
+                VisualAskSheet(
+                    scope: .session(sessionID: attachment.sessionID),
+                    courseID: attachment.courseID ?? session.courseID,
+                    initialEvidence: [VisualAskEvidenceLoader.attachmentEvidence(attachment)],
+                    contextTitle: "课堂图片提问"
+                )
+                .environment(environment)
+            }
+        }
         .sheet(item: Binding(
             get: { analysisMode.map { AnalysisModeBox2(mode: $0) } },
             set: { analysisMode = $0?.mode }
@@ -146,6 +158,7 @@ struct AttachmentDetailView: View {
                 .padding(.horizontal, LTSpacing.screenPadding)
 
                 analysisSection(attachment)
+                askSection(attachment)
                 transcriptContextSection(attachment)
                 ocrSection(attachment)
                 syncSection(attachment)
@@ -183,6 +196,25 @@ struct AttachmentDetailView: View {
             return String(localized: "课堂上 \(TranscriptExporter.mmss(offset))")
         }
         return Format.time(attachment.capturedAt)
+    }
+
+    // MARK: - Visual ask
+
+    /// The visual-ask entry: ask THIS image a question (optionally
+    /// combined with the class's transcript/notes/materials). Asking
+    /// never overwrites the analysis, OCR, title or caption — it is a
+    /// separate visual Q&A thread.
+    private func askSection(_ attachment: SessionAttachment) -> some View {
+        Button {
+            showVisualAsk = true
+        } label: {
+            Label("询问这张图片", systemImage: "text.viewfinder")
+                .font(LTTypography.button)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(LTPrimaryButtonStyle())
+        .padding(.horizontal, LTSpacing.screenPadding)
+        .accessibilityHint(Text("就这张图片提问，可圈选区域并结合课堂内容"))
     }
 
     // MARK: - Analysis
@@ -641,43 +673,37 @@ struct AttachmentEditSheet: View {
 
 /// Interactive normalized-crop editor over the preview image. Produces a
 /// new AttachmentTransform (rotation preserved); the original bytes are
-/// never touched.
+/// never touched. Uses the shared `NormalizedRectEditor`: drag on empty
+/// area to draw the window, drag inside to move it, drag a corner
+/// handle to resize — the previous move-only gesture could never
+/// shrink the (0,0,1,1) full-image default.
 struct AttachmentCropSheet: View {
     let attachment: SessionAttachment
     let onApply: (AttachmentTransform) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var cropRect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
-    @State private var dragStart: CGRect?
-    @State private var imageSize: CGSize = CGSize(width: 1, height: 1)
+    @State private var image: UIImage?
 
     var body: some View {
         NavigationStack {
-            GeometryReader { proxy in
-                let display = fittedSize(in: proxy.size)
-                ZStack {
-                    AttachmentPreviewImage(
-                        attachmentID: attachment.id,
-                        sessionID: attachment.sessionID,
-                        transformJSON: rotationOnlyJSON,
-                        contentMode: .fit
+            Group {
+                if let image {
+                    NormalizedRectEditor(
+                        uiImage: image,
+                        rect: Binding(
+                            get: { NormalizedRect(cgRect: cropRect) },
+                            set: { cropRect = $0.clamped().cgRect }
+                        ),
+                        isSelecting: true,
+                        minNormalizedSize: 0.08
                     )
-                    .frame(width: display.width, height: display.height)
-                    .position(
-                        x: proxy.size.width / 2,
-                        y: proxy.size.height / 2
-                    )
-                    .background(GeometryReader { inner in
-                        Color.clear.onAppear { imageSize = inner.size }
-                    })
-
-                    // Dimmed-out area + visible crop window.
-                    CropOverlay(rect: cropRect, in: display)
-                        .strokeBorder(LTColors.accentGreen, lineWidth: 1.5)
-                        .gesture(cropDrag(in: display))
+                    .padding(LTSpacing.screenPadding)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .padding(LTSpacing.screenPadding)
             .navigationTitle("裁切")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -694,87 +720,32 @@ struct AttachmentCropSheet: View {
                         onApply(next)
                         dismiss()
                     }
+                    .disabled(cropRect.width < 0.08 || cropRect.height < 0.08)
                 }
             }
-            .onAppear {
+            .task {
                 let t = attachment.transform
                 cropRect = CGRect(
                     x: t.cropX, y: t.cropY, width: t.cropWidth, height: t.cropHeight
                 )
+                // The upright (rotation-only) image — the crop rect is
+                // edited in the ROTATED space, matching the transform.
+                let attachmentID = attachment.id
+                let sessionID = attachment.sessionID
+                let rotation = AttachmentTransform(
+                    quarterTurns: attachment.transform.quarterTurns,
+                    cropX: 0, cropY: 0, cropWidth: 1, cropHeight: 1
+                )
+                let rendered = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    guard let store = AttachmentFileStoreShared.store,
+                          let data = store.previewOrOriginalData(
+                              for: attachmentID, sessionID: sessionID
+                          ),
+                          let base = UIImage(data: data) else { return nil }
+                    return AttachmentRender.applyTransform(base, transform: rotation)
+                }.value
+                image = rendered
             }
-        }
-    }
-
-    /// Rotation-only transform for the underlying image (the crop rect is
-    /// edited in the ROTATED space, matching the stored transform).
-    private var rotationOnlyJSON: String {
-        var t = attachment.transform
-        t.cropX = 0; t.cropY = 0; t.cropWidth = 1; t.cropHeight = 1
-        return t.encodedJSON() ?? ""
-    }
-
-    private func fittedSize(in container: CGSize) -> CGSize {
-        let aspect = CGFloat(max(attachment.pixelWidth, 1)) / CGFloat(max(attachment.pixelHeight, 1))
-        // Rotation swaps the aspect.
-        let effective = attachment.transform.quarterTurns % 2 == 1 ? 1 / aspect : aspect
-        var width = container.width
-        var height = width / effective
-        if height > container.height {
-            height = container.height
-            width = height * effective
-        }
-        return CGSize(width: width, height: height)
-    }
-
-    /// One-finger drag: move the crop window (the canonical simple crop).
-    private func cropDrag(in display: CGSize) -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                if dragStart == nil { dragStart = cropRect }
-                guard let start = dragStart else { return }
-                let dx = value.translation.width / max(display.width, 1)
-                let dy = value.translation.height / max(display.height, 1)
-                var next = start
-                next.origin.x = min(max(0, start.minX + dx), 1 - start.width)
-                next.origin.y = min(max(0, start.minY + dy), 1 - start.height)
-                cropRect = next
-            }
-            .onEnded { _ in dragStart = nil }
-    }
-}
-
-/// Overlay dimming everything outside the crop window.
-struct CropOverlay: View {
-    let rect: CGRect
-    let in size: CGSize
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.45)
-                .reverseMask {
-                    Rectangle()
-                        .path(in: CGRect(
-                            x: rect.minX * size.width,
-                            y: rect.minY * size.height,
-                            width: rect.width * size.width,
-                            height: rect.height * size.height
-                        ))
-                        .fill(style: FillStyle(eoFill: true))
-                }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-private extension View {
-    /// Cuts `mask` out of the receiver (the inverse of .mask).
-    func reverseMask<Mask: View>(@ViewBuilder _ mask: () -> Mask) -> some View {
-        self.mask {
-            Rectangle()
-                .overlay(alignment: .center) {
-                    mask().blendMode(.destinationOut)
-                }
-                .compositingGroup()
         }
     }
 }

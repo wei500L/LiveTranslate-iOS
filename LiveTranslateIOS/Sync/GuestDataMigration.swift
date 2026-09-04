@@ -487,6 +487,10 @@ final class GuestDataMigration {
                 assistantRole: message.roleRaw,
                 assistantText: message.text.isEmpty ? nil : message.text,
                 assistantCitations: message.citationsJSON.isEmpty ? nil : message.citationsJSON,
+                assistantMode: message.modeRaw.isEmpty ? nil : message.modeRaw,
+                assistantEvidence: message.visualEvidenceJSON.isEmpty ? nil : message.visualEvidenceJSON,
+                assistantAnswer: message.answerJSON.isEmpty ? nil : message.answerJSON,
+                assistantModel: message.answerModel.isEmpty ? nil : message.answerModel,
                 materialId: message.scopeMaterialID,
                 sessionId: message.scopeSessionID,
                 serverVersion: 0
@@ -1330,7 +1334,11 @@ struct GuestLibraryReader {
                 text: row.text,
                 scopeMaterialID: row.scopeMaterialID,
                 scopeSessionID: row.scopeSessionID,
-                citationsJSON: row.citationsJSON
+                citationsJSON: row.citationsJSON,
+                modeRaw: row.modeRaw,
+                visualEvidenceJSON: row.visualEvidenceJSON,
+                answerJSON: row.answerJSON,
+                answerModel: row.answerModel
             )
         }
     }
@@ -1400,4 +1408,11 @@ struct AssistantMessageSnapshot: Sendable {
     var scopeMaterialID: UUID?
     var scopeSessionID: UUID?
     var citationsJSON: String
+    /// Visual Q&A fields (00011 round): turn mode, evidence snapshot,
+    /// structured answer and the producing model — they migrate with the
+    /// message like every other field.
+    var modeRaw: String
+    var visualEvidenceJSON: String
+    var answerJSON: String
+    var answerModel: String
 }

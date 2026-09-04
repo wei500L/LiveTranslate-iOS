@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 /// 课表图片导入 flow: pick an image → parse → review candidates one by
 /// one (edit/match to an existing course/fix times/flag uncertainty) →
@@ -241,7 +242,18 @@ struct ScheduleImageImportView: View {
             parseError = "无法读取图片"
             return
         }
-        imageData = data
+        // Route through a bounded normalization: EXIF upright,
+        // HEIC/PNG → JPEG (a hardcoded image/jpeg MIME for HEIC bytes
+        // was wrong), long edge capped — never raw photo-library bytes.
+        let normalized = await Task.detached(priority: .userInitiated) { () -> Data? in
+            guard let image = UIImage(data: data) else { return nil }
+            return Self.jpegBytes(from: image)
+        }.value
+        guard let normalized, !normalized.isEmpty else {
+            parseError = "无法读取图片"
+            return
+        }
+        imageData = normalized
         isParsing = true
         defer { isParsing = false }
         let parser = ScheduleImageParser(
@@ -249,13 +261,29 @@ struct ScheduleImageImportView: View {
         )
         do {
             let result = try await parser.parse(
-                imageData: data, imageMIME: "image/jpeg"
+                imageData: normalized, imageMIME: "image/jpeg"
             )
             parsed = result
             drafts = result.candidates
         } catch {
             parseError = error.localizedDescription
         }
+    }
+
+    /// 2048px JPEG — the same budget image analysis uses.
+    private static func jpegBytes(from image: UIImage) -> Data {
+        let longEdge = max(image.size.width, image.size.height)
+        var scaled = image
+        if longEdge > 2048 {
+            let scale = 2048 / longEdge
+            let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            scaled = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: target))
+            }
+        }
+        return scaled.jpegData(compressionQuality: 0.8) ?? Data()
     }
 
     private var canSave: Bool {

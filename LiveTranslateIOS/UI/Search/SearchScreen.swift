@@ -188,17 +188,36 @@ struct SearchScreen: View {
                         .buttonStyle(.plain)
                     }
                     ForEach(assistantHits.prefix(3), id: \.message.id) { hit in
-                        learningRow(
-                            symbol: "bubble.left.and.text.bubble.right",
-                            tint: LTColors.accentGreen,
-                            title: hit.thread.title,
-                            subtitle: hit.message.text,
-                            chip: "问答"
-                        )
+                        NavigationLink {
+                            CourseAssistantScreen(
+                                courseID: hit.thread.courseID,
+                                initialThreadID: hit.thread.id
+                            )
+                            .environment(environment)
+                        } label: {
+                            learningRow(
+                                symbol: hit.message.assistantMode == .visual
+                                    ? "text.viewfinder" : "bubble.left.and.text.bubble.right",
+                                tint: hit.message.assistantMode == .visual
+                                    ? LTColors.accentCyan : LTColors.accentGreen,
+                                title: hit.thread.title,
+                                subtitle: hit.message.text,
+                                chip: hit.message.assistantMode == .visual
+                                    ? "视觉问答 · \(assistantVisualSourceLabel(hit.message))" : "问答"
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
+    }
+
+    /// The visual hit's source kind (课堂图片 / 资料图片 / PDF 页) — the
+    /// first image evidence of the turn.
+    private func assistantVisualSourceLabel(_ message: CourseAssistantMessage) -> String {
+        let first = message.visualEvidence.first { $0.kind.isImageKind }
+        return first?.kind.displayName ?? "图片"
     }
 
     private func learningRow(

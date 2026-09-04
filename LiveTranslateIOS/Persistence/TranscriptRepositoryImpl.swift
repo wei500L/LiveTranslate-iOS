@@ -3400,7 +3400,11 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             text: draft.text,
             scopeMaterialID: draft.scopeMaterialID,
             scopeSessionID: draft.scopeSessionID,
-            citationsJSON: citationsJSON
+            citationsJSON: citationsJSON,
+            mode: draft.mode,
+            visualEvidenceJSON: VisualEvidenceCodec.encode(draft.evidence),
+            answerJSON: draft.answer?.encodedJSON() ?? "",
+            answerModel: draft.answerModel ?? ""
         )
         context.insert(message)
         if let thread = try context.fetch(FetchDescriptor<CourseAssistantThread>(
@@ -3424,9 +3428,16 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         }
         var results: [(CourseAssistantMessage, CourseAssistantThread)] = []
         for message in try context.fetch(FetchDescriptor<CourseAssistantMessage>()) {
-            guard message.text.localizedCaseInsensitiveContains(trimmed),
-                  let thread = threadByID[message.threadID] else { continue }
-            results.append((message, thread))
+            guard let thread = threadByID[message.threadID] else { continue }
+            // The message text covers questions and the main answer; the
+            // visual payload adds formulas / visible text / user titles.
+            var matched = message.text.localizedCaseInsensitiveContains(trimmed)
+            if !matched, let answer = message.visualAnswer {
+                matched = answer.searchableText.localizedCaseInsensitiveContains(trimmed)
+            }
+            if matched {
+                results.append((message, thread))
+            }
         }
         return results
     }
@@ -3445,6 +3456,20 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             message.text = record.assistantText ?? message.text
             if let role = record.assistantRole { message.roleRaw = role }
             if let citations = record.assistantCitations { message.citationsJSON = citations }
+            if let mode = record.assistantMode {
+                message.modeRaw = AssistantMessageMode(rawValue: mode)?.rawValue ?? mode
+            }
+            // Empty payloads never blank a saved answer (multi-device
+            // merge must not overwrite a complete answer with "").
+            if let evidence = record.assistantEvidence, !evidence.isEmpty {
+                message.visualEvidenceJSON = evidence
+            }
+            if let answer = record.assistantAnswer, !answer.isEmpty {
+                message.answerJSON = answer
+            }
+            if let model = record.assistantModel, !model.isEmpty {
+                message.answerModel = model
+            }
             message.serverVersion = serverVersion
         } else {
             message = CourseAssistantMessage(
@@ -3455,6 +3480,10 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 scopeMaterialID: record.materialId,
                 scopeSessionID: record.sessionId,
                 citationsJSON: record.assistantCitations ?? "",
+                mode: AssistantMessageMode(rawValue: record.assistantMode ?? "") ?? .text,
+                visualEvidenceJSON: record.assistantEvidence ?? "",
+                answerJSON: record.assistantAnswer ?? "",
+                answerModel: record.assistantModel ?? "",
                 serverVersion: serverVersion
             )
             context.insert(message)

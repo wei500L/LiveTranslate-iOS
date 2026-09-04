@@ -86,18 +86,12 @@ struct ScheduleImageParser {
     // MARK: - Decode
 
     static func decode(_ text: String) -> Parsed {
-        // The model may wrap JSON in a code fence — strip it.
-        var payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if payload.hasPrefix("```") {
-            if let firstNewline = payload.firstIndex(of: "\n") {
-                payload = String(payload[payload.index(after: firstNewline)...])
-            }
-            if let closing = payload.range(of: "```", options: .backwards) {
-                payload = String(payload[payload.startIndex..<closing.lowerBound])
-            }
-            payload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The model may wrap JSON in a code fence — the shared fence
+        // stripper (same behavior the attachment analysis parser uses).
+        guard let payload = AttachmentAnalysisParser.jsonPayload(from: text),
+              let data = payload.data(using: .utf8) else {
+            return Parsed(candidates: [], missingInfo: "无法解析模型输出")
         }
-        guard let data = payload.data(using: .utf8) else { return Parsed(candidates: [], missingInfo: nil) }
 
         struct Wire: Decodable {
             struct WireCandidate: Decodable {

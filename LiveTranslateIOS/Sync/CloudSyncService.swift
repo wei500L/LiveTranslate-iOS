@@ -1722,12 +1722,18 @@ final class CloudSyncService: AuthenticationService {
 
     /// Assistant message: the parent thread rides the shared threadId
     /// (set by the enqueue helper); the question scope rides the shared
-    /// materialId/sessionId; citations ride as a JSON string.
+    /// materialId/sessionId; citations ride as a JSON string. Visual
+    /// turns add mode + evidence snapshot + structured answer + model —
+    /// all JSON strings/metadata, never image bytes.
     static func payload(for message: CourseAssistantMessage) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
             assistantRole: message.roleRaw,
             assistantText: message.text.isEmpty ? nil : message.text,
             assistantCitations: message.citationsJSON.isEmpty ? nil : message.citationsJSON,
+            assistantMode: message.modeRaw.isEmpty ? nil : message.modeRaw,
+            assistantEvidence: message.visualEvidenceJSON.isEmpty ? nil : message.visualEvidenceJSON,
+            assistantAnswer: message.answerJSON.isEmpty ? nil : message.answerJSON,
+            assistantModel: message.answerModel.isEmpty ? nil : message.answerModel,
             materialId: message.scopeMaterialID ?? .nilSentinel,
             sessionId: message.scopeSessionID ?? .nilSentinel
         )

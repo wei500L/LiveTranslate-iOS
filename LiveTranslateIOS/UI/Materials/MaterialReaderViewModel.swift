@@ -30,11 +30,20 @@ final class MaterialReaderViewModel {
     }
 
     func load(materialID: UUID) {
+        load(materialID: materialID, initialPage: nil)
+    }
+
+    /// `initialPage` (an evidence-chip jump target) wins over the synced
+    /// reading position — the user asked about THAT page.
+    func load(materialID: UUID, initialPage: Int?) {
         self.materialID = materialID
         reload()
         isLoaded = true
         // Reading continues where it left off (synced position).
-        if let material, material.lastReadPage > 0,
+        if let initialPage, initialPage >= 1,
+           initialPage <= max(material?.pageCount ?? 1, 1) {
+            currentPage = initialPage
+        } else if let material, material.lastReadPage > 0,
            material.lastReadPage <= max(material.pageCount, 1) {
             currentPage = material.lastReadPage
         }

@@ -661,6 +661,15 @@ struct AssistantMessageDraft: Sendable {
     var scopeMaterialID: UUID? = nil
     var scopeSessionID: UUID? = nil
     var citations: [AssistantMessageCitation] = []
+    /// Text vs visual turn (visual = the message carried evidence images).
+    var mode: AssistantMessageMode = .text
+    /// Evidence snapshot for visual turns (stable ids + normalized crop
+    /// rects only — never image bytes).
+    var evidence: [VisualEvidence] = []
+    /// Structured answer payload (visual answers).
+    var answer: VisualAnswer? = nil
+    /// Model that produced the answer (provenance).
+    var answerModel: String? = nil
 }
 
 extension GlossaryTerm {
