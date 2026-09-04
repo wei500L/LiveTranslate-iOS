@@ -139,7 +139,7 @@ struct TodayStudyView: View {
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(timerText(study))
+                        timerText(study)
                             .font(.title2.weight(.bold).monospacedDigit())
                             .minimumScaleFactor(0.6)
                         if study.estimatedMinutes > 0 {
@@ -155,7 +155,7 @@ struct TodayStudyView: View {
                         Image(systemName: study.isPaused ? "pause.circle" : "timer")
                             .foregroundStyle(study.isPaused ? WidgetPalette.caution : WidgetPalette.accent)
                         Spacer()
-                        Text(timerText(study))
+                        timerText(study)
                             .font(.headline.monospacedDigit())
                             .minimumScaleFactor(0.6)
                     }
