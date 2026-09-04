@@ -2,12 +2,10 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// UNUserNotificationCenterDelegate for the 上课提醒 layer. Until now the
-/// app had NO notification delegate — tapping a task reminder only opened
-/// the app. This delegate routes class-reminder taps (and the 开始课堂
-/// notification action) into AppFlow, where HomeScreen's next-class card
-/// runs the CONTROLLED start chain (microphone + resource checks, no
-/// bypass).
+/// UNUserNotificationCenterDelegate for the notification layers. Routes
+/// class-reminder, exam-reminder and study-plan taps into AppFlow, where
+/// the target screens run the CONTROLLED chains (permission and resource
+/// checks, no bypass).
 ///
 /// The delegate object must outlive views — the App struct holds it in
 /// @State and re-attaches the current profile's AppFlow on switches.
@@ -37,13 +35,27 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
             identifier: ClassReminderScheduler.startActionID,
             title: "开始课堂"
         )
-        let category = UNNotificationCategory(
+        let classCategory = UNNotificationCategory(
             identifier: ClassReminderScheduler.categoryID,
             actions: [startAction],
             intentIdentifiers: [],
             options: []
         )
-        UNUserNotificationCenter.current().setNotificationCategories([category])
+        let examCategory = UNNotificationCategory(
+            identifier: ExamReminderScheduler.categoryID,
+            actions: [],
+            intentIdentifiers: [],
+            options: []
+        )
+        let studyCategory = UNNotificationCategory(
+            identifier: ExamReminderScheduler.studyCategoryID,
+            actions: [],
+            intentIdentifiers: [],
+            options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories(
+            [classCategory, examCategory, studyCategory]
+        )
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -54,18 +66,20 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        if notification.request.content.categoryIdentifier == ClassReminderScheduler.categoryID {
+        let category = notification.request.content.categoryIdentifier
+        if category == ClassReminderScheduler.categoryID
+            || category == ExamReminderScheduler.categoryID
+            || category == ExamReminderScheduler.studyCategoryID {
             completionHandler([.banner, .list])
         } else {
             completionHandler([.banner, .list, .sound])
         }
     }
 
-    /// Tapped (foreground or background) or an action fired. The class
-    /// reminder carries its occurrence key in userInfo; the route lands on
-    /// the home tab with the occurrence flagged — the start flow itself
-    /// (permissions, resources, duplicate guard) lives in HomeScreen's
-    /// controlled chain, never here.
+    /// Tapped (foreground or background) or an action fired. Each
+    /// category carries its route target in userInfo; the landing screen
+    /// resolves it against the live store (a deleted row shows 来源已不存在
+    /// instead of a dead screen).
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -73,17 +87,28 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     ) {
         let userInfo = response.notification.request.content.userInfo
         let category = response.notification.request.content.categoryIdentifier
-        guard category == ClassReminderScheduler.categoryID,
-              let occurrenceKey = userInfo[ClassReminderScheduler.occurrenceKeyUserInfo] as? String
-        else {
-            completionHandler()
-            return
-        }
+
+        let classKey = userInfo[ClassReminderScheduler.occurrenceKeyUserInfo] as? String
+        let examIDString = userInfo[ExamReminderScheduler.examIDUserInfo] as? String
+
         Task { @MainActor in
             // Cold start: App.onAppear attaches the flow; if the delegate
             // fires before that, the box is nil and the tap is a no-op
             // (the notification stays in Notification Center for re-tap).
-            flowBox?.flow?.openClassReminder(occurrenceKey: occurrenceKey)
+            switch category {
+            case ClassReminderScheduler.categoryID:
+                if let classKey {
+                    flowBox?.flow?.openClassReminder(occurrenceKey: classKey)
+                }
+            case ExamReminderScheduler.categoryID:
+                if let examIDString, let examID = UUID(uuidString: examIDString) {
+                    flowBox?.flow?.openExamReminder(examID: examID)
+                }
+            case ExamReminderScheduler.studyCategoryID:
+                flowBox?.flow?.openStudyPlanReminder()
+            default:
+                break
+            }
             completionHandler()
         }
     }

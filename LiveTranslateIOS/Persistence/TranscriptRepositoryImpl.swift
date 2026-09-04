@@ -101,7 +101,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
     /// Cloud-sync hook: notified after every persisted mutation.
     var mutationObserver: (any TranscriptMutationObserving)?
 
-    private var context: ModelContext { container.mainContext }
+    /// The container's main-actor context. Internal (not private) so the
+    /// domain-family extensions (ExamRepositoryImpl) share it.
+    var context: ModelContext { container.mainContext }
 
     init(container: ModelContainer, databaseURL: URL? = nil) {
         self.container = container
@@ -483,6 +485,36 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let message = try context.fetch(descriptor).first else { return }
             message.serverVersion = max(message.serverVersion, version)
+        case .exam:
+            let descriptor = FetchDescriptor<Exam>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let exam = try context.fetch(descriptor).first else { return }
+            exam.serverVersion = max(exam.serverVersion, version)
+        case .examTopic:
+            let descriptor = FetchDescriptor<ExamTopic>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let topic = try context.fetch(descriptor).first else { return }
+            topic.serverVersion = max(topic.serverVersion, version)
+        case .studyPlan:
+            let descriptor = FetchDescriptor<StudyPlan>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let plan = try context.fetch(descriptor).first else { return }
+            plan.serverVersion = max(plan.serverVersion, version)
+        case .studyPlanItem:
+            let descriptor = FetchDescriptor<StudyPlanItem>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let item = try context.fetch(descriptor).first else { return }
+            item.serverVersion = max(item.serverVersion, version)
+        case .studyActivity:
+            let descriptor = FetchDescriptor<StudyActivity>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let activity = try context.fetch(descriptor).first else { return }
+            activity.serverVersion = max(activity.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -906,6 +938,73 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 ))
             }
         }
+        // Exam center: exams before their topics/plans, plans before
+        // their items (children reference the parent ids server-side).
+        // `pending` exam rows are device-local AI candidates — never
+        // uploaded.
+        let exams = (try? context.fetch(FetchDescriptor<Exam>())) ?? []
+        for exam in exams where exam.status != .pending {
+            items.append(SyncOutboxItem(
+                entityType: .exam,
+                entityID: exam.id,
+                operation: .upsert,
+                baseServerVersion: exam.serverVersion,
+                payload: CloudSyncService.payload(for: exam)
+            ))
+            let topics = (try? examTopics(examID: exam.id)) ?? []
+            for topic in topics {
+                var payload = CloudSyncService.payload(for: topic)
+                payload.examId = topic.examID
+                items.append(SyncOutboxItem(
+                    entityType: .examTopic,
+                    entityID: topic.id,
+                    operation: .upsert,
+                    baseServerVersion: topic.serverVersion,
+                    payload: payload
+                ))
+            }
+            let plans = (try? studyPlans(examID: exam.id)) ?? []
+            for plan in plans {
+                var payload = CloudSyncService.payload(for: plan)
+                payload.examId = plan.examID
+                items.append(SyncOutboxItem(
+                    entityType: .studyPlan,
+                    entityID: plan.id,
+                    operation: .upsert,
+                    baseServerVersion: plan.serverVersion,
+                    payload: payload
+                ))
+                let planItems = (try? studyPlanItems(planID: plan.id)) ?? []
+                for planItem in planItems {
+                    var itemPayload = CloudSyncService.payload(for: planItem)
+                    itemPayload.planId = planItem.planID
+                    itemPayload.examId = planItem.examID ?? .nilSentinel
+                    items.append(SyncOutboxItem(
+                        entityType: .studyPlanItem,
+                        entityID: planItem.id,
+                        operation: .upsert,
+                        baseServerVersion: planItem.serverVersion,
+                        payload: itemPayload
+                    ))
+                }
+            }
+        }
+        // Study activities: append-style rows (exam references may be
+        // detached; the rows still upload).
+        let activities = (try? context.fetch(FetchDescriptor<StudyActivity>())) ?? []
+        for activity in activities {
+            var payload = CloudSyncService.payload(for: activity)
+            payload.planItemId = activity.planItemID ?? .nilSentinel
+            payload.examId = activity.examID ?? .nilSentinel
+            payload.topicId = activity.topicID ?? .nilSentinel
+            items.append(SyncOutboxItem(
+                entityType: .studyActivity,
+                entityID: activity.id,
+                operation: .upsert,
+                baseServerVersion: activity.serverVersion,
+                payload: payload
+            ))
+        }
         progress?(sessions.count, sessions.count)
         return items
     }
@@ -1016,6 +1115,26 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             thread.courseID = nil
             thread.updatedAt = .now
             mutationObserver?.assistantThreadUpdated(thread)
+        }
+        // Exam-center entities survive as well: exams transfer to 未归类
+        // and study activities keep their minutes with the course
+        // attribution cleared (the learning history never dies with a
+        // course — the server-side detach mirrors this).
+        let exams = try context.fetch(FetchDescriptor<Exam>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for exam in exams where exam.status != .pending {
+            exam.courseID = nil
+            exam.updatedAt = .now
+            mutationObserver?.examUpdated(exam)
+        }
+        let courseActivities = try context.fetch(FetchDescriptor<StudyActivity>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for activity in courseActivities {
+            activity.courseID = nil
+            activity.updatedAt = .now
+            mutationObserver?.studyActivityUpdated(activity)
         }
         // Schedules are meaningless without their course — they and their
         // exceptions are deleted (the server cascade emits the same

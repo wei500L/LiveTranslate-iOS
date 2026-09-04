@@ -108,6 +108,12 @@ final class AppSession {
         // are cancelled; the new profile's window re-arms on its launch
         // task (refreshClassReminders reads the new account's schedules).
         environment.classReminders.cancelAll()
+        // Exam-center reminders follow the same rule; the learning timer
+        // checkpoints (its minutes belong to the old account's history
+        // and already live in its rows) and the reminder state rebuilds
+        // with the new profile.
+        environment.examReminders.cancelAll()
+        environment.studyActivityTracker.checkpoint()
         switch profile {
         case .guest:
             accounts.setActive(nil)

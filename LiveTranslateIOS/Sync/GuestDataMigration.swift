@@ -218,6 +218,7 @@ final class GuestDataMigration {
             copyGuestLearningData()
             copyGuestSchedules()
             copyGuestMaterials()
+            copyGuestExams()
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -496,6 +497,107 @@ final class GuestDataMigration {
                 serverVersion: 0
             )
             try? repository.applyRemoteAssistantMessage(record: record, serverVersion: 0)
+        }
+    }
+
+    /// Copies the guest exam center (exams, topics, plans, items,
+    /// activities) into the account store, add-only union like every
+    /// other family. Device-local AI candidates transfer as candidates
+    /// (status pending rows stay local until confirmed on the account).
+    private func copyGuestExams() {
+        for exam in reader.examSnapshots() {
+            guard (try? repository.exam(id: exam.id)) ?? nil == nil else { continue }
+            let record = SyncServerRecordDTO(
+                id: exam.id,
+                title: exam.title,
+                courseId: exam.courseID,
+                examKind: exam.kindRaw,
+                examDate: exam.examDateKey,
+                examStartSecs: exam.startSecs,
+                examEndSecs: exam.endSecs,
+                examLocation: exam.location,
+                examScope: exam.scopeText.isEmpty ? nil : exam.scopeText,
+                examNote: exam.note.isEmpty ? nil : exam.note,
+                examTargetScore: exam.targetScore.isEmpty ? nil : exam.targetScore,
+                examStatus: exam.statusRaw,
+                examOrigin: exam.originRaw,
+                examSource: exam.sourceJSON.isEmpty ? nil : exam.sourceJSON,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteExam(record: record, serverVersion: 0)
+        }
+        for topic in reader.examTopicSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: topic.id,
+                examId: topic.examID,
+                title: topic.title,
+                topicDetail: topic.detail.isEmpty ? nil : topic.detail,
+                topicImportance: topic.importanceRaw,
+                topicSelfRating: topic.selfRatingRaw,
+                topicStatus: topic.statusRaw,
+                topicSource: topic.sourceJSON.isEmpty ? nil : topic.sourceJSON,
+                topicUserEdited: topic.userEdited,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteExamTopic(record: record, serverVersion: 0)
+        }
+        for plan in reader.studyPlanSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: plan.id,
+                examId: plan.examID,
+                title: plan.title,
+                planStartDate: plan.startDateKey,
+                planEndDate: plan.endDateKey,
+                planWeekdayMinutes: plan.weekdayMinutes,
+                planWeekendMinutes: plan.weekendMinutes,
+                planRestDays: plan.restDaysJSON.isEmpty ? nil : plan.restDaysJSON,
+                planFinishEarlyDays: plan.finishEarlyDays,
+                planIncludeCards: plan.includeCards,
+                planIncludeTasks: plan.includeTasks,
+                planIncludeMaterials: plan.includeMaterials,
+                planIncludeSessions: plan.includeSessions,
+                planFocusTopics: plan.focusTopicsJSON.isEmpty ? nil : plan.focusTopicsJSON,
+                planBlockedTimes: plan.blockedTimesJSON.isEmpty ? nil : plan.blockedTimesJSON,
+                planStatus: plan.statusRaw,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteStudyPlan(record: record, serverVersion: 0)
+        }
+        for item in reader.studyPlanItemSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: item.id,
+                planId: item.planID,
+                examId: item.examID,
+                title: item.title,
+                planItemDate: item.itemDateKey,
+                planItemKind: item.kindRaw,
+                planItemEstimatedMinutes: item.estimatedMinutes,
+                planItemActualMinutes: item.actualMinutes,
+                planItemStatus: item.statusRaw,
+                planItemStatusChangedAt: item.statusChangedAt,
+                planItemOrder: item.itemOrder,
+                planItemSource: item.sourceJSON.isEmpty ? nil : item.sourceJSON,
+                planItemUserNote: item.userNote.isEmpty ? nil : item.userNote,
+                planItemUserEdited: item.userEdited,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteStudyPlanItem(record: record, serverVersion: 0)
+        }
+        for activity in reader.studyActivitySnapshots() {
+            let record = SyncServerRecordDTO(
+                id: activity.id,
+                planItemId: activity.planItemID,
+                examId: activity.examID,
+                courseId: activity.courseID,
+                topicId: activity.topicID,
+                activityStartedAt: activity.startedAt,
+                activityEndedAt: activity.endedAt,
+                activityDurationSeconds: activity.durationSeconds,
+                activityStatus: activity.statusRaw,
+                activityNote: activity.note.isEmpty ? nil : activity.note,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteStudyActivity(record: record, serverVersion: 0)
         }
     }
 
@@ -893,7 +995,9 @@ struct GuestLibraryReader {
         SessionRecording.self, TranscriptCorrection.self,
         CourseSchedule.self, ScheduleException.self,
         CourseMaterial.self, MaterialPage.self, MaterialAnnotation.self,
-        CourseAssistantThread.self, CourseAssistantMessage.self
+        CourseAssistantThread.self, CourseAssistantMessage.self,
+        Exam.self, ExamTopic.self, StudyPlan.self, StudyPlanItem.self,
+        StudyActivity.self
     ])
 
     /// Sendable snapshot of one guest course schedule (the pre-class
@@ -1342,6 +1446,130 @@ struct GuestLibraryReader {
             )
         }
     }
+
+    /// All guest exams (device-local AI candidates included — they
+    /// transfer as candidates and stay local until confirmed).
+    func examSnapshots() -> [ExamSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<Exam>())) ?? []
+        return rows.map { row in
+            ExamSnapshot(
+                id: row.id,
+                courseID: row.courseID,
+                title: row.title,
+                kindRaw: row.kindRaw,
+                examDateKey: row.examDateKey,
+                startSecs: row.startSecs,
+                endSecs: row.endSecs,
+                location: row.location,
+                scopeText: row.scopeText,
+                note: row.note,
+                targetScore: row.targetScore,
+                statusRaw: row.statusRaw,
+                originRaw: row.originRaw,
+                sourceJSON: row.sourceJSON
+            )
+        }
+    }
+
+    /// All guest exam topics, values only.
+    func examTopicSnapshots() -> [ExamTopicSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<ExamTopic>())) ?? []
+        return rows.map { row in
+            ExamTopicSnapshot(
+                id: row.id,
+                examID: row.examID,
+                title: row.title,
+                detail: row.detail,
+                importanceRaw: row.importanceRaw,
+                selfRatingRaw: row.selfRatingRaw,
+                statusRaw: row.statusRaw,
+                sourceJSON: row.sourceJSON,
+                userEdited: row.userEdited
+            )
+        }
+    }
+
+    /// All guest study plans, values only.
+    func studyPlanSnapshots() -> [StudyPlanSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<StudyPlan>())) ?? []
+        return rows.map { row in
+            StudyPlanSnapshot(
+                id: row.id,
+                examID: row.examID,
+                title: row.title,
+                startDateKey: row.startDateKey,
+                endDateKey: row.endDateKey,
+                weekdayMinutes: row.weekdayMinutes,
+                weekendMinutes: row.weekendMinutes,
+                restDaysJSON: row.restDaysJSON,
+                finishEarlyDays: row.finishEarlyDays,
+                includeCards: row.includeCards,
+                includeTasks: row.includeTasks,
+                includeMaterials: row.includeMaterials,
+                includeSessions: row.includeSessions,
+                focusTopicsJSON: row.focusTopicsJSON,
+                blockedTimesJSON: row.blockedTimesJSON,
+                statusRaw: row.statusRaw
+            )
+        }
+    }
+
+    /// All guest plan items, values only.
+    func studyPlanItemSnapshots() -> [StudyPlanItemSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<StudyPlanItem>())) ?? []
+        return rows.map { row in
+            StudyPlanItemSnapshot(
+                id: row.id,
+                planID: row.planID,
+                examID: row.examID,
+                itemDateKey: row.itemDateKey,
+                title: row.title,
+                kindRaw: row.kindRaw,
+                estimatedMinutes: row.estimatedMinutes,
+                actualMinutes: row.actualMinutes,
+                statusRaw: row.statusRaw,
+                statusChangedAt: row.statusChangedAt,
+                itemOrder: row.itemOrder,
+                sourceJSON: row.sourceJSON,
+                userNote: row.userNote,
+                userEdited: row.userEdited
+            )
+        }
+    }
+
+    /// All guest study activities, values only.
+    func studyActivitySnapshots() -> [StudyActivitySnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<StudyActivity>())) ?? []
+        return rows.map { row in
+            StudyActivitySnapshot(
+                id: row.id,
+                planItemID: row.planItemID,
+                examID: row.examID,
+                courseID: row.courseID,
+                topicID: row.topicID,
+                startedAt: row.startedAt,
+                endedAt: row.endedAt,
+                durationSeconds: row.durationSeconds,
+                statusRaw: row.statusRaw,
+                note: row.note
+            )
+        }
+    }
 }
 
 // MARK: - Material snapshots (guest library)
@@ -1415,4 +1643,89 @@ struct AssistantMessageSnapshot: Sendable {
     var visualEvidenceJSON: String
     var answerJSON: String
     var answerModel: String
+}
+
+// MARK: - Exam-center snapshots (guest library)
+
+/// Sendable snapshot of one guest exam.
+struct ExamSnapshot: Sendable {
+    var id: UUID
+    var courseID: UUID?
+    var title: String
+    var kindRaw: String
+    var examDateKey: String
+    var startSecs: Int
+    var endSecs: Int
+    var location: String
+    var scopeText: String
+    var note: String
+    var targetScore: String
+    var statusRaw: String
+    var originRaw: String
+    var sourceJSON: String
+}
+
+/// Sendable snapshot of one guest exam topic.
+struct ExamTopicSnapshot: Sendable {
+    var id: UUID
+    var examID: UUID
+    var title: String
+    var detail: String
+    var importanceRaw: String
+    var selfRatingRaw: String
+    var statusRaw: String
+    var sourceJSON: String
+    var userEdited: Bool
+}
+
+/// Sendable snapshot of one guest study plan.
+struct StudyPlanSnapshot: Sendable {
+    var id: UUID
+    var examID: UUID
+    var title: String
+    var startDateKey: String
+    var endDateKey: String
+    var weekdayMinutes: Int
+    var weekendMinutes: Int
+    var restDaysJSON: String
+    var finishEarlyDays: Int
+    var includeCards: Bool
+    var includeTasks: Bool
+    var includeMaterials: Bool
+    var includeSessions: Bool
+    var focusTopicsJSON: String
+    var blockedTimesJSON: String
+    var statusRaw: String
+}
+
+/// Sendable snapshot of one guest study plan item.
+struct StudyPlanItemSnapshot: Sendable {
+    var id: UUID
+    var planID: UUID
+    var examID: UUID?
+    var itemDateKey: String
+    var title: String
+    var kindRaw: String
+    var estimatedMinutes: Int
+    var actualMinutes: Int
+    var statusRaw: String
+    var statusChangedAt: Date?
+    var itemOrder: Int
+    var sourceJSON: String
+    var userNote: String
+    var userEdited: Bool
+}
+
+/// Sendable snapshot of one guest study activity.
+struct StudyActivitySnapshot: Sendable {
+    var id: UUID
+    var planItemID: UUID?
+    var examID: UUID?
+    var courseID: UUID?
+    var topicID: UUID?
+    var startedAt: Date
+    var endedAt: Date?
+    var durationSeconds: Int
+    var statusRaw: String
+    var note: String
 }

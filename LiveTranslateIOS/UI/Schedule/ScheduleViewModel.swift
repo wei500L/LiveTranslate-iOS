@@ -244,6 +244,14 @@ final class ScheduleViewModel {
         }
         if hasOngoingCoordinatorSession { return nil }
 
+        // Learning-timer guard: a running study activity is paused
+        // honestly before the classroom recording starts (课堂录音时间
+        // 不计入学习时长). The pause is checkpointed so its minutes stay.
+        if environment.studyActivityTracker.hasActiveActivity {
+            environment.studyActivityTracker.pause()
+            LTHaptics.warning()
+        }
+
         // Permission + resource checks (same gates as quickStart).
         if !environment.capabilities.assumesMicrophoneAuthorized {
             let permission = AVAudioApplication.shared.recordPermission

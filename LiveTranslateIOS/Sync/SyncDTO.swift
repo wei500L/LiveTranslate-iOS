@@ -41,6 +41,14 @@ enum SyncEntityType: String, Codable, Sendable {
     case materialAnnotation = "material_annotation"
     case assistantThread = "assistant_thread"
     case assistantMessage = "assistant_message"
+    // Exam center: exams, topics, study plans, plan items and study
+    // activities. Wire names are 4/10/10/15/14 chars — all fit the
+    // server's VARCHAR(32) entity_type columns.
+    case exam
+    case examTopic = "exam_topic"
+    case studyPlan = "study_plan"
+    case studyPlanItem = "study_plan_item"
+    case studyActivity = "study_activity"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -384,6 +392,61 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var assistantEvidence: String?
     var assistantAnswer: String?
     var assistantModel: String?
+    // exam center (00012). Titles ride the shared `title`; the course
+    // reference rides the shared courseId sentinel; dates are
+    // YYYY-MM-DD strings; times are wall-clock seconds since midnight
+    // (-1 = unknown). Source snapshots ride as JSON STRINGS.
+    var examKind: String?
+    var examDate: String?
+    var examStartSecs: Int?
+    var examEndSecs: Int?
+    var examLocation: String?
+    var examScope: String?
+    var examNote: String?
+    var examTargetScore: String?
+    var examStatus: String?
+    var examOrigin: String?
+    var examSource: String?
+    var topicDetail: String?
+    var topicImportance: String?
+    var topicSelfRating: String?
+    var topicStatus: String?
+    var topicSource: String?
+    var topicUserEdited: Bool?
+    var planStartDate: String?
+    var planEndDate: String?
+    var planWeekdayMinutes: Int?
+    var planWeekendMinutes: Int?
+    var planRestDays: String?
+    var planFinishEarlyDays: Int?
+    var planIncludeCards: Bool?
+    var planIncludeTasks: Bool?
+    var planIncludeMaterials: Bool?
+    var planIncludeSessions: Bool?
+    var planFocusTopics: String?
+    var planBlockedTimes: String?
+    var planStatus: String?
+    var planItemDate: String?
+    var planItemKind: String?
+    var planItemEstimatedMinutes: Int?
+    var planItemActualMinutes: Int?
+    var planItemStatus: String?
+    var planItemStatusChangedAt: Date?
+    var planItemOrder: Int?
+    var planItemSource: String?
+    var planItemUserNote: String?
+    var planItemUserEdited: Bool?
+    var activityStatus: String?
+    var activityStartedAt: Date?
+    var activityEndedAt: Date?
+    var activityDurationSeconds: Int?
+    var activityNote: String?
+    // Shared exam-family references. Absent (nil) keeps the server value;
+    // `UUID.nilSentinel` explicitly clears it.
+    var examId: UUID?
+    var planId: UUID?
+    var planItemId: UUID?
+    var topicId: UUID?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -551,6 +614,58 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var assistantEvidence: String?
     var assistantAnswer: String?
     var assistantModel: String?
+    // exam center — names mirror the push payload (examXxx / topicXxx /
+    // planXxx / planItemXxx / activityXxx families) so one CodingKeys set
+    // covers records and conflict payloads.
+    var examKind: String?
+    var examDate: String?
+    var examStartSecs: Int?
+    var examEndSecs: Int?
+    var examLocation: String?
+    var examScope: String?
+    var examNote: String?
+    var examTargetScore: String?
+    var examStatus: String?
+    var examOrigin: String?
+    var examSource: String?
+    var topicDetail: String?
+    var topicImportance: String?
+    var topicSelfRating: String?
+    var topicStatus: String?
+    var topicSource: String?
+    var topicUserEdited: Bool?
+    var planStartDate: String?
+    var planEndDate: String?
+    var planWeekdayMinutes: Int?
+    var planWeekendMinutes: Int?
+    var planRestDays: String?
+    var planFinishEarlyDays: Int?
+    var planIncludeCards: Bool?
+    var planIncludeTasks: Bool?
+    var planIncludeMaterials: Bool?
+    var planIncludeSessions: Bool?
+    var planFocusTopics: String?
+    var planBlockedTimes: String?
+    var planStatus: String?
+    var planItemDate: String?
+    var planItemKind: String?
+    var planItemEstimatedMinutes: Int?
+    var planItemActualMinutes: Int?
+    var planItemStatus: String?
+    var planItemStatusChangedAt: Date?
+    var planItemOrder: Int?
+    var planItemSource: String?
+    var planItemUserNote: String?
+    var planItemUserEdited: Bool?
+    var activityStatus: String?
+    var activityStartedAt: Date?
+    var activityEndedAt: Date?
+    var activityDurationSeconds: Int?
+    var activityNote: String?
+    var examId: UUID?
+    var planId: UUID?
+    var planItemId: UUID?
+    var topicId: UUID?
     var serverVersion: Int
     var deleted: Bool
 
@@ -688,6 +803,55 @@ struct SyncServerRecordDTO: Codable, Sendable {
         assistantEvidence: String? = nil,
         assistantAnswer: String? = nil,
         assistantModel: String? = nil,
+        examKind: String? = nil,
+        examDate: String? = nil,
+        examStartSecs: Int? = nil,
+        examEndSecs: Int? = nil,
+        examLocation: String? = nil,
+        examScope: String? = nil,
+        examNote: String? = nil,
+        examTargetScore: String? = nil,
+        examStatus: String? = nil,
+        examOrigin: String? = nil,
+        examSource: String? = nil,
+        topicDetail: String? = nil,
+        topicImportance: String? = nil,
+        topicSelfRating: String? = nil,
+        topicStatus: String? = nil,
+        topicSource: String? = nil,
+        topicUserEdited: Bool? = nil,
+        planStartDate: String? = nil,
+        planEndDate: String? = nil,
+        planWeekdayMinutes: Int? = nil,
+        planWeekendMinutes: Int? = nil,
+        planRestDays: String? = nil,
+        planFinishEarlyDays: Int? = nil,
+        planIncludeCards: Bool? = nil,
+        planIncludeTasks: Bool? = nil,
+        planIncludeMaterials: Bool? = nil,
+        planIncludeSessions: Bool? = nil,
+        planFocusTopics: String? = nil,
+        planBlockedTimes: String? = nil,
+        planStatus: String? = nil,
+        planItemDate: String? = nil,
+        planItemKind: String? = nil,
+        planItemEstimatedMinutes: Int? = nil,
+        planItemActualMinutes: Int? = nil,
+        planItemStatus: String? = nil,
+        planItemStatusChangedAt: Date? = nil,
+        planItemOrder: Int? = nil,
+        planItemSource: String? = nil,
+        planItemUserNote: String? = nil,
+        planItemUserEdited: Bool? = nil,
+        activityStatus: String? = nil,
+        activityStartedAt: Date? = nil,
+        activityEndedAt: Date? = nil,
+        activityDurationSeconds: Int? = nil,
+        activityNote: String? = nil,
+        examId: UUID? = nil,
+        planId: UUID? = nil,
+        planItemId: UUID? = nil,
+        topicId: UUID? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -821,6 +985,55 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.assistantEvidence = assistantEvidence
         self.assistantAnswer = assistantAnswer
         self.assistantModel = assistantModel
+        self.examKind = examKind
+        self.examDate = examDate
+        self.examStartSecs = examStartSecs
+        self.examEndSecs = examEndSecs
+        self.examLocation = examLocation
+        self.examScope = examScope
+        self.examNote = examNote
+        self.examTargetScore = examTargetScore
+        self.examStatus = examStatus
+        self.examOrigin = examOrigin
+        self.examSource = examSource
+        self.topicDetail = topicDetail
+        self.topicImportance = topicImportance
+        self.topicSelfRating = topicSelfRating
+        self.topicStatus = topicStatus
+        self.topicSource = topicSource
+        self.topicUserEdited = topicUserEdited
+        self.planStartDate = planStartDate
+        self.planEndDate = planEndDate
+        self.planWeekdayMinutes = planWeekdayMinutes
+        self.planWeekendMinutes = planWeekendMinutes
+        self.planRestDays = planRestDays
+        self.planFinishEarlyDays = planFinishEarlyDays
+        self.planIncludeCards = planIncludeCards
+        self.planIncludeTasks = planIncludeTasks
+        self.planIncludeMaterials = planIncludeMaterials
+        self.planIncludeSessions = planIncludeSessions
+        self.planFocusTopics = planFocusTopics
+        self.planBlockedTimes = planBlockedTimes
+        self.planStatus = planStatus
+        self.planItemDate = planItemDate
+        self.planItemKind = planItemKind
+        self.planItemEstimatedMinutes = planItemEstimatedMinutes
+        self.planItemActualMinutes = planItemActualMinutes
+        self.planItemStatus = planItemStatus
+        self.planItemStatusChangedAt = planItemStatusChangedAt
+        self.planItemOrder = planItemOrder
+        self.planItemSource = planItemSource
+        self.planItemUserNote = planItemUserNote
+        self.planItemUserEdited = planItemUserEdited
+        self.activityStatus = activityStatus
+        self.activityStartedAt = activityStartedAt
+        self.activityEndedAt = activityEndedAt
+        self.activityDurationSeconds = activityDurationSeconds
+        self.activityNote = activityNote
+        self.examId = examId
+        self.planId = planId
+        self.planItemId = planItemId
+        self.topicId = topicId
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -958,6 +1171,55 @@ struct SyncServerRecordDTO: Codable, Sendable {
         assistantEvidence = try container.decodeIfPresent(String.self, forKey: .assistantEvidence)
         assistantAnswer = try container.decodeIfPresent(String.self, forKey: .assistantAnswer)
         assistantModel = try container.decodeIfPresent(String.self, forKey: .assistantModel)
+        examKind = try container.decodeIfPresent(String.self, forKey: .examKind)
+        examDate = try container.decodeIfPresent(String.self, forKey: .examDate)
+        examStartSecs = try container.decodeIfPresent(Int.self, forKey: .examStartSecs)
+        examEndSecs = try container.decodeIfPresent(Int.self, forKey: .examEndSecs)
+        examLocation = try container.decodeIfPresent(String.self, forKey: .examLocation)
+        examScope = try container.decodeIfPresent(String.self, forKey: .examScope)
+        examNote = try container.decodeIfPresent(String.self, forKey: .examNote)
+        examTargetScore = try container.decodeIfPresent(String.self, forKey: .examTargetScore)
+        examStatus = try container.decodeIfPresent(String.self, forKey: .examStatus)
+        examOrigin = try container.decodeIfPresent(String.self, forKey: .examOrigin)
+        examSource = try container.decodeIfPresent(String.self, forKey: .examSource)
+        topicDetail = try container.decodeIfPresent(String.self, forKey: .topicDetail)
+        topicImportance = try container.decodeIfPresent(String.self, forKey: .topicImportance)
+        topicSelfRating = try container.decodeIfPresent(String.self, forKey: .topicSelfRating)
+        topicStatus = try container.decodeIfPresent(String.self, forKey: .topicStatus)
+        topicSource = try container.decodeIfPresent(String.self, forKey: .topicSource)
+        topicUserEdited = try container.decodeIfPresent(Bool.self, forKey: .topicUserEdited)
+        planStartDate = try container.decodeIfPresent(String.self, forKey: .planStartDate)
+        planEndDate = try container.decodeIfPresent(String.self, forKey: .planEndDate)
+        planWeekdayMinutes = try container.decodeIfPresent(Int.self, forKey: .planWeekdayMinutes)
+        planWeekendMinutes = try container.decodeIfPresent(Int.self, forKey: .planWeekendMinutes)
+        planRestDays = try container.decodeIfPresent(String.self, forKey: .planRestDays)
+        planFinishEarlyDays = try container.decodeIfPresent(Int.self, forKey: .planFinishEarlyDays)
+        planIncludeCards = try container.decodeIfPresent(Bool.self, forKey: .planIncludeCards)
+        planIncludeTasks = try container.decodeIfPresent(Bool.self, forKey: .planIncludeTasks)
+        planIncludeMaterials = try container.decodeIfPresent(Bool.self, forKey: .planIncludeMaterials)
+        planIncludeSessions = try container.decodeIfPresent(Bool.self, forKey: .planIncludeSessions)
+        planFocusTopics = try container.decodeIfPresent(String.self, forKey: .planFocusTopics)
+        planBlockedTimes = try container.decodeIfPresent(String.self, forKey: .planBlockedTimes)
+        planStatus = try container.decodeIfPresent(String.self, forKey: .planStatus)
+        planItemDate = try container.decodeIfPresent(String.self, forKey: .planItemDate)
+        planItemKind = try container.decodeIfPresent(String.self, forKey: .planItemKind)
+        planItemEstimatedMinutes = try container.decodeIfPresent(Int.self, forKey: .planItemEstimatedMinutes)
+        planItemActualMinutes = try container.decodeIfPresent(Int.self, forKey: .planItemActualMinutes)
+        planItemStatus = try container.decodeIfPresent(String.self, forKey: .planItemStatus)
+        planItemStatusChangedAt = try container.decodeIfPresent(Date.self, forKey: .planItemStatusChangedAt)
+        planItemOrder = try container.decodeIfPresent(Int.self, forKey: .planItemOrder)
+        planItemSource = try container.decodeIfPresent(String.self, forKey: .planItemSource)
+        planItemUserNote = try container.decodeIfPresent(String.self, forKey: .planItemUserNote)
+        planItemUserEdited = try container.decodeIfPresent(Bool.self, forKey: .planItemUserEdited)
+        activityStatus = try container.decodeIfPresent(String.self, forKey: .activityStatus)
+        activityStartedAt = try container.decodeIfPresent(Date.self, forKey: .activityStartedAt)
+        activityEndedAt = try container.decodeIfPresent(Date.self, forKey: .activityEndedAt)
+        activityDurationSeconds = try container.decodeIfPresent(Int.self, forKey: .activityDurationSeconds)
+        activityNote = try container.decodeIfPresent(String.self, forKey: .activityNote)
+        examId = try container.decodeIfPresent(UUID.self, forKey: .examId)
+        planId = try container.decodeIfPresent(UUID.self, forKey: .planId)
+        planItemId = try container.decodeIfPresent(UUID.self, forKey: .planItemId)
+        topicId = try container.decodeIfPresent(UUID.self, forKey: .topicId)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -1015,4 +1277,9 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var materialAnnotationCount: Int?
     var assistantThreadCount: Int?
     var assistantMessageCount: Int?
+    var examCount: Int?
+    var examTopicCount: Int?
+    var studyPlanCount: Int?
+    var studyPlanItemCount: Int?
+    var studyActivityCount: Int?
 }

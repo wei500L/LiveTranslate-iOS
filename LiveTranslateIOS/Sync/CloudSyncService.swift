@@ -595,6 +595,77 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    private func enqueueExamUpsert(_ exam: Exam) {
+        let item = SyncOutboxItem(
+            entityType: .exam,
+            entityID: exam.id,
+            operation: .upsert,
+            baseServerVersion: exam.serverVersion,
+            payload: Self.payload(for: exam)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueExamTopicUpsert(_ topic: ExamTopic) {
+        var payload = Self.payload(for: topic)
+        payload.examId = topic.examID
+        let item = SyncOutboxItem(
+            entityType: .examTopic,
+            entityID: topic.id,
+            operation: .upsert,
+            baseServerVersion: topic.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueStudyPlanUpsert(_ plan: StudyPlan) {
+        var payload = Self.payload(for: plan)
+        payload.examId = plan.examID
+        let item = SyncOutboxItem(
+            entityType: .studyPlan,
+            entityID: plan.id,
+            operation: .upsert,
+            baseServerVersion: plan.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueStudyPlanItemUpsert(_ item row: StudyPlanItem) {
+        var payload = Self.payload(for: row)
+        payload.planId = row.planID
+        payload.examId = row.examID ?? .nilSentinel
+        let item = SyncOutboxItem(
+            entityType: .studyPlanItem,
+            entityID: row.id,
+            operation: .upsert,
+            baseServerVersion: row.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueStudyActivityUpsert(_ activity: StudyActivity) {
+        var payload = Self.payload(for: activity)
+        payload.planItemId = activity.planItemID ?? .nilSentinel
+        payload.examId = activity.examID ?? .nilSentinel
+        payload.topicId = activity.topicID ?? .nilSentinel
+        let item = SyncOutboxItem(
+            entityType: .studyActivity,
+            entityID: activity.id,
+            operation: .upsert,
+            baseServerVersion: activity.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -904,7 +975,8 @@ final class CloudSyncService: AuthenticationService {
              .term, .studyCard, .studyTask, .transcriptCorrection,
              .courseSchedule, .scheduleException,
              .material, .materialPage, .materialAnnotation,
-             .assistantThread, .assistantMessage:
+             .assistantThread, .assistantMessage,
+             .exam, .examTopic, .studyPlan, .studyPlanItem, .studyActivity:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -975,6 +1047,16 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteAssistantThreadByID(entityID)
         case .assistantMessage:
             try? repository.deleteAssistantMessageByID(entityID)
+        case .exam:
+            try? repository.deleteExamByID(entityID)
+        case .examTopic:
+            try? repository.deleteExamTopicByID(entityID)
+        case .studyPlan:
+            try? repository.deleteStudyPlanByID(entityID)
+        case .studyPlanItem:
+            try? repository.deleteStudyPlanItemByID(entityID)
+        case .studyActivity:
+            try? repository.deleteStudyActivityByID(entityID)
         }
     }
 
@@ -1037,6 +1119,16 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteAssistantThread(record: record, serverVersion: serverVersion)
         case .assistantMessage:
             try? repository.applyRemoteAssistantMessage(record: record, serverVersion: serverVersion)
+        case .exam:
+            try? repository.applyRemoteExam(record: record, serverVersion: serverVersion)
+        case .examTopic:
+            try? repository.applyRemoteExamTopic(record: record, serverVersion: serverVersion)
+        case .studyPlan:
+            try? repository.applyRemoteStudyPlan(record: record, serverVersion: serverVersion)
+        case .studyPlanItem:
+            try? repository.applyRemoteStudyPlanItem(record: record, serverVersion: serverVersion)
+        case .studyActivity:
+            try? repository.applyRemoteStudyActivity(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -1738,6 +1830,91 @@ final class CloudSyncService: AuthenticationService {
             sessionId: message.scopeSessionID ?? .nilSentinel
         )
     }
+
+    /// Exam (title + course sentinel + wall-clock date/time; the
+    /// candidate origin snapshot rides as a JSON string).
+    static func payload(for exam: Exam) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: exam.title,
+            courseId: exam.courseID ?? .nilSentinel,
+            examKind: exam.kindRaw,
+            examDate: exam.examDateKey,
+            examStartSecs: exam.startSecs,
+            examEndSecs: exam.endSecs,
+            examLocation: exam.location,
+            examScope: exam.scopeText.isEmpty ? nil : exam.scopeText,
+            examNote: exam.note.isEmpty ? nil : exam.note,
+            examTargetScore: exam.targetScore.isEmpty ? nil : exam.targetScore,
+            examStatus: exam.statusRaw,
+            examOrigin: exam.originRaw,
+            examSource: exam.sourceJSON.isEmpty ? nil : exam.sourceJSON
+        )
+    }
+
+    /// Exam topic (title rides the shared field; the parent exam rides
+    /// examId, set by the enqueue helper).
+    static func payload(for topic: ExamTopic) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: topic.title,
+            topicDetail: topic.detail.isEmpty ? nil : topic.detail,
+            topicImportance: topic.importanceRaw,
+            topicSelfRating: topic.selfRatingRaw,
+            topicStatus: topic.statusRaw,
+            topicSource: topic.sourceJSON.isEmpty ? nil : topic.sourceJSON,
+            topicUserEdited: topic.userEdited
+        )
+    }
+
+    /// Study plan (dates as YYYY-MM-DD; rest days / focus topics /
+    /// blocked times ride as JSON strings — opaque metadata server-side).
+    static func payload(for plan: StudyPlan) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: plan.title,
+            planStartDate: plan.startDateKey,
+            planEndDate: plan.endDateKey,
+            planWeekdayMinutes: plan.weekdayMinutes,
+            planWeekendMinutes: plan.weekendMinutes,
+            planRestDays: plan.restDaysJSON.isEmpty ? nil : plan.restDaysJSON,
+            planFinishEarlyDays: plan.finishEarlyDays,
+            planIncludeCards: plan.includeCards,
+            planIncludeTasks: plan.includeTasks,
+            planIncludeMaterials: plan.includeMaterials,
+            planIncludeSessions: plan.includeSessions,
+            planFocusTopics: plan.focusTopicsJSON.isEmpty ? nil : plan.focusTopicsJSON,
+            planBlockedTimes: plan.blockedTimesJSON.isEmpty ? nil : plan.blockedTimesJSON,
+            planStatus: plan.statusRaw
+        )
+    }
+
+    /// Plan item (title/date/status + the jump-target JSON; the parent
+    /// plan rides planId, set by the enqueue helper).
+    static func payload(for item: StudyPlanItem) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: item.title,
+            planItemDate: item.itemDateKey,
+            planItemKind: item.kindRaw,
+            planItemEstimatedMinutes: item.estimatedMinutes,
+            planItemActualMinutes: item.actualMinutes,
+            planItemStatus: item.statusRaw,
+            planItemStatusChangedAt: item.statusChangedAt,
+            planItemOrder: item.itemOrder,
+            planItemSource: item.sourceJSON.isEmpty ? nil : item.sourceJSON,
+            planItemUserNote: item.userNote.isEmpty ? nil : item.userNote,
+            planItemUserEdited: item.userEdited
+        )
+    }
+
+    /// Study activity (append-style learning-time record).
+    static func payload(for activity: StudyActivity) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            courseId: activity.courseID ?? .nilSentinel,
+            activityStatus: activity.statusRaw,
+            activityStartedAt: activity.startedAt,
+            activityEndedAt: activity.endedAt,
+            activityDurationSeconds: activity.durationSeconds,
+            activityNote: activity.note.isEmpty ? nil : activity.note
+        )
+    }
 }
 
 // MARK: - TranscriptMutationObserving
@@ -1791,6 +1968,21 @@ protocol TranscriptMutationObserving: AnyObject {
     func assistantThreadUpdated(_ thread: CourseAssistantThread)
     func assistantThreadDeleted(id: UUID)
     func assistantMessageCreated(_ message: CourseAssistantMessage)
+    func examCreated(_ exam: Exam)
+    func examUpdated(_ exam: Exam)
+    func examDeleted(id: UUID)
+    func examTopicCreated(_ topic: ExamTopic)
+    func examTopicUpdated(_ topic: ExamTopic)
+    func examTopicDeleted(id: UUID)
+    func studyPlanCreated(_ plan: StudyPlan)
+    func studyPlanUpdated(_ plan: StudyPlan)
+    func studyPlanDeleted(id: UUID)
+    func studyPlanItemCreated(_ item: StudyPlanItem)
+    func studyPlanItemUpdated(_ item: StudyPlanItem)
+    func studyPlanItemDeleted(id: UUID)
+    func studyActivityCreated(_ activity: StudyActivity)
+    func studyActivityUpdated(_ activity: StudyActivity)
+    func studyActivityDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -1968,5 +2160,65 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func assistantMessageCreated(_ message: CourseAssistantMessage) {
         enqueueAssistantMessageUpsert(message)
+    }
+
+    func examCreated(_ exam: Exam) {
+        enqueueExamUpsert(exam)
+    }
+
+    func examUpdated(_ exam: Exam) {
+        enqueueExamUpsert(exam)
+    }
+
+    func examDeleted(id: UUID) {
+        enqueueDelete(entityType: .exam, entityID: id)
+    }
+
+    func examTopicCreated(_ topic: ExamTopic) {
+        enqueueExamTopicUpsert(topic)
+    }
+
+    func examTopicUpdated(_ topic: ExamTopic) {
+        enqueueExamTopicUpsert(topic)
+    }
+
+    func examTopicDeleted(id: UUID) {
+        enqueueDelete(entityType: .examTopic, entityID: id)
+    }
+
+    func studyPlanCreated(_ plan: StudyPlan) {
+        enqueueStudyPlanUpsert(plan)
+    }
+
+    func studyPlanUpdated(_ plan: StudyPlan) {
+        enqueueStudyPlanUpsert(plan)
+    }
+
+    func studyPlanDeleted(id: UUID) {
+        enqueueDelete(entityType: .studyPlan, entityID: id)
+    }
+
+    func studyPlanItemCreated(_ item: StudyPlanItem) {
+        enqueueStudyPlanItemUpsert(item)
+    }
+
+    func studyPlanItemUpdated(_ item: StudyPlanItem) {
+        enqueueStudyPlanItemUpsert(item)
+    }
+
+    func studyPlanItemDeleted(id: UUID) {
+        enqueueDelete(entityType: .studyPlanItem, entityID: id)
+    }
+
+    func studyActivityCreated(_ activity: StudyActivity) {
+        enqueueStudyActivityUpsert(activity)
+    }
+
+    func studyActivityUpdated(_ activity: StudyActivity) {
+        enqueueStudyActivityUpsert(activity)
+    }
+
+    func studyActivityDeleted(id: UUID) {
+        enqueueDelete(entityType: .studyActivity, entityID: id)
     }
 }

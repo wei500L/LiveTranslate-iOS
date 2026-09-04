@@ -152,6 +152,12 @@ struct CourseDetailView: View {
                     .environment(environment)
             }
         }
+        .sheet(isPresented: $showingExamForm) {
+            NavigationStack {
+                ExamFormScreen(preselectedCourseID: courseID, editing: nil)
+                    .environment(environment)
+            }
+        }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
         }
@@ -215,6 +221,7 @@ struct CourseDetailView: View {
                     headerCard(course)
                     schedulesCard
                     materialsCard(course)
+                    examsCard
                     statsCard
                     learningSpaceCard
                     if viewModel.sessions.isEmpty {
@@ -290,6 +297,78 @@ struct CourseDetailView: View {
         }
         return count == 1 ? "1 份资料" : "\(count) 份资料"
     }
+
+    /// 考试与计划 card: this course's exams (nearest first, with the
+    /// day countdown) and a one-tap 创建考试. Hidden when the course has
+    /// no exams and shows a restrained entry line instead — never a fake
+    /// exam summary.
+    @State private var courseExams: [Exam] = []
+
+    private var examsCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            HStack {
+                LTSectionHeader(title: "考试与计划")
+                Spacer()
+                Button {
+                    showingExamForm = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(LTColors.accentGreen)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("创建考试"))
+            }
+            if courseExams.isEmpty {
+                Text("还没有安排考试")
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.textTertiary)
+            } else {
+                VStack(spacing: LTSpacing.xs) {
+                    ForEach(courseExams.filter { $0.status == .scheduled }.prefix(3)) { exam in
+                        NavigationLink {
+                            ExamDetailView(examID: exam.id)
+                                .environment(environment)
+                        } label: {
+                            HStack(spacing: LTSpacing.s) {
+                                LTIconBadge(symbol: exam.kind.symbol, tint: LTColors.accentGreen, size: 28)
+                                Text(exam.title)
+                                    .font(.subheadline)
+                                    .foregroundStyle(LTColors.textPrimary)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(exam.daysUntilExam.map { days in
+                                    days < 0 ? "已结束" : days == 0 ? "今天" : "\(days) 天后"
+                                } ?? "")
+                                    .font(LTTypography.timestamp)
+                                    .foregroundStyle(
+                                        (exam.daysUntilExam ?? 99) <= 3
+                                            ? LTColors.warning : LTColors.textTertiary
+                                    )
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    let finished = courseExams.filter { $0.status != .scheduled }.count
+                    if finished > 0 {
+                        Text("已结束/取消 \(finished) 场")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textTertiary)
+                    }
+                }
+            }
+        }
+        .ltCard()
+        .onAppear {
+            courseExams = (try? environment.repository.exams(
+                courseID: courseID, includeCandidates: false
+            )) ?? []
+        }
+    }
+
+    @State private var showingExamForm = false
 
     /// The course's recurring schedules (固定日程): every weekly slot as
     /// its own row (周一 10:30–12:05 · 仅单周), with pause / edit / 停课调课

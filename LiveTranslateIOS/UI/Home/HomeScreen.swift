@@ -30,6 +30,9 @@ struct HomeScreen: View {
                         if scheduleViewModel.isLoaded, scheduleViewModel.nextOccurrence != nil {
                             nextClassSection
                         }
+                        if let exam = nextExam {
+                            nextExamSection(exam)
+                        }
                         quickStartSection
                         statusSection
                         if viewModel.isLoaded && viewModel.hasTodayReview {
@@ -194,6 +197,71 @@ struct HomeScreen: View {
         minuteTimer?.invalidate()
         minuteTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
             Task { @MainActor in scheduleViewModel.tick() }
+        }
+    }
+
+    // MARK: - Next exam (下一场考试 — real near exams only)
+
+    /// The nearest scheduled exam within 14 days (real rows only — none
+    /// in that window, no card).
+    private var nextExam: Exam? {
+        let exams = (try? environment.repository.exams(
+            courseID: nil, includeCandidates: false
+        )) ?? []
+        return exams
+            .filter { exam in
+                guard exam.status == .scheduled, let days = exam.daysUntilExam else { return false }
+                return days >= 0 && days <= 14
+            }
+            .min { lhs, rhs in
+                (lhs.examDate ?? .distantFuture) < (rhs.examDate ?? .distantFuture)
+            }
+    }
+
+    private func nextExamSection(_ exam: Exam) -> some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "下一场考试")
+            NavigationLink {
+                ExamDetailView(examID: exam.id)
+                    .environment(environment)
+            } label: {
+                HStack(spacing: LTSpacing.m) {
+                    LTIconBadge(symbol: exam.kind.symbol, tint: LTColors.accentGreen, size: 38)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(exam.title)
+                            .font(.cardTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                            .lineLimit(1)
+                        Text(examSubtitle(exam))
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textSecondary)
+                    }
+                    Spacer()
+                    Text(examCountdown(exam))
+                        .font(.system(.headline, design: .rounded).monospacedDigit())
+                        .foregroundStyle(LTColors.warning)
+                }
+                .ltCard()
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func examSubtitle(_ exam: Exam) -> String {
+        var parts: [String] = [exam.kind.displayName]
+        if let date = exam.examDate {
+            parts.append(date.formatted(date: .abbreviated, time: .omitted))
+        }
+        if !exam.location.isEmpty { parts.append(exam.location) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func examCountdown(_ exam: Exam) -> String {
+        guard let days = exam.daysUntilExam else { return "" }
+        switch days {
+        case 0: return "今天"
+        case 1: return "明天"
+        default: return "\(days) 天"
         }
     }
 

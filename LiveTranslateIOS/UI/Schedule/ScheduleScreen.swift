@@ -17,6 +17,8 @@ struct ScheduleScreen: View {
     @State private var viewModel = ScheduleViewModel()
     @State private var mode: Mode = .today
     @State private var showAddSheet = false
+    /// 创建考试 sheet (the exam entry on the timetable).
+    @State private var showingExamForm = false
     @State private var showImageImport = false
     @State private var shareItem: SharedFile?
     /// Finished-session prompt target (创建额外课堂 flow).
@@ -68,6 +70,11 @@ struct ScheduleScreen: View {
                         Label("从课表图片导入", systemImage: "photo.on.rectangle")
                     }
                     Button {
+                        showingExamForm = true
+                    } label: {
+                        Label("创建考试", systemImage: "graduationcap")
+                    }
+                    Button {
                         exportICS()
                     } label: {
                         Label("导出 .ics 日历", systemImage: "calendar.badge.arrow.up")
@@ -83,6 +90,9 @@ struct ScheduleScreen: View {
         .task {
             viewModel.attach(environment)
             await viewModel.reload()
+            weekExams = (try? environment.repository.exams(
+                courseID: nil, includeCandidates: false
+            )) ?? []
         }
         .onAppear {
             startMinuteTimer()
@@ -100,6 +110,12 @@ struct ScheduleScreen: View {
         .sheet(isPresented: $showImageImport) {
             NavigationStack {
                 ScheduleImageImportView(courses: viewModel.courses)
+                    .environment(environment)
+            }
+        }
+        .sheet(isPresented: $showingExamForm) {
+            NavigationStack {
+                ExamFormScreen(preselectedCourseID: nil, editing: nil)
                     .environment(environment)
             }
         }
@@ -262,14 +278,30 @@ struct ScheduleScreen: View {
                     .ltCard()
             } else {
                 ForEach(viewModel.weekDays, id: \.day) { group in
-                    if !group.items.isEmpty {
+                    if !group.items.isEmpty || !exams(on: group.day).isEmpty {
                         VStack(alignment: .leading, spacing: LTSpacing.s) {
-                            Text(Self.dayLabel(group.day))
-                                .font(LTTypography.cardTitle)
-                                .foregroundStyle(LTColors.textPrimary)
+                            HStack(spacing: LTSpacing.s) {
+                                Text(Self.dayLabel(group.day))
+                                    .font(LTTypography.cardTitle)
+                                    .foregroundStyle(LTColors.textPrimary)
+                                if !exams(on: group.day).isEmpty {
+                                    // 考试标记 — visually distinct from
+                                    // class occurrences (different symbol
+                                    // + chip, never a mixed row).
+                                    Label(
+                                        exams(on: group.day).count == 1 ? "1 场考试" : "\(exams(on: group.day).count) 场考试",
+                                        systemImage: "graduationcap.fill"
+                                    )
+                                    .font(LTTypography.caption)
+                                    .foregroundStyle(LTColors.warning)
+                                }
+                            }
                             VStack(spacing: LTSpacing.s) {
                                 ForEach(group.items) { occurrence in
                                     occurrenceRow(occurrence)
+                                }
+                                ForEach(exams(on: group.day)) { exam in
+                                    examMarker(exam)
                                 }
                             }
                         }
@@ -292,6 +324,50 @@ struct ScheduleScreen: View {
             onStart: { start(occurrence) },
             onOpenSchedule: nil
         )
+    }
+
+    // MARK: - Exam markers (课程表上的考试 — distinct from classes)
+
+    /// Scheduled exams on one calendar day.
+    @State private var weekExams: [Exam] = []
+
+    private func exams(on day: Date) -> [Exam] {
+        let key = Exam.dateKey(day)
+        return weekExams.filter { $0.examDateKey == key && $0.status == .scheduled }
+    }
+
+    /// One exam marker row — clearly an exam (not a class occurrence):
+    /// its own symbol, chip and no start button.
+    private func examMarker(_ exam: Exam) -> some View {
+        NavigationLink {
+            ExamDetailView(examID: exam.id)
+                .environment(environment)
+        } label: {
+            HStack(spacing: LTSpacing.m) {
+                LTIconBadge(symbol: exam.kind.symbol, tint: LTColors.warning, size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: LTSpacing.xs) {
+                        Text(exam.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(LTColors.textPrimary)
+                            .lineLimit(1)
+                        StatusChip(text: "考试", tint: LTColors.warning)
+                    }
+                    Text(exam.hasTime
+                        ? String(format: "%02d:%02d 开始", exam.startSecs / 3600, (exam.startSecs % 3600) / 60)
+                        : "时间待定")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(LTColors.textTertiary)
+            }
+            .padding(LTSpacing.m)
+            .ltCard()
+        }
+        .buttonStyle(.plain)
     }
 
     /// The controlled start entry (also the finished-session prompt).

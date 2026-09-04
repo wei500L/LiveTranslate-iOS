@@ -88,6 +88,12 @@ final class AppEnvironment {
     /// Local-notification 上课提醒 (rolling window over schedule
     /// occurrences; device-only, account-scoped defaults; never synced).
     let classReminders: ClassReminderScheduler
+    /// Exam-center reminders (考试提醒 + 每日学习提醒汇总; device-only,
+    /// account-scoped defaults; never synced).
+    let examReminders: ExamReminderScheduler
+    /// The real learning-timer controller (真实学习计时) — one per profile;
+    /// elapsed time is computed from timestamps, never a per-second task.
+    let studyActivityTracker: StudyActivityTracker
     /// Private-server cloud sync. Nil when the build configures no server
     /// URL (and always nil in the Debug demo environment — demo mode never
     /// touches the production server). One instance per app lifetime.
@@ -223,6 +229,13 @@ final class AppEnvironment {
         )
         let taskReminders = TaskReminderScheduler(defaults: syncDefaults)
         let classReminders = ClassReminderScheduler(defaults: syncDefaults)
+        let examReminders = ExamReminderScheduler(defaults: syncDefaults)
+        let studyActivityTracker = StudyActivityTracker(
+            repository: repository, defaults: syncDefaults
+        )
+        // System-calendar mirroring binds to the account-scoped defaults
+        // (EventKit identifiers are device-local and never sync).
+        ExamCalendarService.shared.configure(defaults: syncDefaults)
         let cloudSync: CloudSyncService?
         if let baseURL = ServerConfiguration.baseURL {
             cloudSync = CloudSyncService(
@@ -317,6 +330,8 @@ final class AppEnvironment {
             bookmarks: bookmarks,
             taskReminders: taskReminders,
             classReminders: classReminders,
+            examReminders: examReminders,
+            studyActivityTracker: studyActivityTracker,
             cloudSync: cloudSync,
             guestMigration: guestMigration,
             studyReviewService: studyService,
@@ -354,6 +369,8 @@ final class AppEnvironment {
         bookmarks: BookmarkStore,
         taskReminders: TaskReminderScheduler? = nil,
         classReminders: ClassReminderScheduler? = nil,
+        examReminders: ExamReminderScheduler? = nil,
+        studyActivityTracker: StudyActivityTracker? = nil,
         cloudSync: CloudSyncService?,
         guestMigration: GuestDataMigration? = nil,
         studyReviewService: any StudyReviewModelService = OpenAICompatibleStudyService(
@@ -390,6 +407,10 @@ final class AppEnvironment {
         self.bookmarks = bookmarks
         self.taskReminders = taskReminders ?? TaskReminderScheduler(defaults: .standard)
         self.classReminders = classReminders ?? ClassReminderScheduler(defaults: .standard)
+        self.examReminders = examReminders ?? ExamReminderScheduler(defaults: .standard)
+        self.studyActivityTracker = studyActivityTracker ?? StudyActivityTracker(
+            repository: repository, defaults: .standard
+        )
         self.cloudSync = cloudSync
         self.guestMigration = guestMigration
         self.studyReviewService = studyReviewService
@@ -504,7 +525,9 @@ final class AppEnvironment {
         SessionRecording.self, TranscriptCorrection.self,
         CourseSchedule.self, ScheduleException.self,
         CourseMaterial.self, MaterialPage.self, MaterialAnnotation.self,
-        CourseAssistantThread.self, CourseAssistantMessage.self
+        CourseAssistantThread.self, CourseAssistantMessage.self,
+        Exam.self, ExamTopic.self, StudyPlan.self, StudyPlanItem.self,
+        StudyActivity.self
     ])
 
     // MARK: - Translation configuration (single source of truth)
@@ -788,6 +811,35 @@ final class AppFlow {
     /// The start flow consumed the reminder target.
     func consumeClassReminder() {
         pendingClassOccurrenceKey = nil
+    }
+
+    // MARK: - Exam-reminder routing
+
+    /// A exam-reminder notification tapped. Non-nil means "route to the
+    /// review tab's 计划 segment and push the exam's detail" — IN-MEMORY
+    /// ONLY, consumed exactly once by ReviewCenterScreen.
+    var pendingExamID: UUID?
+
+    func openExamReminder(examID: UUID) {
+        selectedTab = .review
+        pendingExamID = examID
+    }
+
+    func consumeExamReminder() {
+        pendingExamID = nil
+    }
+
+    /// A study-plan (今日学习) reminder tapped: land on the review tab's
+    /// 今天 segment — IN-MEMORY ONLY, consumed exactly once.
+    var pendingTodayStudy = false
+
+    func openStudyPlanReminder() {
+        selectedTab = .review
+        pendingTodayStudy = true
+    }
+
+    func consumeStudyPlanReminder() {
+        pendingTodayStudy = false
     }
 
     #if DEBUG

@@ -279,6 +279,124 @@ enum SyncConflictResolver {
                     merged.assistantMode = server.assistantMode
                 }
             }
+        case .exam:
+            // Metadata: local intent wins, server fallback so a rebase
+            // never blanks a field. The candidate origin snapshot falls
+            // back to the server's when the local row has none.
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.examLocation ?? "").isEmpty,
+               let serverLocation = server.examLocation, !serverLocation.isEmpty {
+                merged.examLocation = server.examLocation
+            }
+            if (merged.examScope ?? "").isEmpty,
+               let serverScope = server.examScope, !serverScope.isEmpty {
+                merged.examScope = server.examScope
+            }
+            if (merged.examSource ?? "").isEmpty,
+               let serverSource = server.examSource, !serverSource.isEmpty {
+                merged.examSource = server.examSource
+            }
+            if merged.examDate == nil, let serverDate = server.examDate {
+                merged.examDate = serverDate
+            }
+            // done/cancelled are terminal-ish on the wire: a server-side
+            // done exam never regresses to scheduled through a rebase.
+            if server.examStatus == ExamStatus.done.rawValue {
+                merged.examStatus = ExamStatus.done.rawValue
+            }
+        case .examTopic:
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.topicDetail ?? "").isEmpty,
+               let serverDetail = server.topicDetail, !serverDetail.isEmpty {
+                merged.topicDetail = server.topicDetail
+            }
+            if (merged.topicSource ?? "").isEmpty,
+               let serverSource = server.topicSource, !serverSource.isEmpty {
+                merged.topicSource = server.topicSource
+            }
+            // mastered is user-set only: once the server says mastered,
+            // a stale local push never un-masters it.
+            if server.topicStatus == ExamTopicStatus.mastered.rawValue {
+                merged.topicStatus = ExamTopicStatus.mastered.rawValue
+            }
+        case .studyPlan:
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if merged.planStartDate == nil, let serverStart = server.planStartDate {
+                merged.planStartDate = serverStart
+            }
+            if merged.planEndDate == nil, let serverEnd = server.planEndDate {
+                merged.planEndDate = serverEnd
+            }
+            if (merged.planRestDays ?? "").isEmpty,
+               let serverRest = server.planRestDays, !serverRest.isEmpty {
+                merged.planRestDays = server.planRestDays
+            }
+            if (merged.planFocusTopics ?? "").isEmpty,
+               let serverFocus = server.planFocusTopics, !serverFocus.isEmpty {
+                merged.planFocusTopics = server.planFocusTopics
+            }
+            if (merged.planBlockedTimes ?? "").isEmpty,
+               let serverBlocked = server.planBlockedTimes, !serverBlocked.isEmpty {
+                merged.planBlockedTimes = server.planBlockedTimes
+            }
+        case .studyPlanItem:
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.planItemUserNote ?? "").isEmpty,
+               let serverNote = server.planItemUserNote, !serverNote.isEmpty {
+                merged.planItemUserNote = server.planItemUserNote
+            }
+            if (merged.planItemSource ?? "").isEmpty,
+               let serverSource = server.planItemSource, !serverSource.isEmpty {
+                merged.planItemSource = server.planItemSource
+            }
+            // Status: the newer statusChangedAt wins — a stale pending
+            // local push never blanks a done item; done/skipped are
+            // sticky unless the local change is genuinely newer.
+            let localChanged = merged.planItemStatusChangedAt ?? .distantPast
+            let serverChanged = server.planItemStatusChangedAt ?? .distantPast
+            if serverChanged > localChanged {
+                merged.planItemStatus = server.planItemStatus
+                merged.planItemStatusChangedAt = server.planItemStatusChangedAt
+            } else if server.planItemStatus == StudyPlanItemStatus.done.rawValue
+                || server.planItemStatus == StudyPlanItemStatus.skipped.rawValue {
+                if merged.planItemStatus == StudyPlanItemStatus.pending.rawValue
+                    || merged.planItemStatus == StudyPlanItemStatus.inProgress.rawValue {
+                    merged.planItemStatus = server.planItemStatus
+                    merged.planItemStatusChangedAt = server.planItemStatusChangedAt
+                }
+            }
+            // Actual minutes: monotonic — the larger survives.
+            let localMinutes = merged.planItemActualMinutes ?? 0
+            if (server.planItemActualMinutes ?? 0) > localMinutes {
+                merged.planItemActualMinutes = server.planItemActualMinutes
+            }
+        case .studyActivity:
+            // Append-style record: terminal statuses are sticky server-
+            // side too; duration merges by MAX (another device's minutes
+            // never lost); the end time rides the terminal status.
+            if let serverStatus = server.activityStatus,
+               serverStatus == StudyActivityStatus.completed.rawValue
+                || serverStatus == StudyActivityStatus.abandoned.rawValue {
+                if merged.activityStatus == StudyActivityStatus.inProgress.rawValue {
+                    merged.activityStatus = serverStatus
+                    merged.activityEndedAt = server.activityEndedAt
+                }
+            }
+            if (server.activityDurationSeconds ?? 0)
+                > (merged.activityDurationSeconds ?? 0) {
+                merged.activityDurationSeconds = server.activityDurationSeconds
+            }
+            if merged.activityStartedAt == nil, let serverStarted = server.activityStartedAt {
+                merged.activityStartedAt = serverStarted
+            }
         }
         return merged
     }

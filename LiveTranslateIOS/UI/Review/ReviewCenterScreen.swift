@@ -1,14 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// 复习 tab — the review center. Five segments (今天 · 术语 · 卡片 · 任务 ·
-/// 书签); bookmarks, the former standalone tab, live on as one segment.
+/// 复习 tab — the review center. Six segments (今天 · 计划 · 术语 · 卡片 ·
+/// 任务 · 书签); bookmarks, the former standalone tab, live on as one
+/// segment, and the 计划 segment hosts the exam center (考试列表).
 ///
 /// Everything shown derives from real persisted rows — counts come from
 /// the repository, never from hardcoded values.
 struct ReviewCenterScreen: View {
     enum Segment: String, CaseIterable, Identifiable {
         case today = "今天"
+        case plan = "计划"
         case terms = "术语"
         case cards = "卡片"
         case tasks = "任务"
@@ -23,6 +25,7 @@ struct ReviewCenterScreen: View {
     @State private var selectedCourseID: UUID?
     @State private var reviewCourseID: UUID?
     @State private var showingReviewSession = false
+    @State private var pushedExamID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -38,11 +41,14 @@ struct ReviewCenterScreen: View {
                                 switchToTerms: { segment = .terms },
                                 switchToTasks: { segment = .tasks },
                                 switchToCards: { segment = .cards },
+                                switchToPlan: { segment = .plan },
                                 onStartReview: { courseID in
                                     reviewCourseID = courseID
                                     showingReviewSession = true
                                 }
                             )
+                            case .plan:
+                                ExamListScreen(courses: courses)
                             case .terms:
                                 TermBookView(courses: $courses, selectedCourseID: $selectedCourseID)
                             case .cards:
@@ -67,15 +73,40 @@ struct ReviewCenterScreen: View {
             }
             .navigationTitle("复习")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: Binding(
+                get: { pushedExamID != nil },
+                set: { if !$0 { pushedExamID = nil } }
+            )) {
+                if let pushedExamID {
+                    ExamDetailView(examID: pushedExamID)
+                        .environment(environment)
+                }
+            }
         }
         .task {
             courses = (try? environment.repository.courses()) ?? []
+            consumePendingRoutes()
         }
         .onAppear {
             courses = (try? environment.repository.courses()) ?? courses
+            consumePendingRoutes()
         }
         .fullScreenCover(isPresented: $showingReviewSession) {
             ReviewSessionView(courseID: reviewCourseID)
+        }
+    }
+
+    /// Exam/study reminder deep links: route once, land on the right
+    /// segment and push the exam detail.
+    private func consumePendingRoutes() {
+        if let examID = environment.flow.pendingExamID {
+            environment.flow.consumeExamReminder()
+            segment = .plan
+            pushedExamID = examID
+        }
+        if environment.flow.pendingTodayStudy {
+            environment.flow.consumeStudyPlanReminder()
+            segment = .today
         }
     }
 
@@ -118,9 +149,14 @@ struct ReviewCenterScreen: View {
 
 // MARK: - Today
 
-/// The 今天 segment: what actually needs doing today. Every number comes
-/// from a repository query; sections with nothing to do are hidden, so
-/// an empty day is an empty page (that is the honest state).
+/// The 今天 segment: the single daily study entry (今天学什么).
+/// Priority order: running learning timer → today's/overdue tasks →
+/// today's study plan → due cards → AI candidates → upcoming exams →
+/// unfinished learning activities. The same source never appears twice
+/// (a task already carried by a plan item is not repeated in the task
+/// card). Every number comes from a repository query; sections with
+/// nothing to do are hidden, so an empty day is an empty page (the
+/// honest state).
 struct TodayView: View {
     @Environment(AppEnvironment.self) private var environment
     let courses: [Course]
@@ -128,6 +164,7 @@ struct TodayView: View {
     var switchToTerms: () -> Void
     var switchToTasks: () -> Void
     var switchToCards: () -> Void
+    var switchToPlan: () -> Void
     var onStartReview: (UUID?) -> Void
 
     @State private var dueCardCount = 0
@@ -139,6 +176,16 @@ struct TodayView: View {
     @State private var lastReviewedAt: Date?
     @State private var lastReviewCount = 0
     @State private var staleSessions: [ClassroomSession] = []
+    /// Today's plan items (the day's executable安排).
+    @State private var todayPlanItems: [StudyPlanItem] = []
+    /// Plan items from earlier days still pending (未完成 — the user
+    /// chooses 延期/跳过/重排; nothing auto-fails).
+    @State private var missedPlanItems: [StudyPlanItem] = []
+    /// Task ids already carried by a plan item (deduplication).
+    @State private var plannedTaskIDs: Set<UUID> = []
+    /// Upcoming exams within 14 days (scheduled only — real near exams).
+    @State private var upcomingExams: [Exam] = []
+    @State private var todayStudyMinutes = 0
     @State private var isLoaded = false
 
     var body: some View {
@@ -147,17 +194,22 @@ struct TodayView: View {
                 LTEmptyState(
                     symbol: "checkmark.seal",
                     title: "今天没有待复习的内容",
-                    message: "新保存的术语、卡片和任务会出现在这里"
+                    message: "新保存的术语、卡片和任务会出现在这里；也可以选择一门课程开始复习"
                 )
             } else if isLoaded {
+                StudyActivityCard()
+                if !dueTasks.isEmpty || !overdueTasks.isEmpty {
+                    taskCard
+                }
+                planCard
                 if dueCardCount > 0 || newCardCount > 0 {
                     reviewCard
                 }
-                if !overdueTasks.isEmpty || !upcomingTasks.isEmpty {
-                    taskCard
-                }
                 if pendingConfirmCount > 0 {
                     candidateCard
+                }
+                if !upcomingExams.isEmpty {
+                    examCard
                 }
                 if !recentNewTerms.isEmpty {
                     newTermsCard
@@ -165,7 +217,7 @@ struct TodayView: View {
                 if !staleSessions.isEmpty {
                     organizeCard
                 }
-                if lastReviewedAt != nil {
+                if lastReviewedAt != nil || todayStudyMinutes > 0 {
                     progressCard
                 }
             } else {
@@ -178,9 +230,20 @@ struct TodayView: View {
     }
 
     private var hasNothingTodo: Bool {
-        dueCardCount == 0 && newCardCount == 0 && overdueTasks.isEmpty
-            && upcomingTasks.isEmpty && pendingConfirmCount == 0
+        dueCardCount == 0 && newCardCount == 0 && dueTasks.isEmpty
+            && overdueTasks.isEmpty && pendingConfirmCount == 0
             && recentNewTerms.isEmpty && staleSessions.isEmpty
+            && todayPlanItems.isEmpty && missedPlanItems.isEmpty
+            && upcomingExams.isEmpty
+            && !environment.studyActivityTracker.hasActiveActivity
+    }
+
+    /// Tasks due today (date compare) — separated from the overdue set.
+    private var dueTasks: [StudyTask] {
+        upcomingTasks.filter { task in
+            guard let dueAt = task.dueAt else { return false }
+            return Calendar.current.isDateInToday(dueAt)
+        }
     }
 
     // MARK: Sections
@@ -223,16 +286,80 @@ struct TodayView: View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
             LTSectionHeader(title: "任务", actionTitle: "全部任务") { switchToTasks() }
             VStack(spacing: LTSpacing.xs) {
-                ForEach(overdueTasks.prefix(3)) { task in
+                // Deduplication: a task already carried by a plan item is
+                // shown by the plan card, never repeated here.
+                ForEach(overdueTasks.filter { !plannedTaskIDs.contains($0.id) }.prefix(3)) { task in
                     taskRow(task, prefix: "已逾期")
                 }
-                ForEach(upcomingTasks.prefix(3)) { task in
-                    taskRow(task, prefix: nil)
+                ForEach(dueTasks.filter { !plannedTaskIDs.contains($0.id) }.prefix(3)) { task in
+                    taskRow(task, prefix: "今天截止")
                 }
             }
         }
         .padding(LTSpacing.l)
         .ltCard()
+    }
+
+    /// 今日学习计划 — the day's plan items (missed ones follow), each
+    /// leading to the real content and the timer.
+    @ViewBuilder
+    private var planCard: some View {
+        if !todayPlanItems.isEmpty || !missedPlanItems.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                LTSectionHeader(title: "今日学习计划", actionTitle: "计划") { switchToPlan() }
+                VStack(spacing: LTSpacing.xs) {
+                    ForEach(todayPlanItems) { item in
+                        TodayPlanItemRow(item: item)
+                    }
+                    ForEach(missedPlanItems.prefix(2)) { item in
+                        TodayPlanItemRow(item: item, missed: true)
+                    }
+                }
+            }
+            .padding(LTSpacing.l)
+            .ltCard()
+        }
+    }
+
+    /// 即将到来的考试 (within 14 days, scheduled) — real near exams only.
+    private var examCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "近期考试", actionTitle: "考试中心") { switchToPlan() }
+            VStack(spacing: LTSpacing.xs) {
+                ForEach(upcomingExams) { exam in
+                    NavigationLink {
+                        ExamDetailView(examID: exam.id)
+                            .environment(environment)
+                    } label: {
+                        HStack(spacing: LTSpacing.s) {
+                            LTIconBadge(symbol: exam.kind.symbol, tint: LTColors.accentGreen, size: 30)
+                            Text(exam.title)
+                                .font(.subheadline)
+                                .foregroundStyle(LTColors.textPrimary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(examCountdown(exam))
+                                .font(LTTypography.timestamp)
+                                .foregroundStyle(LTColors.warning)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(LTSpacing.l)
+        .ltCard()
+    }
+
+    private func examCountdown(_ exam: Exam) -> String {
+        guard let days = exam.daysUntilExam else { return "" }
+        switch days {
+        case let d where d < 0: return "已结束"
+        case 0: return "今天"
+        case 1: return "明天"
+        default: return "\(days) 天后"
+        }
     }
 
     private func taskRow(_ task: StudyTask, prefix: String?) -> some View {
@@ -351,13 +478,18 @@ struct TodayView: View {
         .ltCard()
     }
 
-    /// Recent review progress — real numbers from the card rows (latest
-    /// lastReviewedAt across all cards), never fabricated.
+    /// Recent review progress + today's real study minutes — real
+    /// numbers from the card/activity rows, never fabricated.
     private var progressCard: some View {
         VStack(alignment: .leading, spacing: LTSpacing.xs) {
             LTSectionHeader(title: "最近一次复习")
             if let lastReviewedAt {
                 Text("\(lastReviewedAt.formatted(.relative(presentation: .named)))复习了内容，共 \(lastReviewCount) 张卡片有复习记录")
+                    .font(.footnote)
+                    .foregroundStyle(LTColors.textSecondary)
+            }
+            if todayStudyMinutes > 0 {
+                Text("今天已学习 \(todayStudyMinutes) 分钟")
                     .font(.footnote)
                     .foregroundStyle(LTColors.textSecondary)
             }
@@ -383,6 +515,38 @@ struct TodayView: View {
         }
         pendingConfirmCount = ((try? environment.repository.pendingConfirmTasks()) ?? []).count
 
+        // Today's plan: the day's items + still-pending items from
+        // earlier days (未完成, shown honestly). A task carried by a plan
+        // item is deduplicated from the task card.
+        let todayKey = Exam.dateKey(.now)
+        let activePlans = ((try? environment.repository.studyPlans(examID: nil)) ?? [])
+            .filter { $0.status == .active }
+        var planned: [StudyPlanItem] = []
+        for plan in activePlans {
+            planned += (try? environment.repository.studyPlanItems(planID: plan.id)) ?? []
+        }
+        todayPlanItems = planned
+            .filter { $0.itemDateKey == todayKey && $0.status != .skipped }
+            .sorted { $0.itemOrder < $1.itemOrder }
+        missedPlanItems = planned
+            .filter { $0.itemDateKey < todayKey && $0.status == .pending }
+            .sorted { $0.itemDateKey < $1.itemDateKey }
+        plannedTaskIDs = Set(
+            planned.compactMap { item in
+                item.kind == .task ? item.source?.taskID : nil
+            }
+        )
+
+        // Upcoming exams: scheduled, within the next 14 days (real near
+        // exams only — past/cancelled exams never show).
+        upcomingExams = ((try? environment.repository.exams(courseID: nil, includeCandidates: false)) ?? [])
+            .filter { exam in
+                guard exam.status == .scheduled, let days = exam.daysUntilExam else { return false }
+                return days >= 0 && days <= 14
+            }
+
+        todayStudyMinutes = (try? environment.repository.studyActivityMinutes(on: .now)) ?? 0
+
         let terms = (try? environment.repository.terms(courseID: nil)) ?? []
         recentNewTerms = terms
             .filter { $0.status == .new }
@@ -407,6 +571,181 @@ struct TodayView: View {
         lastReviewedAt = reviewed.max()
         lastReviewCount = allCards.filter { $0.reviewCount > 0 }.count
         isLoaded = true
+    }
+}
+
+/// One plan item in the 今天 list: title, estimated minutes, the start
+/// (timer) / complete / defer actions and the real jump target.
+struct TodayPlanItemRow: View {
+    @Environment(AppEnvironment.self) private var environment
+    let item: StudyPlanItem
+    var missed: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.xs) {
+            HStack(spacing: LTSpacing.s) {
+                Image(systemName: item.kind.symbol)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.accentCyan)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    if missed {
+                        Text("未完成 · \(missedDateLabel)")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.warning)
+                    }
+                    Text(item.title)
+                        .font(.subheadline)
+                        .foregroundStyle(LTColors.textPrimary)
+                        .lineLimit(1)
+                    Text(statusLine)
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                Spacer()
+                if item.status == .done {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(LTColors.accentGreen)
+                }
+            }
+            if item.status != .done && item.status != .skipped {
+                HStack(spacing: LTSpacing.s) {
+                    Button {
+                        startTimer()
+                    } label: {
+                        Label("开始", systemImage: "play.fill")
+                            .font(.footnote.weight(.semibold))
+                            .frame(minWidth: 72, minHeight: 32)
+                    }
+                    .buttonStyle(LTPrimaryButtonStyle())
+                    Button {
+                        try? environment.repository.setStudyPlanItemStatus(item, status: .done)
+                    } label: {
+                        Text("完成")
+                            .font(.footnote)
+                            .frame(minWidth: 56, minHeight: 32)
+                    }
+                    .buttonStyle(LTSecondaryButtonStyle())
+                    Button {
+                        deferToTomorrow()
+                    } label: {
+                        Text("延到明天")
+                            .font(.footnote)
+                            .foregroundStyle(LTColors.textSecondary)
+                            .frame(minHeight: 32)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    jumpLink
+                }
+            }
+        }
+        .padding(LTSpacing.s)
+        .background(RoundedRectangle(cornerRadius: LTRadius.small).fill(LTColors.surfacePrimary.opacity(0.6)))
+    }
+
+    private var statusLine: String {
+        var parts = ["预计 \(item.estimatedMinutes) 分钟"]
+        if item.actualMinutes > 0 { parts.append("实际 \(item.actualMinutes) 分钟") }
+        if item.status == .inProgress { parts.append("进行中") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var missedDateLabel: String {
+        guard let date = item.itemDate else { return "" }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    /// The real jump target: the item's source opens the actual content.
+    @ViewBuilder
+    private var jumpLink: some View {
+        if let source = item.source {
+            if let materialID = source.materialID {
+                NavigationLink {
+                    MaterialReaderScreen(
+                        materialID: materialID,
+                        initialPage: source.pageNumber
+                    )
+                    .environment(environment)
+                } label: {
+                    jumpLabel("查看资料")
+                }
+                .buttonStyle(.plain)
+            } else if let sessionID = source.sessionID {
+                NavigationLink {
+                    SessionDetailView(sessionID: sessionID)
+                } label: {
+                    jumpLabel("查看课堂")
+                }
+                .buttonStyle(.plain)
+            } else if let taskID = source.taskID,
+                      let task = resolvedTask(taskID) {
+                NavigationLink {
+                    TaskDetailView(task: task, courses: [])
+                } label: {
+                    jumpLabel("查看任务")
+                }
+                .buttonStyle(.plain)
+            } else if source.topicID != nil {
+                // The topic's home is the exam detail (the topics card).
+                NavigationLink {
+                    if let examID = item.examID {
+                        ExamDetailView(examID: examID)
+                            .environment(environment)
+                    }
+                } label: {
+                    jumpLabel("查看主题")
+                }
+                .buttonStyle(.plain)
+            } else if item.kind == .cards || item.kind == .terms {
+                Button {
+                    showingReviewQueue = true
+                } label: {
+                    jumpLabel("去复习")
+                }
+                .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $showingReviewQueue) {
+                    ReviewSessionView(courseID: item.source?.courseID)
+                }
+            }
+        }
+    }
+
+    @State private var showingReviewQueue = false
+
+    private func resolvedTask(_ taskID: UUID) -> StudyTask? {
+        ((try? environment.repository.tasks(courseID: nil, includeDone: true)) ?? [])
+            .first { $0.id == taskID }
+    }
+
+    private func jumpLabel(_ text: String) -> some View {
+        HStack(spacing: 2) {
+            Text(text)
+                .font(LTTypography.caption)
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+        }
+        .foregroundStyle(LTColors.accentBlue)
+        .frame(minHeight: 32)
+    }
+
+    private func startTimer() {
+        guard !environment.studyActivityTracker.hasActiveActivity else { return }
+        let started = environment.studyActivityTracker.start(StudyActivityDraft(
+            planItemID: item.id,
+            examID: item.examID,
+            topicID: item.source?.topicID
+        ))
+        if started {
+            try? environment.repository.setStudyPlanItemStatus(item, status: .inProgress)
+        }
+    }
+
+    private func deferToTomorrow() {
+        guard let date = item.itemDate,
+              let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: date) else { return }
+        try? environment.repository.setStudyPlanItemStatus(item, status: .deferred)
+        try? environment.repository.setStudyPlanItemDate(item, dateKey: Exam.dateKey(tomorrow))
     }
 }
 

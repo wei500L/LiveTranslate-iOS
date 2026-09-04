@@ -54,6 +54,13 @@ targets:
           LiveTranslate uses the camera to photograph blackboards and slides
           during class. Photos stay on your device unless you enable cloud
           sync.
+        # Exam-center calendar mirroring: WRITE-ONLY access (the app never
+        # reads the user's calendars). Requested only when the user taps
+        # 加入系统日历; a denial changes nothing in-app.
+        NSCalendarsWriteOnlyAccessUsageDescription: >-
+          LiveTranslate can add exams and study-plan blocks to a calendar
+          you choose. The app only writes events you ask for; it never
+          reads your calendars.
         UIBackgroundModes:
           - audio
         ITSAppUsesNonExemptEncryption: false

@@ -19,6 +19,12 @@ struct SearchScreen: View {
     @State private var materialHits: [MaterialHit] = []
     /// Assistant-history hits (question/answer text).
     @State private var assistantHits: [(message: CourseAssistantMessage, thread: CourseAssistantThread)] = []
+    /// Exam-center hits (exam title/scope/note, topic titles, plan-item
+    /// titles/notes, activity notes).
+    @State private var examHits: [Exam] = []
+    @State private var examTopicHits: [(topic: ExamTopic, examID: UUID)] = []
+    @State private var planItemHits: [StudyPlanItem] = []
+    @State private var activityHits: [StudyActivity] = []
     @State private var viewingTerm: GlossaryTerm?
     @State private var viewingTask: StudyTask?
     @State private var viewingCard: StudyCard?
@@ -63,7 +69,7 @@ struct SearchScreen: View {
                             LTEmptyState(
                                 symbol: "magnifyingglass",
                                 title: "搜索全部课堂",
-                                message: "支持课堂名称、笔记、学习整理、术语、卡片、任务、课程资料页文字、问答历史、中文翻译与俄语原文"
+                                message: "支持课堂名称、笔记、学习整理、术语、卡片、任务、考试、学习计划、课程资料页文字、问答历史、中文翻译与俄语原文"
                             )
                         }
                     }
@@ -131,6 +137,8 @@ struct SearchScreen: View {
     private var resultHeader: some View {
         let learningCount = termHits.count + cardHits.count + taskHits.count
             + materialHits.count + assistantHits.count
+            + examHits.count + examTopicHits.count + planItemHits.count
+            + activityHits.count
         let sessionPart = results.isEmpty ? "没有匹配的课堂" : "共 \(results.count) 堂课匹配"
         let learningPart = learningCount > 0 ? " · 学习资料 \(learningCount) 条" : ""
         return Text(sessionPart + learningPart)
@@ -143,7 +151,9 @@ struct SearchScreen: View {
     @ViewBuilder
     private var learningResultList: some View {
         if !termHits.isEmpty || !cardHits.isEmpty || !taskHits.isEmpty
-            || !materialHits.isEmpty || !assistantHits.isEmpty {
+            || !materialHits.isEmpty || !assistantHits.isEmpty
+            || !examHits.isEmpty || !examTopicHits.isEmpty || !planItemHits.isEmpty
+            || !activityHits.isEmpty {
             VStack(alignment: .leading, spacing: LTSpacing.s) {
                 LTSectionHeader(title: "学习资料")
                 VStack(spacing: LTSpacing.xs) {
@@ -207,6 +217,64 @@ struct SearchScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+                    }
+                    ForEach(examHits.prefix(4)) { exam in
+                        NavigationLink {
+                            ExamDetailView(examID: exam.id)
+                                .environment(environment)
+                        } label: {
+                            learningRow(
+                                symbol: exam.kind.symbol,
+                                tint: LTColors.accentGreen,
+                                title: exam.title,
+                                subtitle: examSubtitle(exam),
+                                chip: "考试 · \(exam.kind.displayName)"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(examTopicHits.prefix(4), id: \.topic.id) { hit in
+                        NavigationLink {
+                            ExamDetailView(examID: hit.examID)
+                                .environment(environment)
+                        } label: {
+                            learningRow(
+                                symbol: "lightbulb",
+                                tint: LTColors.accentCyan,
+                                title: hit.topic.title,
+                                subtitle: hit.topic.status.displayName,
+                                chip: "考试主题"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(planItemHits.prefix(4)) { item in
+                        NavigationLink {
+                            StudyPlanDetailView(planID: item.planID)
+                                .environment(environment)
+                        } label: {
+                            learningRow(
+                                symbol: item.kind.symbol,
+                                tint: LTColors.warning,
+                                title: item.title,
+                                subtitle: item.itemDate?.formatted(
+                                    date: .abbreviated, time: .omitted
+                                ) ?? item.status.displayName,
+                                chip: "学习计划"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(activityHits.prefix(3)) { activity in
+                        learningRow(
+                            symbol: "timer",
+                            tint: LTColors.accentCyan,
+                            title: "学习记录 · \(activity.note)",
+                            subtitle: activity.startedAt.formatted(
+                                date: .abbreviated, time: .shortened
+                            ),
+                            chip: "学习活动"
+                        )
                     }
                 }
             }
@@ -336,6 +404,10 @@ struct SearchScreen: View {
             taskHits = []
             materialHits = []
             assistantHits = []
+            examHits = []
+            examTopicHits = []
+            planItemHits = []
+            activityHits = []
             return
         }
         debounceTask = Task {
@@ -372,7 +444,40 @@ struct SearchScreen: View {
         materialHits = materialMatches(query)
         // Assistant history (question and answer text).
         assistantHits = (try? environment.repository.assistantMessages(matching: query)) ?? []
+        // Exam center: exams (title/scope/note), topics (title/detail),
+        // plan items (title/note). Search-note hits ride the activity
+        // rows the same way — their note field participates via the
+        // repository's matching query.
+        examHits = (try? environment.repository.exams(matching: query)) ?? []
+        examTopicHits = topicMatches(query)
+        planItemHits = (try? environment.repository.studyPlanItems(matching: query)) ?? []
+        activityHits = (try? environment.repository.studyActivities(matching: query)) ?? []
         appliedQuery = query
+    }
+
+    /// Topic search needs the parent exam id for the jump — a small
+    /// in-memory join over the exams the repository returned.
+    private func topicMatches(_ query: String) -> [(topic: ExamTopic, examID: UUID)] {
+        let exams = (try? environment.repository.exams(courseID: nil, includeCandidates: false)) ?? []
+        var hits: [(ExamTopic, UUID)] = []
+        let lowered = query.lowercased()
+        for exam in exams {
+            let topics = (try? environment.repository.examTopics(examID: exam.id)) ?? []
+            for topic in topics
+            where topic.title.lowercased().contains(lowered)
+                || topic.detail.lowercased().contains(lowered) {
+                hits.append((topic, exam.id))
+            }
+        }
+        return Array(hits.prefix(6))
+    }
+
+    private func examSubtitle(_ exam: Exam) -> String {
+        if !exam.scopeText.isEmpty { return exam.scopeText }
+        if let date = exam.examDate {
+            return date.formatted(date: .abbreviated, time: .omitted)
+        }
+        return ""
     }
 
     /// Material matching: page text, digest, title/file name and the

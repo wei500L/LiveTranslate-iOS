@@ -492,6 +492,208 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Cloud-sync apply for a message record.
     func applyRemoteAssistantMessage(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteAssistantMessageByID(_ id: UUID) throws
+
+    // MARK: Exams (考试中心)
+    // AI candidates (origin == .aiCandidate rows with status .pending)
+    // are device-local like pendingConfirm tasks: they never notify the
+    // sync observer, never register notifications and never generate
+    // plans, until the user confirms them. Deleting an EXAM cascades its
+    // topics + plans + plan items (server mirrors) and DETACHES its study
+    // activities (the learning history survives). Deleting a COURSE
+    // clears the exam's courseID (转入未归类).
+
+    // Exams
+
+    /// All exams (nil courseID = every course incl. 未归类), soonest date
+    /// first. AI candidates included only when `includeCandidates`.
+    func exams(courseID: UUID?, includeCandidates: Bool) throws -> [Exam]
+    func exam(id: UUID) throws -> Exam?
+    /// Exams whose title/scope/note contains the query (search).
+    func exams(matching query: String) throws -> [Exam]
+    /// AI candidates awaiting confirmation (device-local rows).
+    func pendingExamCandidates() throws -> [Exam]
+    /// Persists a new exam (or an AI candidate when the draft carries
+    /// `.pending`). Notifies sync for real exams only.
+    func addExam(_ draft: ExamDraft) throws -> Exam
+    /// Applies every field of the draft (edit sheet save). Notifies sync
+    /// unless the row is still a device-local candidate.
+    func updateExam(_ exam: Exam, with draft: ExamDraft) throws
+    /// Confirms an AI candidate into a real exam (status pending →
+    /// scheduled): first sync push of a previously device-local row.
+    func confirmExam(_ exam: Exam) throws
+    /// Status change (done/cancelled/re-scheduled). Notifies sync unless
+    /// the row is still a candidate.
+    func setExamStatus(_ exam: Exam, status: ExamStatus) throws
+    /// Deletes the exam: cascades topics + plans + items (server
+    /// mirrors), detaches activities. Notifies sync.
+    func deleteExam(_ exam: Exam) throws
+    func applyRemoteExam(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteExamByID(_ id: UUID) throws
+
+    // Exam topics
+
+    /// All topics of one exam, focus/important first then title order.
+    func examTopics(examID: UUID) throws -> [ExamTopic]
+    func addExamTopic(_ draft: ExamTopicDraft) throws -> ExamTopic
+    /// Full-field update (edit sheet). Notifies sync.
+    func updateExamTopic(_ topic: ExamTopic, with draft: ExamTopicDraft) throws
+    /// Status + self-rating setters. Notifies sync. `mastered` is only
+    /// reachable through the UI's explicit user action.
+    func setExamTopicStatus(_ topic: ExamTopic, status: ExamTopicStatus) throws
+    func setExamTopicSelfRating(_ topic: ExamTopic, rating: ExamTopicSelfRating) throws
+    func deleteExamTopic(_ topic: ExamTopic) throws
+    func applyRemoteExamTopic(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteExamTopicByID(_ id: UUID) throws
+
+    // Study plans
+
+    /// All plans (nil examID = every exam).
+    func studyPlans(examID: UUID?) throws -> [StudyPlan]
+    func addStudyPlan(_ draft: StudyPlanDraft) throws -> StudyPlan
+    func updateStudyPlan(_ plan: StudyPlan, with draft: StudyPlanDraft) throws
+    /// Status change (pause/resume/archive). Notifies sync.
+    func setStudyPlanStatus(_ plan: StudyPlan, status: StudyPlanStatus) throws
+    /// Deletes the plan: cascades its items (server mirrors). Notifies
+    /// sync.
+    func deleteStudyPlan(_ plan: StudyPlan) throws
+    func applyRemoteStudyPlan(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteStudyPlanByID(_ id: UUID) throws
+
+    // Plan items
+
+    /// All items of one plan, date then order.
+    func studyPlanItems(planID: UUID) throws -> [StudyPlanItem]
+    /// One plan item by id (the timer card's title resolution).
+    func studyPlanItem(id: UUID) throws -> StudyPlanItem?
+    /// Items across every plan scheduled on one date key.
+    func studyPlanItems(dateKey: String) throws -> [StudyPlanItem]
+    /// Items whose title/note contains the query (search).
+    func studyPlanItems(matching query: String) throws -> [StudyPlanItem]
+    /// Persists generated or manually-created items. Notifies sync.
+    func addStudyPlanItems(_ drafts: [StudyPlanItemDraft]) throws -> [StudyPlanItem]
+    /// Single-field updates (title/estimated/delay/skip status). Notify
+    /// sync; every status change stamps statusChangedAt (the merge
+    /// order).
+    func updateStudyPlanItem(_ item: StudyPlanItem, title: String?, estimatedMinutes: Int?, userNote: String?) throws
+    func setStudyPlanItemStatus(_ item: StudyPlanItem, status: StudyPlanItemStatus) throws
+    func setStudyPlanItemDate(_ item: StudyPlanItem, dateKey: String) throws
+    /// Writes the activity's measured minutes back onto the item
+    /// (monotonic — never decreases). Notifies sync.
+    func recordStudyPlanItemActualMinutes(_ item: StudyPlanItem, minutes: Int) throws
+    func deleteStudyPlanItem(_ item: StudyPlanItem) throws
+    func applyRemoteStudyPlanItem(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteStudyPlanItemByID(_ id: UUID) throws
+
+    // Study activities (真实学习计时)
+
+    /// All activities (nil examID = every exam), newest first.
+    func studyActivities(examID: UUID?) throws -> [StudyActivity]
+    /// The single in-progress activity, if any (exactly-one invariant).
+    func currentStudyActivity() throws -> StudyActivity?
+    /// Starts a new activity — refuses while another is in progress.
+    /// Notifies sync.
+    func startStudyActivity(_ draft: StudyActivityDraft) throws -> StudyActivity?
+    /// Terminal transition (completed/abandoned): folds active time into
+    /// duration, writes the minutes back onto the plan item. Notifies
+    /// sync.
+    func finishStudyActivity(_ activity: StudyActivity, status: StudyActivityStatus, note: String) throws
+    /// Device-local pause/resume (folds time; no sync notification —
+    /// the folded duration syncs at the next terminal or background
+    /// checkpoint).
+    func pauseStudyActivity(_ activity: StudyActivity) throws
+    func resumeStudyActivity(_ activity: StudyActivity) throws
+    /// Background checkpoint: folds elapsed active time into
+    /// durationSeconds WITHOUT ending the activity. Notifies sync so
+    /// another device sees honest progress.
+    func checkpointStudyActivity(_ activity: StudyActivity) throws
+    /// Total ACTIVE minutes on one calendar day (今日学习统计 — classroom
+    /// recording time never counts, only these rows).
+    func studyActivityMinutes(on date: Date) throws -> Int
+    /// Activities whose note contains the query (search).
+    func studyActivities(matching query: String) throws -> [StudyActivity]
+    func applyRemoteStudyActivity(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteStudyActivityByID(_ id: UUID) throws
+}
+
+/// A new exam (title + date required). AI candidates pass
+/// `status: .pending, origin: .ai` — the row stays local until confirmed.
+struct ExamDraft: Sendable, Equatable {
+    var title: String
+    var courseID: UUID? = nil
+    var kind: ExamKind = .custom
+    var examDateKey: String
+    var startSecs: Int = -1
+    var endSecs: Int = -1
+    var location: String = ""
+    var scopeText: String = ""
+    var note: String = ""
+    var targetScore: String = ""
+    var status: ExamStatus = .scheduled
+    var origin: ExamOrigin = .manual
+    var source: ExamSource? = nil
+}
+
+/// A new exam topic.
+struct ExamTopicDraft: Sendable, Equatable {
+    var examID: UUID
+    var title: String
+    var detail: String = ""
+    var importance: ExamTopicImportance = .normal
+    var selfRating: ExamTopicSelfRating = .none
+    var status: ExamTopicStatus = .notStarted
+    var source: TopicSource? = nil
+    var userEdited: Bool = false
+}
+
+/// A new study plan (created after the user confirms a PREVIEW — the
+/// repository never persists a generated preview directly).
+struct StudyPlanDraft: Sendable, Equatable {
+    var examID: UUID
+    var title: String
+    var startDateKey: String
+    var endDateKey: String
+    var weekdayMinutes: Int = 60
+    var weekendMinutes: Int = 90
+    var restDays: [Int] = []
+    var finishEarlyDays: Int = 1
+    var includeCards: Bool = true
+    var includeTasks: Bool = true
+    var includeMaterials: Bool = true
+    var includeSessions: Bool = true
+    var focusTopics: [UUID] = []
+    var blockedTimes: [StudyBlockedTime] = []
+    var status: StudyPlanStatus = .active
+}
+
+/// A daily time range the user does not want study scheduled in.
+struct StudyBlockedTime: Codable, Sendable, Equatable, Identifiable {
+    var id = UUID()
+    /// Weekday numbers the range applies to (empty = every day).
+    var weekdays: [Int] = []
+    /// Seconds since midnight.
+    var startSecs: Int
+    var endSecs: Int
+}
+
+/// A new plan item (generated by the planner or created manually).
+struct StudyPlanItemDraft: Sendable {
+    var planID: UUID
+    var examID: UUID?
+    var itemDateKey: String
+    var title: String
+    var kind: StudyPlanItemKind = .custom
+    var estimatedMinutes: Int = 30
+    var itemOrder: Int = 0
+    var source: PlanItemSource? = nil
+}
+
+/// A new study activity (start of a real learning-timer run).
+struct StudyActivityDraft: Sendable {
+    var planItemID: UUID? = nil
+    var examID: UUID? = nil
+    var courseID: UUID? = nil
+    var topicID: UUID? = nil
+    var note: String = ""
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).

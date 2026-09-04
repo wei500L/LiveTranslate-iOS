@@ -78,6 +78,10 @@ struct RootTabView: View {
             if phase == .active {
                 environment.cloudSync?.syncNow()
                 Task { await environment.refreshClassReminders() }
+                // A backgrounded learning timer keeps counting by
+                // timestamps; the checkpoint folds the elapsed stretch
+                // into the row so the synced duration stays honest.
+                environment.studyActivityTracker.checkpoint()
             }
         }
     }

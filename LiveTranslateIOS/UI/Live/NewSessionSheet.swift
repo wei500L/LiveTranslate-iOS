@@ -103,6 +103,23 @@ struct NewSessionSheet: View {
             if shouldOpenLive {
                 environment.presentLive()
             }
+            if studyPauseContinuation != nil {
+                // The sheet was dismissed with the prompt open: treat as
+                // cancel so the continuation never leaks.
+                resolveStudyPause(.cancel)
+            }
+        }
+        .confirmationDialog(
+            "有正在计时的学习活动",
+            isPresented: $showingStudyPausePrompt,
+            titleVisibility: .visible
+        ) {
+            Button("暂停学习并开始课堂") { resolveStudyPause(.pause) }
+            Button("结束学习并开始课堂") { resolveStudyPause(.finish) }
+            Button("保持计时并开始课堂") { resolveStudyPause(.keepRunning) }
+            Button("暂不开课", role: .cancel) { resolveStudyPause(.cancel) }
+        } message: {
+            Text("课堂录音时间不会计入学习时长。")
         }
         .task {
             // Debug UI demo: prefill the classroom name for deterministic
@@ -585,12 +602,21 @@ struct NewSessionSheet: View {
     }
 
     /// The full validation chain from the spec: name → active-session guard
-    /// → mic permission → local resources → start. Re-entrancy guarded so
-    /// rapid double-taps can never create two sessions or two starts.
+    /// → study-activity guard (pause prompt) → mic permission → local
+    /// resources → start. Re-entrancy guarded so rapid double-taps can
+    /// never create two sessions or two starts.
     private func start() async {
         guard !isStarting && !isRequestingPermission else { return }
         nameFieldFocused = false
         startError = nil
+
+        // 0. Learning-timer guard: a running study activity is offered a
+        //    pause/finish choice — starting the classroom recording
+        //    proceeds only after the user decides (the classroom's own
+        //    time never counts as study time).
+        if environment.studyActivityTracker.hasActiveActivity {
+            guard await confirmStudyPause() else { return }
+        }
 
         // 1. Name.
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -661,5 +687,44 @@ struct NewSessionSheet: View {
             startError = "课堂启动失败，请重试；若反复失败，请在“我的 → 语言资源管理”中检查语言资源。"
             LTHaptics.warning()
         }
+    }
+
+    /// The study-activity prompt: pause (recording and studying are
+    /// different activities — the classroom recording never counts as
+    /// study time), finish, or cancel the classroom start. Returns
+    /// whether the classroom start should proceed.
+    private enum StudyPauseChoice {
+        case pause, finish, keepRunning, cancel
+    }
+
+    private func confirmStudyPause() async -> Bool {
+        return await withCheckedContinuation { continuation in
+            studyPauseContinuation = continuation
+            showingStudyPausePrompt = true
+        }
+    }
+
+    @State private var showingStudyPausePrompt = false
+    @State private var studyPauseContinuation: CheckedContinuation<Bool, Never>?
+
+    private func resolveStudyPause(_ choice: StudyPauseChoice) {
+        showingStudyPausePrompt = false
+        let proceed: Bool
+        switch choice {
+        case .pause:
+            environment.studyActivityTracker.pause()
+            proceed = true
+        case .finish:
+            environment.studyActivityTracker.complete()
+            proceed = true
+        case .keepRunning:
+            // The user keeps the timer running — allowed, but honest:
+            // classroom time still never counts as study time.
+            proceed = true
+        case .cancel:
+            proceed = false
+        }
+        studyPauseContinuation?.resume(returning: proceed)
+        studyPauseContinuation = nil
     }
 }
