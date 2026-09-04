@@ -102,15 +102,14 @@ struct NormalizedRectEditor: View {
     }
 
     /// The mode-dependent drag: select/resize in select mode, zoom-pan in
-    /// browse mode. @GestureBuilder (not ?:) — the two gestures are
-    /// distinct opaque types and cannot meet in a ternary.
-    @GestureBuilder
-    private func modeDrag(in frame: CGRect) -> some Gesture {
+    /// browse mode. Type-erased via AnyGesture — the two branch gestures
+    /// are distinct opaque `some Gesture` types (SwiftUI has no gesture
+    /// result builder for if/else).
+    private func modeDrag(in frame: CGRect) -> AnyGesture<DragGesture.Value> {
         if isSelecting {
-            selectDrag(in: frame)
-        } else {
-            panDrag(in: frame)
+            return AnyGesture(selectDrag(in: frame))
         }
+        return AnyGesture(panDrag(in: frame))
     }
 
     private func selectDrag(in frame: CGRect) -> some Gesture {
