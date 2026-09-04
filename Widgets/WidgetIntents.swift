@@ -40,7 +40,7 @@ struct OpenLiveTranslateRouteIntent: AppIntent {
         static var typeDisplayRepresentation: TypeDisplayRepresentation {
             "目的地"
         }
-        static var caseDisplayRepresentations: [Destination: DisplayRepresentation] = [
+        static let caseDisplayRepresentations: [Destination: DisplayRepresentation] = [
             .currentClassroom: "当前课堂",
             .endClassroomConfirmation: "结束课堂",
             .todayStudy: "今日学习",
