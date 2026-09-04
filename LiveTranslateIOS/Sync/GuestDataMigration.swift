@@ -342,7 +342,8 @@ final class GuestDataMigration {
     /// (mergeGuestCourses ran first) and exceptions follow their schedules.
     private func copyGuestSchedules() {
         for schedule in reader.scheduleSnapshots() {
-            guard (try? repository.schedules(courseID: nil))?.contains { $0.id == schedule.id } != true else {
+            let existing = (try? repository.schedules(courseID: nil)) ?? []
+            guard !existing.contains(where: { $0.id == schedule.id }) else {
                 continue
             }
             let record = SyncServerRecordDTO(
@@ -470,9 +471,8 @@ final class GuestDataMigration {
             try? repository.applyRemoteMaterialAnnotation(record: record, serverVersion: 0)
         }
         for thread in reader.assistantThreadSnapshots() {
-            guard (try? repository.assistantThreads(courseID: nil))?.contains {
-                $0.id == thread.id
-            } != true else { continue }
+            let existing = (try? repository.assistantThreads(courseID: nil)) ?? []
+            guard !existing.contains(where: { $0.id == thread.id }) else { continue }
             let record = SyncServerRecordDTO(
                 id: thread.id,
                 title: thread.title,
