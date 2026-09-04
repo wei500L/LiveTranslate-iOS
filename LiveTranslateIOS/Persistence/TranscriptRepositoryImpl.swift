@@ -75,7 +75,7 @@ enum WAVFileInspector {
 
     static func durationOfRawWAV(bytes: Int64) -> TimeInterval {
         guard bytes > headerLength else { return 0 }
-        return Double(bytes - headerLength) / Double(bytesPerSecond)
+        return Double(bytes - Int64(headerLength)) / Double(bytesPerSecond)
     }
 }
 
@@ -201,8 +201,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             startOffset: draft.startOffset,
             endOffset: draft.endOffset,
             originalText: draft.originalText,
-            asrBackend: draft.asrBackend.rawValue,
             timeSource: draft.timeSource,
+            asrBackend: draft.asrBackend.rawValue,
             asrLatency: draft.asrLatency,
             asrRTF: draft.asrRTF
         )
@@ -2746,8 +2746,11 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         guard let recordID = record.id,
               let recurrence = record.scheduleRecurrence,
               let recurrenceValue = ScheduleRecurrence(rawValue: recurrence),
-              let semesterStart = record.scheduleSemesterStart,
-              let semesterEnd = record.scheduleSemesterEnd
+              let semesterStartString = record.scheduleSemesterStart,
+              let semesterEndString = record.scheduleSemesterEnd,
+              // Wire day strings ("YYYY-MM-DD") → day-anchored Dates.
+              let semesterStart = ScheduleCalculator.parseDay(semesterStartString),
+              let semesterEnd = ScheduleCalculator.parseDay(semesterEndString)
         else { return }
         let descriptor = FetchDescriptor<CourseSchedule>(
             predicate: #Predicate { $0.id == recordID }
@@ -2766,7 +2769,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 startSecs: record.scheduleStartSecs ?? 0,
                 endSecs: record.scheduleEndSecs ?? 0,
                 recurrence: recurrenceValue,
-                weekParityAnchor: record.scheduleParityAnchor,
+                weekParityAnchor: record.scheduleParityAnchor.flatMap(ScheduleCalculator.parseDay),
                 firstWeekIsOdd: record.scheduleFirstWeekIsOdd ?? true,
                 semesterStart: semesterStart,
                 semesterEnd: semesterEnd,
@@ -2776,7 +2779,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 note: record.scheduleNote ?? "",
                 reminderLeadMins: record.scheduleReminderMins ?? -1,
                 isEnabled: record.scheduleEnabled ?? true,
-                onceDate: record.scheduleOnceDate,
+                onceDate: record.scheduleOnceDate.flatMap(ScheduleCalculator.parseDay),
                 serverVersion: serverVersion
             )
             context.insert(schedule)
@@ -2786,7 +2789,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         schedule.startSecs = record.scheduleStartSecs ?? 0
         schedule.endSecs = record.scheduleEndSecs ?? 0
         schedule.recurrence = recurrenceValue
-        schedule.weekParityAnchor = record.scheduleParityAnchor
+        schedule.weekParityAnchor = record.scheduleParityAnchor.flatMap(ScheduleCalculator.parseDay)
         schedule.firstWeekIsOdd = record.scheduleFirstWeekIsOdd ?? true
         schedule.semesterStart = semesterStart
         schedule.semesterEnd = semesterEnd
@@ -2796,7 +2799,7 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         schedule.note = record.scheduleNote ?? ""
         schedule.reminderLeadMins = record.scheduleReminderMins ?? -1
         schedule.isEnabled = record.scheduleEnabled ?? true
-        schedule.onceDate = record.scheduleOnceDate
+        schedule.onceDate = record.scheduleOnceDate.flatMap(ScheduleCalculator.parseDay)
         schedule.serverVersion = serverVersion
         schedule.updatedAt = .now
         try context.save()
