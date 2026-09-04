@@ -75,7 +75,7 @@ struct HomeScreen: View {
             ) {
                 Button("再开一堂") {
                     if let occurrence = pendingExtraStart {
-                        Task { @MainActor in await scheduleViewModel.startOccurrence(occurrence, force: true) }
+                        forceStartOccurrence(occurrence)
                     }
                     pendingExtraStart = nil
                 }
@@ -198,6 +198,11 @@ struct HomeScreen: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// 再开一堂 — the extra-start confirmation's controlled restart.
+    private func forceStartOccurrence(_ occurrence: ScheduleCalculator.Occurrence) {
+        Task { _ = await scheduleViewModel.startOccurrence(occurrence, force: true) }
     }
 
     private func startNext(_ occurrence: ScheduleCalculator.Occurrence) {
