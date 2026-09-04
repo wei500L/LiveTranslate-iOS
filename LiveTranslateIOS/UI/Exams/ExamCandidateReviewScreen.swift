@@ -120,7 +120,9 @@ struct ExamCandidateReviewScreen: View {
         }
     }
 
-    private func sourceRow(_ symbol: String, _ title: String, _ tint: Color) -> some View {
+    // nonisolated: the PhotosPicker label closure is nonisolated; this
+    // row touches no instance state (parameters + static design tokens).
+    nonisolated private func sourceRow(_ symbol: String, _ title: String, _ tint: Color) -> some View {
         HStack(spacing: LTSpacing.s) {
             Image(systemName: symbol)
                 .font(.subheadline)
