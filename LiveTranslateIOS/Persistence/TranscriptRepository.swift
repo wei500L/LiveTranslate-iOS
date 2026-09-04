@@ -827,7 +827,9 @@ struct TaskDraft: Sendable, Equatable {
 
 /// A fully-imported new material. The FILE is already on disk (or the
 /// material borrows a classroom attachment's files when
-/// `sourceAttachmentID` is set — then no file copy exists); the draft
+/// `sourceAttachmentID` is set — then no file copy exists; or the
+/// material is a saved LINK — `format == .link`, no file, the URL rides
+/// `sourceURL` and any shared text rides `sharedText`); the draft
 /// carries only metadata derived during import.
 struct MaterialDraft: Sendable, Equatable {
     var title: String
@@ -842,6 +844,10 @@ struct MaterialDraft: Sendable, Equatable {
     var sessionID: UUID? = nil
     var occurrenceKey: String? = nil
     var sourceAttachmentID: UUID? = nil
+    /// Saved web URL (format .link only).
+    var sourceURL: String = ""
+    /// Text shared alongside the URL (format .link only).
+    var sharedText: String = ""
     /// Terminal extraction state at import time (text materials arrive
     /// parsed; office documents arrive `unsupported`).
     var extractionStatus: MaterialExtractionStatus = .pending

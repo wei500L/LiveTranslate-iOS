@@ -362,6 +362,8 @@ struct MaterialMetadataEditor: View {
 
     @State private var title = ""
     @State private var kind: MaterialKind = .other
+    /// Link materials: the text shared alongside the URL (editable).
+    @State private var sharedText = ""
     @State private var courseID: UUID?
     @State private var sessionID: UUID?
     @State private var occurrenceKey: String?
@@ -377,6 +379,10 @@ struct MaterialMetadataEditor: View {
                     ForEach(MaterialKind.allCases) { kind in
                         Text(kind.displayName).tag(kind)
                     }
+                }
+                if viewModel.material?.format == .link {
+                    TextField("分享时的文字（可编辑）", text: $sharedText, axis: .vertical)
+                        .lineLimit(2...6)
                 }
             }
             Section("归属") {
@@ -419,6 +425,7 @@ struct MaterialMetadataEditor: View {
             guard let material = viewModel.material else { return }
             title = material.title
             kind = material.kind
+            sharedText = material.sharedText
             courseID = material.courseID
             sessionID = material.sessionID
             occurrenceKey = material.occurrenceKey
@@ -464,6 +471,8 @@ struct MaterialMetadataEditor: View {
             sessionID: sessionID,
             occurrenceKey: occurrenceKey,
             sourceAttachmentID: material.sourceAttachmentID,
+            sourceURL: material.sourceURL,
+            sharedText: material.isLink ? sharedText : material.sharedText,
             extractionStatus: material.extractionStatus
         )
         try? environment.repository.updateMaterial(material, with: draft)

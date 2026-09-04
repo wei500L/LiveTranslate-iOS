@@ -26,12 +26,17 @@ targets:
     sources:
       - path: LiveTranslateIOS
       - path: Resources
+      # Shared-inbox kit: compiled into BOTH the app and the Share
+      # Extension (the App Group storage contract — Foundation only).
+      - path: SharedInboxKit
     dependencies:
       # Official v1.13.7 release asset: dynamic framework with onnxruntime
       # statically linked inside (self-contained; the plain "static"
       # xcframework leaves Ort* symbols undefined with no companion lib).
       - framework: ThirdParty/sherpa-onnx.xcframework
         embed: true
+      # Share Extension (智能收件箱 receive side) — embedded into the app.
+      - target: LiveTranslateShareExtension
     info:
       path: LiveTranslateIOS/Info.plist
       properties:
@@ -79,6 +84,9 @@ targets:
         # Sign in with Apple. Requires an Apple Developer team + capability
         # for device builds; simulator builds compile without it.
         com.apple.developer.applesignin: [Default]
+        # Shared inbox (Share Extension ↔ app staging area). Group id is
+        # derived from the app's bundle ID prefix — no team id involved.
+        com.apple.security.application-groups: [group.com.livetranslate.ios]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios
@@ -95,6 +103,48 @@ targets:
           CLOUD_SYNC_SERVER_URL: http://127.0.0.1:8000/v1
         Release:
           CLOUD_SYNC_SERVER_URL: ""
+
+  # Share Extension (系统分享 → 智能收件箱): receives PDFs, images, text
+  # files, plain text and URLs from any app's share sheet, stages them
+  # into the shared App Group inbox and commits per-item metadata. It
+  # deliberately does nothing else — no SwiftData, no AI, no network.
+  LiveTranslateShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+      # Same App Group storage contract as the app (Foundation only).
+      - path: SharedInboxKit
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: LiveTranslate
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          # Activation: files (≤10), images (≤10), plain text, one web
+          # URL/page per share. Extras beyond the caps are refused by the
+          # system before the extension even runs.
+          NSExtensionActivationRule:
+            NSExtensionActivationSupportsText: true
+            NSExtensionActivationSupportsWebURLWithMaxCount: 1
+            NSExtensionActivationSupportsWebPageWithMaxCount: 1
+            NSExtensionActivationSupportsImageWithMaxCount: 10
+            NSExtensionActivationSupportsFileWithMaxCount: 10
+    entitlements:
+      path: ShareExtension/ShareExtension.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.livetranslate.ios]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios.ShareExtension
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: false
+        # Same ad-hoc simulator signing posture as the app target.
+        CODE_SIGN_IDENTITY[sdk=iphonesimulator*]: "-"
+        SKIP_INSTALL: "YES"
 
   LiveTranslateIOSTests:
     type: bundle.unit-test

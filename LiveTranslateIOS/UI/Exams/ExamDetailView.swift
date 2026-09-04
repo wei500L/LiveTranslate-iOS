@@ -166,12 +166,29 @@ struct ExamDetailView: View {
                 }
             }
             if exam.origin == .ai, let source = exam.source {
-                Label(
-                    "识别自\(source.kindDisplayName)：\(source.originalText)",
-                    systemImage: "sparkles"
-                )
-                .font(LTTypography.caption)
-                .foregroundStyle(LTColors.accentCyan)
+                if source.kind == .inbox, let itemID = source.sourceID {
+                    // Inbox-created candidate: jump back to the SAME
+                    // shared item it came from (one item, one place).
+                    Button {
+                        environment.flow.openInboxItem(itemID)
+                    } label: {
+                        Label(
+                            "识别自\(source.kindDisplayName)：\(source.originalText)",
+                            systemImage: "sparkles"
+                        )
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.accentCyan)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(Text("打开收件箱中的原始分享"))
+                } else {
+                    Label(
+                        "识别自\(source.kindDisplayName)：\(source.originalText)",
+                        systemImage: "sparkles"
+                    )
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.accentCyan)
+                }
             }
         }
         .ltCard()

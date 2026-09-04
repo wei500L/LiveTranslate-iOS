@@ -45,12 +45,15 @@ enum MaterialKind: String, Codable, Sendable, CaseIterable, Identifiable {
 
 /// The file format of a material — decides what the pipeline can honestly
 /// do with it. `other` (DOCX/PPTX/…) files are STORED and previewed via
-/// Quick Look only; their content is never claimed as extracted.
+/// Quick Look only; their content is never claimed as extracted. `link`
+/// carries no file at all: the content is a saved web URL (opened in the
+/// browser; the title and any shared text are searchable).
 enum MaterialFormat: String, Codable, Sendable {
     case pdf
     case text          // plain .txt
     case markdown      // .md (stored raw; rendered as plain text)
     case image         // JPEG/PNG/HEIC single-page material
+    case link          // saved web URL (no file; opened in the browser)
     case other         // docx/pptx/unknown — save + Quick Look only
 
     var displayName: String {
@@ -59,6 +62,7 @@ enum MaterialFormat: String, Codable, Sendable {
         case .text: return String(localized: "文本")
         case .markdown: return String(localized: "Markdown")
         case .image: return String(localized: "图片")
+        case .link: return String(localized: "链接")
         case .other: return String(localized: "文档")
         }
     }
@@ -142,6 +146,12 @@ final class CourseMaterial {
     /// Set when this material borrows a classroom image's files instead of
     /// storing its own copy (nil = owns files in MaterialFileStore).
     var sourceAttachmentID: UUID?
+    /// Saved web URL (format .link only; "" otherwise). Insert-only
+    /// identity — a link material's content is the URL it was shared as.
+    var sourceURL: String
+    /// Text shared alongside the URL (the sender's selected text / share
+    /// note). User-searchable; never claimed as page content.
+    var sharedText: String
     /// Raw value of `MaterialExtractionStatus`.
     var extractionStatusRaw: String
     /// Raw value of `MaterialDigestStatus`.
@@ -183,6 +193,8 @@ final class CourseMaterial {
         contentHash: String = "",
         pageCount: Int = 0,
         sourceAttachmentID: UUID? = nil,
+        sourceURL: String = "",
+        sharedText: String = "",
         extractionStatus: MaterialExtractionStatus = .pending,
         digestStatus: MaterialDigestStatus = .pending,
         digestJSON: String = "",
@@ -207,6 +219,8 @@ final class CourseMaterial {
         self.contentHash = contentHash
         self.pageCount = pageCount
         self.sourceAttachmentID = sourceAttachmentID
+        self.sourceURL = sourceURL
+        self.sharedText = sharedText
         self.extractionStatusRaw = extractionStatus.rawValue
         self.digestStatusRaw = digestStatus.rawValue
         self.digestJSON = digestJSON
@@ -242,14 +256,24 @@ final class CourseMaterial {
     }
 
     /// Whether this material carries its own file (vs borrowing a
-    /// classroom attachment's renditions).
-    var ownsFile: Bool { sourceAttachmentID == nil }
+    /// classroom attachment's renditions or carrying no file at all —
+    /// links are URL-only).
+    var ownsFile: Bool { sourceAttachmentID == nil && format != .link }
 
     /// Whether any content is retrievable: a text layer exists on some
     /// page, or the format is parsed by construction (txt/md), or a digest
     /// exists. `unsupported` formats are honestly excluded.
     var hasExtractableContent: Bool {
         format == .text || format == .markdown || format == .pdf
+    }
+
+    /// Whether this material is a saved web link (no file of its own).
+    var isLink: Bool { format == .link }
+
+    /// The saved URL as a URL (nil when malformed/empty).
+    var linkURL: URL? {
+        guard isLink, !sourceURL.isEmpty else { return nil }
+        return URL(string: sourceURL)
     }
 
     var digest: MaterialDigestResult? {

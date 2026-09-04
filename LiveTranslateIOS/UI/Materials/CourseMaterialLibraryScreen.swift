@@ -10,6 +10,7 @@ struct CourseMaterialLibraryScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var viewModel = MaterialLibraryViewModel()
     @State private var showImporter = false
+    @State private var pushingInbox = false
 
     /// Course scope (nil = the whole library). Set when entered from a
     /// course; the global entry passes nil.
@@ -37,6 +38,32 @@ struct CourseMaterialLibraryScreen: View {
         .navigationTitle("课程资料")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // 收件箱 entry: only real when unprocessed shared items exist
+            // (no dead badge on an empty inbox).
+            if environment.inbox.pendingCount > 0 {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        pushingInbox = true
+                    } label: {
+                        Image(systemName: "tray.full")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(LTColors.textSecondary)
+                            .overlay(alignment: .topTrailing) {
+                                Text("\(environment.inbox.pendingCount)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Color.black.opacity(0.85))
+                                    .padding(.horizontal, 3)
+                                    .background(Capsule().fill(LTColors.accentCyan))
+                                    .offset(x: 7, y: -6)
+                            }
+                    }
+                    .accessibilityLabel(Text("收件箱，\(environment.inbox.pendingCount) 项待整理"))
+                    .navigationDestination(isPresented: $pushingInbox) {
+                        InboxScreen()
+                            .environment(environment)
+                    }
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showImporter = true
@@ -51,11 +78,13 @@ struct CourseMaterialLibraryScreen: View {
         .task {
             viewModel.attach(environment)
             viewModel.load(courseID: courseID)
+            environment.inbox.reload()
         }
         .onAppear {
             if viewModel.isLoaded {
                 viewModel.reload()
             }
+            environment.inbox.reload()
         }
         .sheet(isPresented: $showImporter) {
             NavigationStack {
@@ -146,6 +175,7 @@ final class MaterialLibraryViewModel {
         case pdf
         case image
         case text
+        case link
         case pendingExtraction
         case digested
         case recent
@@ -159,6 +189,7 @@ final class MaterialLibraryViewModel {
             case .pdf: return "PDF"
             case .image: return "图片"
             case .text: return "文本"
+            case .link: return "链接"
             case .pendingExtraction: return "尚未提取"
             case .digested: return "已整理"
             case .recent: return "最近使用"
@@ -210,6 +241,8 @@ final class MaterialLibraryViewModel {
                 return materials.contains { $0.format == .image }
             case .text:
                 return materials.contains { $0.format == .text || $0.format == .markdown }
+            case .link:
+                return materials.contains { $0.format == .link }
             case .pendingExtraction:
                 return materials.contains {
                     $0.extractionStatus == .pending || $0.extractionStatus == .failed

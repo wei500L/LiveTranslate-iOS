@@ -360,6 +360,8 @@ struct MaterialReaderScreen: View {
                     }
                 case .image:
                     imagePageView(material)
+                case .link:
+                    linkCard(material)
                 case .other:
                     unsupportedCard(material)
                 }
@@ -481,6 +483,43 @@ struct MaterialReaderScreen: View {
                 }
             }
         }
+    }
+
+    /// Link materials: the saved URL is the content — open the page in
+    /// the browser, show any shared text. No file to read, no fake
+    /// extraction claims.
+    private func linkCard(_ material: CourseMaterial) -> some View {
+        VStack(spacing: LTSpacing.s) {
+            LTIconBadge(symbol: "link", tint: LTColors.accentCyan, size: 44)
+            Text(material.sourceURL)
+                .font(.caption.monospaced())
+                .foregroundStyle(LTColors.accentCyan)
+                .lineLimit(3)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .multilineTextAlignment(.center)
+            if let url = material.linkURL {
+                Button {
+                    UIApplication.shared.open(url)
+                } label: {
+                    Label("打开原网页", systemImage: "safari")
+                }
+                .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentCyan))
+            }
+            if !material.sharedText.isEmpty {
+                Divider().overlay(LTColors.separator)
+                Text("分享时的文字")
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.textTertiary)
+                Text(material.sharedText)
+                    .font(.subheadline)
+                    .foregroundStyle(LTColors.textSecondary)
+                    .textSelection(.enabled)
+                    .lineSpacing(4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, LTSpacing.l)
     }
 
     private func unsupportedCard(_ material: CourseMaterial) -> some View {

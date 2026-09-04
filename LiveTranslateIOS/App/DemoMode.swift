@@ -118,6 +118,19 @@ extension AppEnvironment {
         let demoAttachmentService = DemoAttachmentAnalysisService()
         let demoAttachmentBox = AttachmentServiceBox()
         demoAttachmentBox.set(demoAttachmentService)
+        // Demo inbox: a FRESH throwaway store (never the real App Group —
+        // demo shares are never registered anywhere real). The real
+        // SharedInboxStore interface is reused so the demo exercises the
+        // same coordinator code.
+        let demoInboxStore = SharedInboxStore(
+            root: FileManager.default.temporaryDirectory
+                .appendingPathComponent("ui-demo-inbox-\(UUID().uuidString)", isDirectory: true)
+        )
+        let demoInbox = InboxCoordinator(
+            store: demoInboxStore,
+            imageServiceProvider: { [weak demoAttachmentBox] in demoAttachmentBox?.get() },
+            textServiceProvider: { [weak studyBox] in studyBox?.get() }
+        )
         let demoAssistant = CourseAssistantService(
             repository: repository,
             textServiceProvider: { [weak studyBox] in studyBox?.get() },
@@ -155,7 +168,8 @@ extension AppEnvironment {
             materialStore: demoMaterialStore,
             materialExtractionRunner: demoExtractionRunner,
             materialDigestGenerator: demoDigestGenerator,
-            courseAssistant: demoAssistant
+            courseAssistant: demoAssistant,
+            inbox: demoInbox
         )
 
         environment.flow.demoGreeting = "晚上好，学习者"

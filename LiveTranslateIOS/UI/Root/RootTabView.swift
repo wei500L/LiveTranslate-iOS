@@ -66,6 +66,9 @@ struct RootTabView: View {
             environment.modelManager.refreshStates()
             environment.cloudSync?.start()
             await environment.refreshClassReminders()
+            // Shared inbox: launch-time reconciliation (interrupted
+            // receives, orphan temp files, missing payloads).
+            environment.inbox.reconcile()
             #if DEBUG
             environment.presentDemoLaunchScreenIfNeeded()
             #endif
@@ -73,11 +76,13 @@ struct RootTabView: View {
         // Returning to the foreground is a sync trigger: anything that
         // accumulated while the app was backgrounded flushes now, and the
         // reminder rolling window re-arms (schedules may have changed via
-        // pull).
+        // pull). The shared inbox re-reads too — the Share Extension may
+        // have landed new items while the app was backgrounded.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 environment.cloudSync?.syncNow()
                 Task { await environment.refreshClassReminders() }
+                environment.inbox.reconcile()
                 // A backgrounded learning timer keeps counting by
                 // timestamps; the checkpoint folds the elapsed stretch
                 // into the row so the synced duration stays honest.

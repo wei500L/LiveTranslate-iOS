@@ -1759,6 +1759,11 @@ final class CloudSyncService: AuthenticationService {
             materialFileSize: material.fileSize,
             materialHash: material.contentHash.isEmpty ? nil : material.contentHash,
             materialPageCount: material.pageCount,
+            // Link materials (format "link") carry no file: the URL rides
+            // as insert-only identity, the shared text as full desired
+            // state (empty string clears, absent keeps).
+            materialSourceURL: material.sourceURL.isEmpty ? nil : material.sourceURL,
+            materialSharedText: material.sharedText,
             materialExtraction: material.extractionStatus == .extracting
                 ? MaterialExtractionStatus.pending.rawValue
                 : material.extractionStatusRaw,

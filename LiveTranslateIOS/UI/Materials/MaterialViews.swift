@@ -9,6 +9,7 @@ extension MaterialFormat {
         case .text: return "doc.plaintext"
         case .markdown: return "doc.text"
         case .image: return "photo"
+        case .link: return "link"
         case .other: return "doc"
         }
     }
@@ -90,7 +91,9 @@ struct MaterialRow: View {
         if material.pageCount > 0 {
             parts.append(material.pageCount == 1 ? "1 页" : "\(material.pageCount) 页")
         }
-        if !material.ownsFile {
+        if material.isLink {
+            parts.append("链接")
+        } else if !material.ownsFile {
             parts.append("来自课堂图片")
         }
         if showsCourse, let courseName {

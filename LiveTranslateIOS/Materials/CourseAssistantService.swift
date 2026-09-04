@@ -544,6 +544,23 @@ final class CourseAssistantService {
                     pageNumber: nil
                 ))
             }
+            // A link material's content is its URL + the text shared
+            // alongside it — retrievable as one chunk (never the page
+            // itself: the app does not fetch web pages).
+            if material.isLink {
+                let linkText = [material.sourceURL, material.sharedText]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                if !linkText.isEmpty {
+                    chunks.append(.init(
+                        kind: .materialPage,
+                        label: "\(materialLabel) · 链接",
+                        text: linkText,
+                        materialID: material.id,
+                        pageNumber: nil
+                    ))
+                }
+            }
         }
 
         // Session transcripts (EFFECTIVE text — corrections first),

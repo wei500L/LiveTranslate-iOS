@@ -475,6 +475,7 @@ struct SettingsScreen: View {
                 label: String(localized: "Classroom images"),
                 value: Format.bytes(Int(attachmentBytes))
             )
+            inboxStorageRows
             if attachmentBytes > 0 {
                 Button {
                     reclaimSyncedAttachmentOriginals()
@@ -520,6 +521,36 @@ struct SettingsScreen: View {
             LabeledRow(
                 label: String(localized: "课堂录音"),
                 value: String(localized: "暂无")
+            )
+        }
+    }
+
+    /// Real shared-inbox statistics + cleanup actions (存储管理). The
+    /// inbox only shows rows while it holds anything.
+    @ViewBuilder
+    private var inboxStorageRows: some View {
+        let stats = environment.inbox.statistics()
+        if let stats, stats.totalCount > 0 {
+            LabeledRow(
+                label: String(localized: "收件箱"),
+                value: "\(stats.totalCount) 项 · \(Format.bytes(Int(stats.bytesOnDisk)))"
+            )
+            if stats.pendingCount > 0 || stats.failedCount > 0 {
+                LabeledRow(
+                    label: String(localized: "待处理"),
+                    value: "\(stats.pendingCount) 项待整理 · \(stats.failedCount) 项失败"
+                )
+            }
+            NavigationLink {
+                InboxScreen()
+                    .environment(environment)
+            } label: {
+                Text(String(localized: "整理收件箱"))
+            }
+        } else {
+            LabeledRow(
+                label: String(localized: "收件箱"),
+                value: String(localized: "暂无内容")
             )
         }
     }

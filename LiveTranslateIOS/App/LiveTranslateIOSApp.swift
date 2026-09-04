@@ -121,6 +121,15 @@ final class AppEnvironment {
     let attachmentStore: AttachmentFileStore
     /// The profile's course-material file store (paths, page caches).
     let materialStore: MaterialFileStore
+    /// 智能收件箱 — the App Group shared inbox (reconcile, inspect,
+    /// counts). Items are device-local until confirmed into formal
+    /// entities; the store is shared with the Share Extension but the
+    /// coordinator belongs to the active profile (items are filtered by
+    /// the scope that received them).
+    let inbox: InboxCoordinator
+    /// Confirmed-action executor (nil only when the App Group is
+    /// unavailable).
+    let inboxExecutor: InboxActionExecutor?
     /// Course-material import pipeline (Files picker → hash → store → row).
     let materialImporter: MaterialImportService
     /// Page-text extraction + per-page Vision OCR (resumable runs).
@@ -315,6 +324,23 @@ final class AppEnvironment {
         )
         let playback = ClassroomPlaybackService()
         let waveformStore = RecordingWaveformStore()
+        // Shared inbox: the store lives in the App Group (shared with
+        // the Share Extension); the coordinator reads the LIVE model
+        // service boxes so settings changes apply without a rebuild.
+        let inboxStore = SharedInboxStore()
+        let inbox = InboxCoordinator(
+            store: inboxStore,
+            imageServiceProvider: { [weak attachmentBox] in attachmentBox?.get() },
+            textServiceProvider: { [weak studyBox] in studyBox?.get() }
+        )
+        let inboxExecutor = inboxStore.map {
+            InboxActionExecutor(
+                repository: repository,
+                materialImporter: materialImporter,
+                attachmentImporter: attachmentImporter,
+                store: $0
+            )
+        }
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -348,7 +374,9 @@ final class AppEnvironment {
             materialDigestGenerator: materialDigestGenerator,
             courseAssistant: courseAssistant,
             playback: playback,
-            waveformStore: waveformStore
+            waveformStore: waveformStore,
+            inbox: inbox,
+            inboxExecutor: inboxExecutor
         )
     }
 
@@ -391,7 +419,9 @@ final class AppEnvironment {
         materialDigestGenerator: MaterialDigestGenerator? = nil,
         courseAssistant: CourseAssistantService? = nil,
         playback: ClassroomPlaybackService? = nil,
-        waveformStore: RecordingWaveformStore? = nil
+        waveformStore: RecordingWaveformStore? = nil,
+        inbox: InboxCoordinator? = nil,
+        inboxExecutor: InboxActionExecutor? = nil
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -500,6 +530,11 @@ final class AppEnvironment {
         }
         self.playback = playback ?? ClassroomPlaybackService()
         self.waveformStore = waveformStore ?? RecordingWaveformStore()
+        // Shared inbox: the DI default is a store-less coordinator (tests
+        // / composition without the App Group); production builds pass
+        // the real one from the profile init.
+        self.inbox = inbox ?? InboxCoordinator(store: nil)
+        self.inboxExecutor = inboxExecutor
     }
 
     /// Profile store location — delegated to `AccountScope` (the single
@@ -840,6 +875,23 @@ final class AppFlow {
 
     func consumeStudyPlanReminder() {
         pendingTodayStudy = false
+    }
+
+    // MARK: - Inbox routing (智能收件箱)
+
+    /// A pending jump into one inbox item (in-memory only, consumed
+    /// exactly once by HomeScreen). Set by internal routes that need to
+    /// land on a specific shared item (e.g. the 今天 segment's pending
+    /// candidate rows).
+    var pendingInboxItemID: UUID?
+
+    func openInboxItem(_ id: UUID) {
+        selectedTab = .home
+        pendingInboxItemID = id
+    }
+
+    func consumeInboxItemRoute() {
+        pendingInboxItemID = nil
     }
 
     #if DEBUG

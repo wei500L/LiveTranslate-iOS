@@ -81,7 +81,35 @@ final class AppSession {
         // One-time: fold the legacy single-account state (Apple/dev login
         // era) into the multi-account layout.
         LegacyAccountMigrator.runIfNeeded(accountStore: accounts, keychain: keychain)
+        // The scope marker goes out BEFORE the environment build (the
+        // coordinator snapshots it at init — a fresh environment must
+        // never read a stale scope).
+        publishInboxScope()
         environment = AppEnvironment(profile: accounts.activeProfile)
+    }
+
+    // MARK: - Shared-inbox scope (Share Extension attribution)
+
+    /// Publishes the ACTIVE profile's non-sensitive scope marker into the
+    /// App Group defaults. The Share Extension reads ONLY this key to
+    /// attribute new shares (never the keychain, never labels) — a share
+    /// belongs to the profile that was active when it arrived, and
+    /// switching profiles never moves existing items.
+    private func publishInboxScope() {
+        guard !isDemoMode else { return }
+        guard let defaults = UserDefaults(suiteName: SharedInboxStore.appGroupIdentifier) else {
+            return
+        }
+        switch accounts.activeProfile {
+        case .guest:
+            SharedInboxScopeStore.writeActiveScope(
+                SharedInboxScopeStore.guestScope, defaults: defaults
+            )
+        case .account(let account):
+            SharedInboxScopeStore.writeActiveScope(
+                account.id.uuidString, defaults: defaults
+            )
+        }
     }
 
     // MARK: - Profile switching
@@ -120,6 +148,10 @@ final class AppSession {
         case .account(let account):
             accounts.setActive(account.id)
         }
+        // The scope marker goes out BEFORE the environment build (the
+        // coordinator snapshots it at init — a fresh environment must
+        // never read a stale scope).
+        publishInboxScope()
         environment = AppEnvironment(profile: profile)
         Self.logger.info("profile switched: \(profile.key, privacy: .public)")
         return true
@@ -160,11 +192,16 @@ final class AppSession {
             }
         }
         let wasActive = accounts.activeAccountID == id
+        // The account's shared-inbox items belong to its scope — they go
+        // with the profile removal (formal entities already live their
+        // own lives in the profile's store, which deleteLocalData drops).
+        SharedInboxStore()?.removeItems(scopeKey: id.uuidString)
         accounts.deleteLocalData(accountID: id)
         accounts.remove(id: id)
         if wasActive {
             environment.cloudSync?.shutdown()
             environment = AppEnvironment(profile: accounts.activeProfile)
+            publishInboxScope()
         }
     }
 
@@ -172,10 +209,12 @@ final class AppSession {
     /// drop the account's local profile and fall back to guest.
     func handleServerAccountDeleted() async {
         guard !isDemoMode, let id = accounts.activeAccountID else { return }
+        SharedInboxStore()?.removeItems(scopeKey: id.uuidString)
         accounts.deleteLocalData(accountID: id)
         accounts.remove(id: id)
         environment.cloudSync?.shutdown()
         environment = AppEnvironment(profile: accounts.activeProfile)
+        publishInboxScope()
     }
 
     // MARK: - Fresh sign-ins (transient unscoped session)
@@ -310,6 +349,10 @@ final class AppSession {
 
     private func rebuildAfterSignIn() {
         environment.cloudSync?.shutdown()
+        // The scope marker goes out BEFORE the environment build (the
+        // coordinator snapshots it at init — a fresh environment must
+        // never read a stale scope).
+        publishInboxScope()
         environment = AppEnvironment(profile: accounts.activeProfile)
         // Post-sign-in bookkeeping on the NEW service: label fetch, first
         // upload scheduling, first sync.

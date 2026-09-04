@@ -2952,7 +2952,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         var hits: [CourseMaterial] = []
         for material in try materials(courseID: nil) {
             if material.title.localizedCaseInsensitiveContains(trimmed)
-                || material.originalFileName.localizedCaseInsensitiveContains(trimmed) {
+                || material.originalFileName.localizedCaseInsensitiveContains(trimmed)
+                || material.sharedText.localizedCaseInsensitiveContains(trimmed)
+                || material.sourceURL.localizedCaseInsensitiveContains(trimmed) {
                 hits.append(material)
             } else if let digest = material.digest,
                       digest.searchableText.localizedCaseInsensitiveContains(trimmed) {
@@ -2990,6 +2992,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             contentHash: draft.contentHash,
             pageCount: draft.pageCount,
             sourceAttachmentID: draft.sourceAttachmentID,
+            sourceURL: draft.sourceURL,
+            sharedText: draft.sharedText,
             extractionStatus: draft.extractionStatus
         )
         context.insert(material)
@@ -3009,6 +3013,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         material.courseID = draft.courseID
         material.sessionID = draft.sessionID
         material.occurrenceKey = draft.occurrenceKey
+        // sharedText is user-editable metadata (like the title); the URL
+        // itself is insert-only identity.
+        material.sharedText = draft.sharedText
         material.updatedAt = .now
         try context.save()
         mutationObserver?.materialUpdated(material)
@@ -3143,6 +3150,10 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             // Full row state: absent/empty occurrence key = no link (the
             // schedule override convention — empty clears, never keeps).
             material.occurrenceKey = Self.nonEmptyOrNil(record.scheduleOccurrenceKey)
+            // sharedText rides full desired state from the wire (the
+            // title convention keeps stored text when the peer sends
+            // nothing; an explicit empty string clears it).
+            material.sharedText = record.materialSharedText ?? material.sharedText
             material.serverVersion = serverVersion
         } else {
             material = CourseMaterial(
@@ -3159,6 +3170,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 contentHash: record.materialHash ?? "",
                 pageCount: record.materialPageCount ?? 0,
                 sourceAttachmentID: record.sourceAttachmentId,
+                sourceURL: record.materialSourceURL ?? "",
+                sharedText: record.materialSharedText ?? "",
                 extractionStatus: MaterialExtractionStatus(
                     rawValue: record.materialExtraction ?? ""
                 ) ?? .pending,

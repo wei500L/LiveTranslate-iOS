@@ -123,6 +123,24 @@ struct CloudSyncSettingsView: View {
         } message: {
             Text(switchBlockedText ?? "")
         }
+        // Inbox-carrying account removal: explicit consent (the account's
+        // unprocessed shared items are deleted with the profile).
+        .alert(
+            String(localized: "该账号的收件箱还有未处理内容"),
+            isPresented: $showInboxRemovalWarning
+        ) {
+            Button(String(localized: "仍要移除"), role: .destructive) {
+                if let account = pendingInboxRemovalAccount {
+                    Task { await session.removeAccount(account.id, revokeTokens: true) }
+                }
+                pendingInboxRemovalAccount = nil
+            }
+            Button(String(localized: "取消"), role: .cancel) {
+                pendingInboxRemovalAccount = nil
+            }
+        } message: {
+            Text(String(localized: "移除账号会同时删除这个账号收到的、尚未整理的分享内容。已保存的资料与记录不受影响。"))
+        }
     }
 
     // MARK: - Account
@@ -364,12 +382,31 @@ struct CloudSyncSettingsView: View {
         .disabled(switchBlockerText != nil)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                Task { await session.removeAccount(account.id, revokeTokens: true) }
+                removeAccountWithInboxWarning(account)
             } label: {
                 Label(String(localized: "移除"), systemImage: "trash")
             }
         }
     }
+
+    /// Removing an account drops its shared-inbox items with it — if any
+    /// are still unprocessed, the user is told BEFORE the removal (never
+    /// silently discarded).
+    private func removeAccountWithInboxWarning(_ account: LocalAccount) {
+        let store = SharedInboxStore()
+        let pending = store?.loadManifest().items
+            .filter { $0.scopeKey == account.id.uuidString && $0.status.isPending }
+            .count ?? 0
+        guard pending > 0 else {
+            Task { await session.removeAccount(account.id, revokeTokens: true) }
+            return
+        }
+        pendingInboxRemovalAccount = account
+        showInboxRemovalWarning = true
+    }
+
+    @State private var pendingInboxRemovalAccount: LocalAccount?
+    @State private var showInboxRemovalWarning = false
 
     // MARK: - Guest data migration (本机记录待归属)
 

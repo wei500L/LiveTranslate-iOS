@@ -351,6 +351,9 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     // (sentinel rule); the structured digest rides as a JSON STRING in
     // `materialDigest` (same convention as attachmentAnalysis). The
     // ORIGINAL FILE never rides push — it travels on /v1/materials.
+    // A LINK material (format "link") carries no file: sourceURL is
+    // insert-only identity, sharedText is full desired state (empty
+    // string clears, absent keeps).
     var materialKind: String?
     var materialMime: String?
     var materialFileName: String?
@@ -358,6 +361,8 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var materialFileSize: Int64?
     var materialHash: String?
     var materialPageCount: Int?
+    var materialSourceURL: String?
+    var materialSharedText: String?
     var materialExtraction: String?
     var materialDigestStatus: String?
     var materialDigest: String?
@@ -592,6 +597,8 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var materialFileSize: Int64?
     var materialHash: String?
     var materialPageCount: Int?
+    var materialSourceURL: String?
+    var materialSharedText: String?
     var materialExtraction: String?
     var materialDigestStatus: String?
     var materialDigest: String?
@@ -781,6 +788,8 @@ struct SyncServerRecordDTO: Codable, Sendable {
         materialFileSize: Int64? = nil,
         materialHash: String? = nil,
         materialPageCount: Int? = nil,
+        materialSourceURL: String? = nil,
+        materialSharedText: String? = nil,
         materialExtraction: String? = nil,
         materialDigestStatus: String? = nil,
         materialDigest: String? = nil,
@@ -963,6 +972,8 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.materialFileSize = materialFileSize
         self.materialHash = materialHash
         self.materialPageCount = materialPageCount
+        self.materialSourceURL = materialSourceURL
+        self.materialSharedText = materialSharedText
         self.materialExtraction = materialExtraction
         self.materialDigestStatus = materialDigestStatus
         self.materialDigest = materialDigest
@@ -1149,6 +1160,8 @@ struct SyncServerRecordDTO: Codable, Sendable {
         materialFileSize = try container.decodeIfPresent(Int64.self, forKey: .materialFileSize)
         materialHash = try container.decodeIfPresent(String.self, forKey: .materialHash)
         materialPageCount = try container.decodeIfPresent(Int.self, forKey: .materialPageCount)
+        materialSourceURL = try container.decodeIfPresent(String.self, forKey: .materialSourceURL)
+        materialSharedText = try container.decodeIfPresent(String.self, forKey: .materialSharedText)
         materialExtraction = try container.decodeIfPresent(String.self, forKey: .materialExtraction)
         materialDigestStatus = try container.decodeIfPresent(String.self, forKey: .materialDigestStatus)
         materialDigest = try container.decodeIfPresent(String.self, forKey: .materialDigest)

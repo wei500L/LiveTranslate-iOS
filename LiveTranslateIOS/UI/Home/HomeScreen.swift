@@ -9,6 +9,8 @@ struct HomeScreen: View {
     @State private var showModelManagement = false
     /// 待阅读资料 push (the restrained materials entry).
     @State private var pushingMaterials = false
+    /// 智能收件箱 push (only while unprocessed items exist).
+    @State private var pushingInbox = false
     /// Course to preselect in the new-classroom sheet (quick start fall-
     /// back when the one-tap path is not safe).
     @State private var pendingCourse: Course?
@@ -27,6 +29,9 @@ struct HomeScreen: View {
                             ongoingBanner
                         }
                         startCard
+                        if environment.inbox.pendingCount > 0 {
+                            inboxSection
+                        }
                         if scheduleViewModel.isLoaded, scheduleViewModel.nextOccurrence != nil {
                             nextClassSection
                         }
@@ -101,6 +106,11 @@ struct HomeScreen: View {
             }
             #endif
             startMinuteTimer()
+            environment.inbox.reload()
+            // Inbox item routes are consumed on every appear (the route
+            // may arrive while home is already alive, e.g. from a detail
+            // view's 收件箱分享 jump) — consume-once by flag.
+            consumeInboxRoute()
             Task { await viewModel.reload() }
             Task { await scheduleViewModel.reload() }
         }
@@ -191,6 +201,21 @@ struct HomeScreen: View {
             }
         }
     }
+
+    /// An internal route asked for one inbox item (e.g. the review
+    /// center's 今天 segment): push the inbox and open that item.
+    /// Consume-once.
+    private func consumeInboxRoute() {
+        guard let id = environment.flow.pendingInboxItemID else { return }
+        environment.flow.consumeInboxItemRoute()
+        environment.inbox.reload()
+        pendingInboxItemID = id
+        pushingInbox = true
+    }
+
+    /// Inbox item pushed from a route (in addition to the section's own
+    /// push binding).
+    @State private var pendingInboxItemID: UUID?
 
     /// Minute-level refresh for the next-class relative label.
     private func startMinuteTimer() {
@@ -371,6 +396,43 @@ struct HomeScreen: View {
         .accessibilityHint(Text("打开课程资料库"))
         .navigationDestination(isPresented: $pushingMaterials) {
             CourseMaterialLibraryScreen(courseID: nil)
+                .environment(environment)
+        }
+    }
+
+    // MARK: - Shared inbox (智能收件箱 — only while items need work)
+
+    /// The inbox entry exists ONLY when there are unprocessed shared
+    /// items (the same restraint as 待阅读资料): empty inbox, no card.
+    private var inboxSection: some View {
+        Button {
+            pushingInbox = true
+        } label: {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                HStack(spacing: LTSpacing.m) {
+                    LTIconBadge(symbol: "tray.full", tint: LTColors.accentCyan, size: 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("收件箱")
+                            .font(.cardTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                        Text("有 \(environment.inbox.pendingCount) 项分享待整理")
+                            .font(.footnote)
+                            .foregroundStyle(LTColors.textSecondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+            .padding(LTSpacing.l)
+            .ltCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text("打开收件箱整理分享内容"))
+        .navigationDestination(isPresented: $pushingInbox) {
+            InboxScreen(initialItemID: pendingInboxItemID)
                 .environment(environment)
         }
     }

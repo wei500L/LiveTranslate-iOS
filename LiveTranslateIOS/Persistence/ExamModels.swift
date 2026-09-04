@@ -780,6 +780,7 @@ struct ExamSource: Codable, Sendable, Equatable {
         case transcript    // 课堂转录
         case note          // 用户笔记
         case assistant     // 视觉问答结果
+        case inbox         // 智能收件箱（sourceID = SharedInboxItem id）
     }
 
     var kind: SourceKind
@@ -797,6 +798,7 @@ struct ExamSource: Codable, Sendable, Equatable {
         case .transcript: return String(localized: "课堂转录")
         case .note: return String(localized: "笔记")
         case .assistant: return String(localized: "问答")
+        case .inbox: return String(localized: "收件箱分享")
         }
     }
 

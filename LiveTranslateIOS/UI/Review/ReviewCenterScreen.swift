@@ -172,6 +172,9 @@ struct TodayView: View {
     @State private var overdueTasks: [StudyTask] = []
     @State private var upcomingTasks: [StudyTask] = []
     @State private var pendingConfirmCount = 0
+    /// Pending exam candidates (incl. inbox-created ones) — the 待确认
+    /// card counts both candidate kinds.
+    @State private var pendingExamCandidateCount = 0
     @State private var recentNewTerms: [GlossaryTerm] = []
     @State private var lastReviewedAt: Date?
     @State private var lastReviewCount = 0
@@ -205,7 +208,7 @@ struct TodayView: View {
                 if dueCardCount > 0 || newCardCount > 0 {
                     reviewCard
                 }
-                if pendingConfirmCount > 0 {
+                if pendingConfirmCount > 0 || pendingExamCandidateCount > 0 {
                     candidateCard
                 }
                 if !upcomingExams.isEmpty {
@@ -232,6 +235,7 @@ struct TodayView: View {
     private var hasNothingTodo: Bool {
         dueCardCount == 0 && newCardCount == 0 && dueTasks.isEmpty
             && overdueTasks.isEmpty && pendingConfirmCount == 0
+            && pendingExamCandidateCount == 0
             && recentNewTerms.isEmpty && staleSessions.isEmpty
             && todayPlanItems.isEmpty && missedPlanItems.isEmpty
             && upcomingExams.isEmpty
@@ -396,12 +400,28 @@ struct TodayView: View {
 
     private var candidateCard: some View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
-            LTSectionHeader(title: "待确认", actionTitle: "去确认") { switchToTasks() }
-            Text(pendingConfirmCount == 1
-                ? "AI 从课堂识别了 1 条作业候选，等待你确认"
-                : "AI 从课堂识别了 \(pendingConfirmCount) 条作业候选，等待你确认")
-                .font(.footnote)
-                .foregroundStyle(LTColors.textSecondary)
+            LTSectionHeader(
+                title: "待确认",
+                actionTitle: pendingExamCandidateCount > 0 ? "去计划" : "去确认"
+            ) {
+                if pendingExamCandidateCount > 0 { switchToPlan() } else { switchToTasks() }
+            }
+            VStack(alignment: .leading, spacing: LTSpacing.xxs) {
+                if pendingConfirmCount > 0 {
+                    Text(pendingConfirmCount == 1
+                        ? "1 条作业候选等待确认"
+                        : "\(pendingConfirmCount) 条作业候选等待确认")
+                        .font(.footnote)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                if pendingExamCandidateCount > 0 {
+                    Text(pendingExamCandidateCount == 1
+                        ? "1 条考试候选等待确认"
+                        : "\(pendingExamCandidateCount) 条考试候选等待确认")
+                        .font(.footnote)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+            }
         }
         .padding(LTSpacing.l)
         .ltCard()
@@ -514,6 +534,7 @@ struct TodayView: View {
             task.status == .pending && (task.dueAt.map { $0 >= .now } ?? false)
         }
         pendingConfirmCount = ((try? environment.repository.pendingConfirmTasks()) ?? []).count
+        pendingExamCandidateCount = ((try? environment.repository.pendingExamCandidates()) ?? []).count
 
         // Today's plan: the day's items + still-pending items from
         // earlier days (未完成, shown honestly). A task carried by a plan
