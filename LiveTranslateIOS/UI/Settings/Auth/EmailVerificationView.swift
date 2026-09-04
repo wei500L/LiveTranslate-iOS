@@ -133,7 +133,7 @@ struct EmailVerificationView: View {
             } catch {
                 // The server's Retry-After drives the countdown so the
                 // button stays honest about when a retry is possible.
-                if case .rateLimited(let retryAfter) = error, let after = retryAfter {
+                if case SyncAPIError.rateLimited(let retryAfter) = error, let after = retryAfter {
                     restartCountdown(minimumSeconds: Int(after))
                 }
                 form.fail(error: error)

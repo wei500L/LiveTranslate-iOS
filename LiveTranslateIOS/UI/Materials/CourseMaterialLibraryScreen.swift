@@ -263,6 +263,7 @@ final class MaterialLibraryViewModel {
         case .pdf: base = materials.filter { $0.format == .pdf }
         case .image: base = materials.filter { $0.format == .image }
         case .text: base = materials.filter { $0.format == .text || $0.format == .markdown }
+        case .link: base = materials.filter { $0.format == .link }
         case .pendingExtraction:
             base = materials.filter {
                 $0.extractionStatus == .pending || $0.extractionStatus == .failed

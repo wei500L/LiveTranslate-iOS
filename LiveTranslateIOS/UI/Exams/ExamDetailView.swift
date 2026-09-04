@@ -318,8 +318,8 @@ struct ExamDetailView: View {
             } else {
                 VStack(spacing: LTSpacing.xs) {
                     ForEach(topics) { topic in
-                        ExamTopicRow(topic: topic) { updated in
-                            try? environment.repository.setExamTopicStatus(updated.0, status: updated.1)
+                        ExamTopicRow(topic: topic) { updatedTopic, status in
+                            try? environment.repository.setExamTopicStatus(updatedTopic, status: status)
                             reload()
                         }
                     }
@@ -582,9 +582,9 @@ struct ExamDetailView: View {
         linkedMaterials = courseID.flatMap {
             try? environment.repository.materials(courseID: $0)
         } ?? []
-        linkedSessions = courseID.flatMap {
+        linkedSessions = courseID.flatMap { id in
             try? environment.repository.sessions(matching: "").filter { session in
-                session.courseID == courseID
+                session.courseID == id
             }
         } ?? []
         // Newest three sessions only (回顧最近的课堂).

@@ -111,14 +111,14 @@ extension AppEnvironment {
             repository: repository,
             fileStore: { MaterialFileStoreShared.store }
         )
-        let demoDigestGenerator = MaterialDigestGenerator(
-            repository: repository,
-            textServiceProvider: { [weak studyBox] in studyBox?.get() },
-            imageServiceProvider: { [weak attachmentBox] in attachmentBox?.get() }
-        )
         let demoAttachmentService = DemoAttachmentAnalysisService()
         let demoAttachmentBox = AttachmentServiceBox()
         demoAttachmentBox.set(demoAttachmentService)
+        let demoDigestGenerator = MaterialDigestGenerator(
+            repository: repository,
+            textServiceProvider: { [weak studyBox] in studyBox?.get() },
+            imageServiceProvider: { [weak demoAttachmentBox] in demoAttachmentBox?.get() }
+        )
         // Demo inbox: a FRESH throwaway store (never the real App Group —
         // demo shares are never registered anywhere real). The real
         // SharedInboxStore interface is reused so the demo exercises the
@@ -137,9 +137,6 @@ extension AppEnvironment {
             textServiceProvider: { [weak studyBox] in studyBox?.get() },
             imageServiceProvider: { [weak demoAttachmentBox] in demoAttachmentBox?.get() }
         )
-        let attachmentService = DemoAttachmentAnalysisService()
-        let attachmentBox = AttachmentServiceBox()
-        attachmentBox.set(attachmentService)
         let environment = AppEnvironment(
             capabilities: AppEnvironment.Capabilities(
                 requestsMicrophonePermission: false,
@@ -163,8 +160,8 @@ extension AppEnvironment {
             cloudSync: nil,
             studyReviewService: studyService,
             studyServiceBox: studyBox,
-            attachmentAnalysisService: attachmentService,
-            attachmentServiceBox: attachmentBox,
+            attachmentAnalysisService: demoAttachmentService,
+            attachmentServiceBox: demoAttachmentBox,
             attachmentStore: demoAttachmentStore,
             materialStore: demoMaterialStore,
             materialExtractionRunner: demoExtractionRunner,
@@ -202,7 +199,10 @@ extension AppEnvironment {
             flow.pendingDemoScreen = nil
             Task { @MainActor in
                 if !coordinator.isRunning {
-                    await coordinator.start(title: "高等数学 II · 第6讲 多元函数微分")
+                    await coordinator.start(
+                        title: "高等数学 II · 第6讲 多元函数微分",
+                        courseID: nil, schedule: nil
+                    )
                 }
                 presentLive()
             }

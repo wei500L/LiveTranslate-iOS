@@ -187,7 +187,7 @@ struct ChangeEmailView: View {
                 resendIn = 60
                 startTimer()
             } catch {
-                if case .rateLimited(let retryAfter) = error, let after = retryAfter {
+                if case SyncAPIError.rateLimited(let retryAfter) = error, let after = retryAfter {
                     resendIn = max(60, Int(after))
                     startTimer()
                 }
