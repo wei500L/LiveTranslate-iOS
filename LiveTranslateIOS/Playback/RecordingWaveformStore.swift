@@ -68,22 +68,25 @@ final class RecordingWaveformStore {
         isGenerating = true
         try? repository.updateRecordingWaveformStatus(recording, status: .generating)
         let url = SessionRecordings.fileURL(for: recording)
-        tasks[sessionID] = Task.detached(priority: .utility) { [weak self] in
+        // A MainActor Task (not Task.detached): the heavy WAV read runs
+        // inside computeBuckets' own detached task; everything else here
+        // — repository writes, SwiftData, state — stays on the main actor.
+        // Capturing MainActor-isolated references across a detached
+        // closure is exactly the data race Swift 6 rejects.
+        tasks[sessionID] = Task { [weak self] in
             let computed = await Self.computeBuckets(url: url)
-            await MainActor.run {
-                guard let self, !Task.isCancelled else { return }
-                self.tasks[sessionID] = nil
-                self.isGenerating = false
-                guard let computed, !computed.isEmpty else {
-                    try? repository.updateRecordingWaveformStatus(recording, status: .failed)
-                    return
-                }
-                Self.writeCache(sessionID: sessionID, buckets: computed)
-                try? repository.updateRecordingWaveformStatus(recording, status: .generated)
-                if self.loadedSessionID == sessionID || self.loadedSessionID == nil {
-                    self.loadedSessionID = sessionID
-                    self.buckets = computed
-                }
+            guard let self, !Task.isCancelled else { return }
+            self.tasks[sessionID] = nil
+            self.isGenerating = false
+            guard let computed, !computed.isEmpty else {
+                try? repository.updateRecordingWaveformStatus(recording, status: .failed)
+                return
+            }
+            Self.writeCache(sessionID: sessionID, buckets: computed)
+            try? repository.updateRecordingWaveformStatus(recording, status: .generated)
+            if self.loadedSessionID == sessionID || self.loadedSessionID == nil {
+                self.loadedSessionID = sessionID
+                self.buckets = computed
             }
         }
     }
