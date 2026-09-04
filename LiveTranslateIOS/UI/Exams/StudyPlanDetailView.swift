@@ -183,7 +183,7 @@ struct StudyPlanDetailView: View {
             environment.flow.selectedTab = .review
             return
         }
-        _ = environment.studyActivityTracker.start(StudyActivityDraft(
+        _ = environment.studyActivityTracker.start(draft: StudyActivityDraft(
             planItemID: item.id,
             examID: item.examID,
             courseID: exam?.courseID,

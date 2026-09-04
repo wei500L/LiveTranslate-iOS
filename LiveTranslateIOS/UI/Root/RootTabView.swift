@@ -124,9 +124,7 @@ struct RootTabView: View {
         // Spotlight taps arrive as continue-userActivity with the item's
         // identifier; route through the unified coordinator.
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
-            if let identifier = activity.userInfo?
-                .first(where: { $0.key == CSSearchableItemActivityIdentifier })?
-                .value as? String {
+            if let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String {
                 environment.systemCoordinator?.handleSpotlightIdentifier(identifier)
             }
         }

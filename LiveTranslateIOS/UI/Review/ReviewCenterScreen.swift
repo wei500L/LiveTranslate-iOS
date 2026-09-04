@@ -778,7 +778,7 @@ struct TodayPlanItemRow: View {
             return
         }
         guard !environment.studyActivityTracker.hasActiveActivity else { return }
-        let started = environment.studyActivityTracker.start(StudyActivityDraft(
+        let started = environment.studyActivityTracker.start(draft: StudyActivityDraft(
             planItemID: item.id,
             examID: item.examID,
             topicID: item.source?.topicID

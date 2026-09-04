@@ -15,12 +15,13 @@ final class RecordingWaveformStore {
 
     /// Downsampled peaks: each bucket = max(abs(sample)) over its window,
     /// in [0, 1]. Roughly one bucket per second of audio.
-    static let bucketsPerSecond = 1.0
+    // nonisolated: immutable constants read from the detached compute task.
+    nonisolated static let bucketsPerSecond = 1.0
     /// How many samples one read step pulls (keeps memory bounded on
     /// two-hour files: 64 k samples = 256 KB per step).
-    private static let readSampleChunk = 65_536
+    nonisolated private static let readSampleChunk = 65_536
     /// Waveform files older than this are pruned with the recording.
-    static let waveformFileExtension = "wfm"
+    nonisolated static let waveformFileExtension = "wfm"
 
     // MARK: - Observable state
 

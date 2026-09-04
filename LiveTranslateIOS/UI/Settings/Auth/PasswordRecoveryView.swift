@@ -52,8 +52,11 @@ struct PasswordRecoveryView: View {
 
     /// A deep-linked token jumps straight to the reset step.
     private func applyDeepLink() {
-        guard let deepLinkToken, token.isEmpty else { return }
-        token = deepLinkToken
+        // `deepLink` avoids shadowing the @State property (an unshadowed
+        // `guard let deepLinkToken` would bind a local let and make the
+        // clearing assignment below illegal).
+        guard let deepLink = deepLinkToken, token.isEmpty else { return }
+        token = deepLink
         deepLinkToken = nil
         if step == .request {
             step = .reset

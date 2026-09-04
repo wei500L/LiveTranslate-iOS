@@ -301,7 +301,7 @@ struct ScheduleFormView: View {
             comps.year! -= 1
             return calendar.date(from: comps) ?? .now
         }
-        return start ?? .now
+        return calendar.date(from: comps) ?? .now
     }
 
     private static func defaultSemesterEnd() -> Date {
@@ -495,7 +495,6 @@ struct ScheduleExceptionSheet: View {
             changedStartSecs = secs(of: changedStart, on: movedToDate)
             changedEndSecs = secs(of: changedEnd, on: movedToDate)
             // Ad-hoc rides movedToDate as the extra day (originalDate nil).
-            movedDate = movedDate
         }
 
         let draft = ScheduleExceptionDraft(

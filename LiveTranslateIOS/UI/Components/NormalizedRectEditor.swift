@@ -58,7 +58,13 @@ struct NormalizedRectEditor: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(isSelecting ? selectDrag(in: frame) : panDrag(in: frame))
+            .gesture(
+                // Type-erase: the two branches are different opaque
+                // `some Gesture` types and cannot meet in a ?:.
+                isSelecting
+                    ? AnyGesture(selectDrag(in: frame))
+                    : AnyGesture(panDrag(in: frame))
+            )
             .simultaneousGesture(
                 isSelecting ? nil : MagnificationGesture()
                     .onChanged { value in

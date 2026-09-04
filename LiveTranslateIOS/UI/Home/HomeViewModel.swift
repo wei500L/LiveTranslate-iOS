@@ -330,7 +330,8 @@ final class HomeViewModel {
             return course
         }
         await environment.coordinator.start(
-            title: Self.quickStartTitle(for: course), courseID: course.id
+            title: Self.quickStartTitle(for: course), courseID: course.id,
+            schedule: nil  // quick start: no schedule occurrence
         )
         if environment.coordinator.isRunning {
             environment.presentLive()

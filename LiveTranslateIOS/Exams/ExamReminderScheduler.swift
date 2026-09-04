@@ -240,9 +240,9 @@ final class ExamReminderScheduler {
 
     // MARK: - Wire constants (shared with NotificationRouter)
 
-    static let categoryID = "EXAM_REMINDER"
-    static let studyCategoryID = "STUDY_PLAN_REMINDER"
-    static let examIDUserInfo = "examID"
+    nonisolated static let categoryID = "EXAM_REMINDER"
+    nonisolated static let studyCategoryID = "STUDY_PLAN_REMINDER"
+    nonisolated static let examIDUserInfo = "examID"
 
     private static func notificationID(_ examID: UUID) -> String {
         "exam.reminder.\(examID.uuidString)"

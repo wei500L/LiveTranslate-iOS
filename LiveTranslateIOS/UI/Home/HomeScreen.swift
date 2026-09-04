@@ -261,7 +261,7 @@ struct HomeScreen: View {
                     LTIconBadge(symbol: exam.kind.symbol, tint: LTColors.accentGreen, size: 38)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(exam.title)
-                            .font(.cardTitle)
+                            .font(LTTypography.cardTitle)
                             .foregroundStyle(LTColors.textPrimary)
                             .lineLimit(1)
                         Text(examSubtitle(exam))
@@ -351,7 +351,7 @@ struct HomeScreen: View {
                     LTIconBadge(symbol: "graduationcap.fill", tint: LTColors.accentGreen, size: 40)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("今日复习")
-                            .font(.cardTitle)
+                            .font(LTTypography.cardTitle)
                             .foregroundStyle(LTColors.textPrimary)
                         Text(viewModel.todayReviewSummary)
                             .font(.footnote)
@@ -383,7 +383,7 @@ struct HomeScreen: View {
                     LTIconBadge(symbol: "books.vertical", tint: LTColors.accentBlue, size: 40)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("待阅读资料")
-                            .font(.cardTitle)
+                            .font(LTTypography.cardTitle)
                             .foregroundStyle(LTColors.textPrimary)
                         Text("\(viewModel.unreadMaterialCount) 份资料还没有读过")
                             .font(.footnote)
@@ -420,7 +420,7 @@ struct HomeScreen: View {
                     LTIconBadge(symbol: "tray.full", tint: LTColors.accentCyan, size: 40)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("收件箱")
-                            .font(.cardTitle)
+                            .font(LTTypography.cardTitle)
                             .foregroundStyle(LTColors.textPrimary)
                         Text("有 \(environment.inbox.pendingCount) 项分享待整理")
                             .font(.footnote)

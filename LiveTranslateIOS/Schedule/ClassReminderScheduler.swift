@@ -214,9 +214,9 @@ final class ClassReminderScheduler {
 
     // MARK: - Wire constants (shared with NotificationRouter)
 
-    static let categoryID = "COURSE_REMINDER"
-    static let startActionID = "START_CLASS"
-    static let occurrenceKeyUserInfo = "occurrenceKey"
+    nonisolated static let categoryID = "COURSE_REMINDER"
+    nonisolated static let startActionID = "START_CLASS"
+    nonisolated static let occurrenceKeyUserInfo = "occurrenceKey"
     static let scheduleIDUserInfo = "scheduleID"
 
     private static func notificationID(_ occurrenceKey: String) -> String {

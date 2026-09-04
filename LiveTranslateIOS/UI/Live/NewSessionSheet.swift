@@ -674,7 +674,9 @@ struct NewSessionSheet: View {
         // up with a retryable error — the button is never left dead.
         isStarting = true
         LTHaptics.success()
-        await environment.coordinator.start(title: trimmedName, courseID: selectedCourseID)
+        await environment.coordinator.start(
+            title: trimmedName, courseID: selectedCourseID, schedule: nil
+        )
         isStarting = false
 
         if environment.coordinator.isRunning {
