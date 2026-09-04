@@ -204,11 +204,11 @@ enum VisualAskImagePipeline {
         }
 
         var encoded = encodeAll(maxEdge: preferredLongEdge, quality: preferredQuality)
-        if encoded.count == uprights.count, encoded.reduce(0, +) > totalByteBudget {
+        if encoded.count == uprights.count, encoded.reduce(0) { $0 + $1.count } > totalByteBudget {
             encoded = encodeAll(maxEdge: fallbackLongEdge, quality: fallbackQuality)
         }
         guard encoded.count == uprights.count else { throw PrepareError.emptyImage }
-        let total = encoded.reduce(0, +)
+        let total = encoded.reduce(0) { $0 + $1.count }
         guard total <= hardByteLimit else { throw PrepareError.tooLarge }
 
         return encoded.enumerated().map { index, data in

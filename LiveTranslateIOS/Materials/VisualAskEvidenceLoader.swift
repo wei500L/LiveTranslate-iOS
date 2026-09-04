@@ -94,8 +94,8 @@ enum VisualAskEvidenceLoader {
             let ext = MaterialFileStore.fileExtension(
                 fileName: material.originalFileName, mime: material.mimeType
             )
-            if let store, store.originalExists(materialID: materialID, fileExtension: ext),
-               let url = store.originalURL(materialID: materialID, fileExtension: ext) {
+            if let store, store.originalExists(materialID: materialID, fileExtension: ext) {
+                let url = store.originalURL(materialID: materialID, fileExtension: ext)
                 return VisualAskImagePipeline.PrepareSource(
                     source: .pdfPage(url: url, pageNumber: pageNumber),
                     crop: evidence.cropRect

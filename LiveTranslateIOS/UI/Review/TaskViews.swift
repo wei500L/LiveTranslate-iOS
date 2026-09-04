@@ -615,8 +615,8 @@ struct TaskDetailView: View {
             // and cannot meet in a plain ternary.
             .buttonStyle(
                 status == .done
-                    ? AnyButtonStyle(LTSecondaryButtonStyle())
-                    : AnyButtonStyle(LTPrimaryButtonStyle())
+                    ? LTAnyButtonStyle(LTSecondaryButtonStyle())
+                    : LTAnyButtonStyle(LTPrimaryButtonStyle())
             )
 
             if status != .done, task.dueAt != nil {

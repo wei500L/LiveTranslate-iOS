@@ -2,6 +2,20 @@ import SwiftUI
 
 // MARK: - Buttons
 
+/// Minimal ButtonStyle type eraser (the SDK ships AnyGesture but no
+/// AnyButtonStyle) — lets two concrete styles meet in a ternary.
+struct LTAnyButtonStyle: ButtonStyle {
+    private let make: (Configuration) -> AnyView
+
+    init<S: ButtonStyle>(_ style: S) {
+        make = { AnyView(style.makeBody(configuration: $0)) }
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        make(configuration)
+    }
+}
+
 /// Primary action button: green fill, gentle press response, optional glow
 /// reserved for main actions. The glow is a static soft shadow — no
 /// animation loop.
