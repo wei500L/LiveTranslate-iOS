@@ -36,5 +36,10 @@ fi
 echo "SHA256 verified."
 
 rm -rf "$DEST"
+# The release zip unpacks under its own top-level name
+# (SherpaOnnxC.xcframework); the project references it as
+# sherpa-onnx.xcframework — rename on unpack.
 unzip -q "$TMP" -d ThirdParty/
+mv ThirdParty/SherpaOnnxC.xcframework "$DEST"
+test -d "$DEST/ios-arm64"
 echo "Unpacked to $DEST"

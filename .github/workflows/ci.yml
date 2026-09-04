@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -11,9 +12,9 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build, unit tests, hygiene
-    runs-on: macos-15
-    timeout-minutes: 60
+    name: XcodeGen, build (Debug+Release), unit tests, demo smoke
+    runs-on: macos-26
+    timeout-minutes: 90
     env:
       # Pinned sherpa-onnx v1.13.7 iOS XCFramework. Asset choice matters:
       # "ios-shared-onnxruntime-static" is a dynamic framework with
@@ -23,35 +24,88 @@ jobs:
       # Xcode project. No ASR model files are ever downloaded in CI.
       SHERPA_XCFW_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.7-ios-shared-onnxruntime-static.xcframework.zip
       SHERPA_XCFW_SHA256: 72db1b34ff75c6b4f3f40a73d46c4241e1c2b23599638975c66ad6dec10bb298
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+      - name: Record runner environment
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          swift --version
+          xcodebuild -showsdks | grep -i ios || true
+
+      - name: Select Xcode 26.6
+        run: |
+          set -euo pipefail
+          ls /Applications/ | grep -i xcode
+          sudo xcode-select -s /Applications/Xcode_26.6.app
+          xcodebuild -version
 
       - name: Install xcodegen
-        run: brew install xcodegen
+        run: brew install xcodegen xcbeautify
 
       - name: Fetch sherpa-onnx xcframework (hash-pinned)
         run: |
           set -euo pipefail
-          curl -fSL "$SHERPA_XCFW_URL" -o /tmp/sherpa-onnx.xcframework.zip
+          curl -fSL --retry 3 "$SHERPA_XCFW_URL" -o /tmp/sherpa-onnx.xcframework.zip
           echo "$SHERPA_XCFW_SHA256  /tmp/sherpa-onnx.xcframework.zip" | shasum -a 256 --check
-          unzip -q /tmp/sherpa-onnx.xcframework.zip -d ThirdParty
-          test -d ThirdParty/sherpa-onnx.xcframework
+          # The release zip unpacks under its own top-level name
+          # (SherpaOnnxC.xcframework); the project references it as
+          # sherpa-onnx.xcframework — rename on unpack.
+          rm -rf ThirdParty/SherpaOnnxC.xcframework ThirdParty/sherpa-onnx.xcframework
+          unzip -q /tmp/sherpa-onnx.xcframework.zip -d ThirdParty/
+          mv ThirdParty/SherpaOnnxC.xcframework ThirdParty/sherpa-onnx.xcframework
+          test -d ThirdParty/sherpa-onnx.xcframework/ios-arm64
 
-      - name: Generate Xcode project
-        run: xcodegen generate
+      - name: Generate Xcode project (XcodeGen)
+        run: |
+          set -euo pipefail
+          xcodegen --version
+          xcodegen generate
+          xcodebuild -list -project LiveTranslateIOS.xcodeproj
 
-      - name: Build (generic iOS Simulator)
+      - name: Build Debug (iOS Simulator)
         run: |
           set -o pipefail
           xcodebuild \
             -project LiveTranslateIOS.xcodeproj \
             -scheme LiveTranslateIOS \
+            -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
-            build | xcbeautify --quiet
+            -derivedDataPath build/DerivedData \
+            build 2>&1 | xcbeautify --quiet
+
+      - name: Build Release (iOS Simulator)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project LiveTranslateIOS.xcodeproj \
+            -scheme LiveTranslateIOS \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            build 2>&1 | xcbeautify --quiet
+
+      - name: Verify build products (appex embedding, bundle IDs)
+        run: |
+          set -euo pipefail
+          for config in Debug Release; do
+            app="build/DerivedData/Build/Products/$config-iphonesimulator/LiveTranslateIOS.app"
+            test -d "$app"
+            test -d "$app/PlugIns/LiveTranslateShareExtension.appex" || { echo "Share .appex not embedded ($config)"; exit 1; }
+            test -d "$app/PlugIns/LiveTranslateWidgets.appex" || { echo "Widget .appex not embedded ($config)"; exit 1; }
+            plutil -lint "$app/Info.plist"
+            plutil -lint "$app/PlugIns/LiveTranslateShareExtension.appex/Info.plist"
+            plutil -lint "$app/PlugIns/LiveTranslateWidgets.appex/Info.plist"
+            echo "--- $config OK ---"
+          done
+          # Release must not contain the demo launch path (DemoMode is
+          # #if DEBUG-only; assert no compiled artifact references it).
+          if strings build/DerivedData/Build/Products/Release-iphonesimulator/LiveTranslateIOS.app/LiveTranslateIOS \
+            | grep -q "ui-demo"; then
+            echo "Release binary contains the demo launch path"; exit 1
+          fi
 
       - name: Unit tests (iOS Simulator)
         run: |
@@ -59,11 +113,39 @@ jobs:
           xcodebuild \
             -project LiveTranslateIOS.xcodeproj \
             -scheme LiveTranslateIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
-            test | xcbeautify --quiet
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -derivedDataPath build/DerivedData \
+            -resultBundlePath build/Tests.xcresult \
+            test 2>&1 | xcbeautify --quiet
+
+      - name: Demo smoke (UI demo launch on Simulator)
+        run: |
+          set -euo pipefail
+          # Pick the first available iOS simulator device.
+          set -- $(xcrun simctl list devices available | grep -o "iPhone 17" | head -1)
+          device="$1"; [ -n "$device" ] || { xcrun simctl list devices available; echo "no iPhone simulator available"; exit 1; }
+          udid=$(xcrun simctl list devices -j | python3 -c "
+          import json,sys
+          data=json.load(sys.stdin)['devices']
+          for runtime, devices in data.items():
+              for d in devices:
+                  if d['name'] == '$device' and d['isAvailable']:
+                      print(d['udid']); break
+          ")
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl install "$udid" build/DerivedData/Build/Products/Debug-iphonesimulator/LiveTranslateIOS.app
+          xcrun simctl launch "$udid" com.livetranslate.ios --ui-demo
+          sleep 20
+          # The process must still be alive after 20 seconds.
+          xcrun simctl spawn "$udid" launchctl list | grep -q com.livetranslate.ios
+          echo "Demo smoke OK: process alive after 20s"
+          xcrun simctl shutdown "$udid" || true
 
       - name: No model files committed
         run: |
+          set -euo pipefail
           # No ONNX / Core ML artifacts may ride along in git.
           bad=$(git ls-files | grep -Ei '\.(onnx|mlpackage|mlmodelc)$|weight\.bin$' || true)
           if [ -n "$bad" ]; then
@@ -74,6 +156,7 @@ jobs:
 
       - name: No API keys in source
         run: |
+          set -euo pipefail
           # Look for obvious credential literals. Allowlist matches that
           # are keys by name (settings identifiers), not values.
           if grep -rnE '(sk-[A-Za-z0-9]{20,}|api[_-]?key\s*[:=]\s*"[^"$\{]{8,}")' \
@@ -84,6 +167,7 @@ jobs:
 
       - name: Manifest format check
         run: |
+          set -euo pipefail
           python3 - <<'EOF'
           import json, sys
           with open("Resources/ModelManifest.json") as fh:
@@ -108,8 +192,19 @@ jobs:
 
       - name: No runtime dependency on the legacy desktop project
         run: |
+          set -euo pipefail
           # Source files must not reference the old project's path — the iOS
           # app is fully independent of it.
           if grep -rn '/Users/oo/project/LiveTranslate' --include='*.swift' .; then
             echo "Swift source references the legacy project path."; exit 1
           fi
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-failure-diagnostics
+          retention-days: 7
+          path: |
+            build/Tests.xcresult
+          if-no-files-found: ignore
