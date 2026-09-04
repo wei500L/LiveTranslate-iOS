@@ -460,8 +460,53 @@ struct SettingsScreen: View {
 
     // MARK: - Data
 
+    /// 锁屏内容隐私 — what the lock-screen Live Activity / Dynamic Island
+    /// may reveal about a running classroom. Restrained default (状态 +
+    /// 课堂名称); the transcript body shows only on explicit opt-in.
+    /// Changing it updates the running Live Activity + widget snapshot;
+    /// saved classroom data and the in-app live screen are unaffected.
+    private var lockScreenPrivacySection: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            Picker("锁屏显示内容", selection: lockScreenPrivacyBinding) {
+                Text("仅课堂状态").tag(LockScreenPrivacy.statusOnly)
+                Text("状态与课堂名称").tag(LockScreenPrivacy.statusAndTitle)
+                Text("加最新中文翻译").tag(LockScreenPrivacy.statusTitleAndLatestText)
+            }
+            .pickerStyle(.segmented)
+            Text(lockScreenPrivacyHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, LTSpacing.xs)
+    }
+
+    private var lockScreenPrivacyBinding: Binding<LockScreenPrivacy> {
+        Binding(
+            get: { environment.settings.lockScreenPrivacy },
+            set: { newValue in
+                environment.settings.lockScreenPrivacy = newValue
+                // Apply immediately: the running Live Activity and the
+                // widget snapshot re-render under the new level (nothing
+                // else in the app changes).
+                environment.systemCoordinator?.refreshSnapshotAndWidgets(force: true)
+            }
+        )
+    }
+
+    private var lockScreenPrivacyHint: String {
+        switch environment.settings.lockScreenPrivacy {
+        case .statusOnly:
+            return "锁屏与灵动岛只显示正在记录 / 已暂停，不显示课堂名称。"
+        case .statusAndTitle:
+            return "锁屏显示课堂状态与名称。已保存的课堂内容不受影响。"
+        case .statusTitleAndLatestText:
+            return "锁屏额外显示最新一条中文翻译（仅一条，不构成完整记录）。"
+        }
+    }
+
     private var dataSection: some View {
         Section(String(localized: "Data")) {
+            lockScreenPrivacySection
             Toggle(isOn: saveAudioBinding) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(String(localized: "课堂录音"))

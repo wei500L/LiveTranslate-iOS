@@ -168,6 +168,15 @@ struct StudyPlanDetailView: View {
     // MARK: - Actions
 
     private func startTimer(_ item: StudyPlanItem) {
+        // Classroom guard (同层互斥修复): a running classroom recording
+        // blocks a new study timer — classroom time NEVER becomes study
+        // time, and the reverse funnel (new classroom) already pauses
+        // studying. Route back to the classroom instead of silently
+        // starting.
+        if environment.coordinator.isRunning {
+            environment.presentLive()
+            return
+        }
         guard !environment.studyActivityTracker.hasActiveActivity else {
             // The exactly-one invariant: the running activity UI shows
             // resume/finish; starting a second one is refused here.

@@ -36,6 +36,11 @@ final class SettingsStore {
         /// Dedicated model for image understanding (multimodal); empty =
         /// inherit the study-review model (then the translation model).
         static let attachmentAnalysisModel = "attachmentAnalysis.model"
+        /// What the lock screen / Live Activity may reveal about the
+        /// running classroom. A device-level privacy preference (stored
+        /// globally, not per-account): status-only, status + name (the
+        /// restrained default), or additionally one latest Chinese line.
+        static let lockScreenPrivacy = "ui.lockScreenPrivacy"
     }
 
     /// Live-classroom translation toggle (new-classroom form). When off,
@@ -44,6 +49,14 @@ final class SettingsStore {
     /// time, so switching mid-classroom affects subsequent segments.
     var liveTranslationEnabled: Bool {
         didSet { defaults.set(liveTranslationEnabled, forKey: Keys.liveTranslationEnabled) }
+    }
+
+    /// Lock-screen reveal level. Restrained default: status + classroom
+    /// name; the transcript body never shows unless the user opts in.
+    /// Changing it updates the running Live Activity + snapshot (via the
+    /// system coordinator); saved classroom data is unaffected.
+    var lockScreenPrivacy: LockScreenPrivacy {
+        didSet { defaults.set(lockScreenPrivacy.rawValue, forKey: Keys.lockScreenPrivacy) }
     }
 
     var preferredBackend: ASRBackendKind {
@@ -162,6 +175,9 @@ final class SettingsStore {
         attachmentAnalysisModel = defaults.string(forKey: Keys.attachmentAnalysisModel) ?? ""
         let liveTranslation = defaults.object(forKey: Keys.liveTranslationEnabled) as? Bool
         liveTranslationEnabled = liveTranslation ?? true
+        lockScreenPrivacy = LockScreenPrivacy(
+            rawValue: defaults.string(forKey: Keys.lockScreenPrivacy) ?? ""
+        ) ?? .statusAndTitle
     }
 }
 

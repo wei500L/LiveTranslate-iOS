@@ -29,6 +29,10 @@ targets:
       # Shared-inbox kit: compiled into BOTH the app and the Share
       # Extension (the App Group storage contract — Foundation only).
       - path: SharedInboxKit
+      # System-integration kit: compiled into BOTH the app and the Widget
+      # Extension (App Group snapshot / command / route contract +
+      # ActivityKit attribute definitions — Foundation + ActivityKit only).
+      - path: SharedSystemKit
     dependencies:
       # Official v1.13.7 release asset: dynamic framework with onnxruntime
       # statically linked inside (self-contained; the plain "static"
@@ -37,6 +41,8 @@ targets:
         embed: true
       # Share Extension (智能收件箱 receive side) — embedded into the app.
       - target: LiveTranslateShareExtension
+      # Widget Extension (锁屏实时课堂 / 灵动岛 / 小组件 / 控制中心).
+      - target: LiveTranslateWidgets
     info:
       path: LiveTranslateIOS/Info.plist
       properties:
@@ -51,6 +57,13 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIRequiredDeviceCapabilities: [arm64]
+        # Lock-screen live classroom + Dynamic Island (created only by the
+        # app after a real coordinator start; display-only — it never
+        # claims to keep ASR alive by itself).
+        NSSupportsLiveActivities: true
+        # Live Activity content stale-dating: 4h covers a long class with
+        # quiet content; push tokens are NOT used (no server component).
+        NSSupportsLiveActivitiesFrequentUpdates: false
         NSMicrophoneUsageDescription: >-
           LiveTranslate uses the microphone to recognize Russian speech on
           device with GigaAM-v3 and show a Chinese translation. Audio is
@@ -143,6 +156,40 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: false
         # Same ad-hoc simulator signing posture as the app target.
+        CODE_SIGN_IDENTITY[sdk=iphonesimulator*]: "-"
+        SKIP_INSTALL: "YES"
+
+  # Widget Extension (锁屏实时课堂 / 灵动岛 / 小组件 / 控制中心控件):
+  # renders the App Group snapshot the app maintains, forwards user intents
+  # back through the command/route queues, and renders the two Live
+  # Activities. It deliberately does nothing else — no SwiftData, no ASR,
+  # no Keychain, no networking, no model loading.
+  LiveTranslateWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      # Same App Group snapshot / command / route + Live Activity
+      # attribute contract as the app (Foundation + ActivityKit only).
+      - path: SharedSystemKit
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: LiveTranslate
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widgets/LiveTranslateWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.livetranslate.ios]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livetranslate.ios.Widgets
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: false
+        # Same ad-hoc simulator signing posture as the other targets.
         CODE_SIGN_IDENTITY[sdk=iphonesimulator*]: "-"
         SKIP_INSTALL: "YES"
 

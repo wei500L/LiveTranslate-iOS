@@ -105,6 +105,13 @@ struct HomeScreen: View {
                 showNewSessionSheet = true
             }
             #endif
+            // A system surface (widget / intent / control) asked to start
+            // a classroom — present the form; its full validation chain
+            // (permissions, resources, confirmation) runs there.
+            if environment.flow.pendingNewSessionForm {
+                environment.flow.consumeNewSessionForm()
+                showNewSessionSheet = true
+            }
             startMinuteTimer()
             environment.inbox.reload()
             // Inbox item routes are consumed on every appear (the route

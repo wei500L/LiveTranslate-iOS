@@ -15,6 +15,12 @@ struct RecordsScreen: View {
     /// Debug UI demo: pushes the seeded detail screen once.
     @State private var isPushingDemoDetail = false
     @State private var demoDetailSessionID: UUID?
+    /// System-route pending pushes (Spotlight / widget / intent): one
+    /// detail target per type, consumed once here.
+    @State private var pushedSystemSessionID: UUID?
+    @State private var pushedSystemCourseID: UUID?
+    @State private var pushedSystemMaterialID: UUID?
+    @State private var pushedSystemMaterialPage: Int?
 
     var body: some View {
         NavigationStack {
@@ -59,6 +65,38 @@ struct RecordsScreen: View {
                     EmptyView()
                 }
             }
+            // System-route targets (consume-once): the route coordinator
+            // validated existence before parking the id.
+            .navigationDestination(isPresented: Binding(
+                get: { pushedSystemSessionID != nil },
+                set: { if !$0 { pushedSystemSessionID = nil } }
+            )) {
+                if let pushedSystemSessionID {
+                    SessionDetailView(sessionID: pushedSystemSessionID)
+                        .environment(environment)
+                }
+            }
+            .navigationDestination(isPresented: Binding(
+                get: { pushedSystemCourseID != nil },
+                set: { if !$0 { pushedSystemCourseID = nil } }
+            )) {
+                if let pushedSystemCourseID {
+                    CourseDetailView(courseID: pushedSystemCourseID)
+                        .environment(environment)
+                }
+            }
+            .navigationDestination(isPresented: Binding(
+                get: { pushedSystemMaterialID != nil },
+                set: { if !$0 { pushedSystemMaterialID = nil } }
+            )) {
+                if let pushedSystemMaterialID {
+                    MaterialReaderScreen(
+                        materialID: pushedSystemMaterialID,
+                        initialPage: pushedSystemMaterialPage
+                    )
+                    .environment(environment)
+                }
+            }
         }
         .task {
             viewModel.attach(environment)
@@ -74,6 +112,7 @@ struct RecordsScreen: View {
                 isPushingDemoDetail = true
             }
             #endif
+            consumeSystemRoutes()
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
@@ -113,6 +152,27 @@ struct RecordsScreen: View {
     }
 
     // MARK: - Search
+
+    /// System-route consumption (consume-once): Spotlight / widget /
+    /// intent routes park validated ids on AppFlow; the records tab
+    /// pushes them here.
+    private func consumeSystemRoutes() {
+        let flow = environment.flow
+        if let id = flow.pendingSystemSessionID {
+            flow.pendingSystemSessionID = nil
+            pushedSystemSessionID = id
+        }
+        if let id = flow.pendingSystemCourseID {
+            flow.pendingSystemCourseID = nil
+            pushedSystemCourseID = id
+        }
+        if let id = flow.pendingSystemMaterialID {
+            flow.pendingSystemMaterialID = nil
+            pushedSystemMaterialPage = flow.pendingSystemMaterialPage
+            flow.pendingSystemMaterialPage = nil
+            pushedSystemMaterialID = id
+        }
+    }
 
     private var searchField: some View {
         HStack(spacing: LTSpacing.s) {

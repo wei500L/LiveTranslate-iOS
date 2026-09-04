@@ -144,6 +144,14 @@ final class AppEnvironment {
     let playback: ClassroomPlaybackService
     /// Waveform precompute + cache for recordings (device-local).
     let waveformStore: RecordingWaveformStore
+    /// System-integration driver (Live Activities, widgets, commands,
+    /// system routes, Spotlight). Nil in the Debug demo environment and
+    /// the DI test composition (demo mode must never touch the real App
+    /// Group, ActivityKit or Spotlight).
+    let systemCoordinator: SystemIntegrationCoordinator?
+    /// Honest feedback when a system route pointed at a deleted target:
+    /// a one-shot banner consumed by the root view (never a dead tab).
+    private(set) var missingTargetMessage: String?
 
     /// Rebuilt whenever translation settings change (Settings screen calls
     /// `refreshTranslationService()` on commit and after key changes).
@@ -376,12 +384,17 @@ final class AppEnvironment {
             playback: playback,
             waveformStore: waveformStore,
             inbox: inbox,
-            inboxExecutor: inboxExecutor
+            inboxExecutor: inboxExecutor,
+            systemIntegrationScopeKey: accountID.map { $0.uuidString }
+                ?? SharedInboxScopeStore.guestScope
         )
     }
 
     /// Full dependency-injection initializer — the composition boundary the
-    /// Debug demo environment also assembles through.
+    /// Debug demo environment also assembles through. Pass
+    /// `systemIntegrationScopeKey` to arm the system surfaces for that
+    /// profile's scope (production); nil (default) keeps every system
+    /// integration off (demo / tests).
     init(
         capabilities: Capabilities,
         modelContainer: ModelContainer,
@@ -421,7 +434,8 @@ final class AppEnvironment {
         playback: ClassroomPlaybackService? = nil,
         waveformStore: RecordingWaveformStore? = nil,
         inbox: InboxCoordinator? = nil,
-        inboxExecutor: InboxActionExecutor? = nil
+        inboxExecutor: InboxActionExecutor? = nil,
+        systemIntegrationScopeKey: String? = nil
     ) {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
@@ -535,6 +549,25 @@ final class AppEnvironment {
         // the real one from the profile init.
         self.inbox = inbox ?? InboxCoordinator(store: nil)
         self.inboxExecutor = inboxExecutor
+        // System integration (Live Activities, widgets, commands, system
+        // routes, Spotlight): armed only when the profile init passes a
+        // scope key (production); demo/tests keep it off entirely.
+        if let systemIntegrationScopeKey {
+            let coordinator = SystemIntegrationCoordinator(
+                environment: self, scopeKey: systemIntegrationScopeKey
+            )
+            self.systemCoordinator = coordinator
+            // Repository mutations drive Spotlight indexing + widget
+            // snapshot refresh (covers local edits, cloud-sync applies
+            // and inbox imports — the repository is the single choke
+            // point). Registered as an AUXILIARY observer; the sync
+            // service's own observer slot is untouched.
+            repository.auxiliaryMutationObservers = [
+                SystemMutationBridge(coordinator: coordinator)
+            ]
+        } else {
+            self.systemCoordinator = nil
+        }
     }
 
     /// Profile store location — delegated to `AccountScope` (the single
@@ -688,6 +721,16 @@ final class AppEnvironment {
             liveViewModelSessionID = sessionID
         }
         flow.openLive()
+        // A freshly started classroom gets its Live Activity exactly now:
+        // the session exists and is running (failed / refused starts never
+        // reach here). A side effect only — the classroom itself never
+        // depends on it.
+        if coordinator.isRunning, sessionID != nil {
+            systemCoordinator?.handleClassroomStarted()
+            // In-classroom snapshot: the home banner and widgets learn
+            // about the running session immediately.
+            systemCoordinator?.refreshSnapshotAndWidgets(force: true)
+        }
     }
 
     /// Fallback accessor used by the full-screen cover's content builder
@@ -703,9 +746,13 @@ final class AppEnvironment {
 
     /// End the classroom: stop the coordinator, release the presentation
     /// view model (its state is meaningless once the session is over) and
-    /// collapse back to the tabs.
+    /// collapse back to the tabs. The Live Activity first shows 正在保存
+    /// (the stop drains the final segment), then dismisses when the data
+    /// has actually been written.
     func endLiveSession() async {
+        systemCoordinator?.handleClassroomStopping()
         await coordinator.stop()
+        systemCoordinator?.handleClassroomEnded(saved: true)
         liveViewModel = nil
         liveViewModelSessionID = nil
         flow.collapseLive()
@@ -743,6 +790,16 @@ final class AppEnvironment {
         await classReminders.refresh(
             schedules: schedules, exceptions: exceptions
         ) { courseID in names[courseID] }
+    }
+
+    // MARK: - System-integration bridge
+
+    /// Honest feedback entry for the route coordinator.
+    func reportMissingTarget(_ message: String) {
+        missingTargetMessage = message
+    }
+    func consumeMissingTargetMessage() {
+        missingTargetMessage = nil
     }
 }
 
@@ -811,6 +868,19 @@ final class AppFlow {
     var selectedTab: LTTab = .home
     /// True while the live classroom is the front-most presentation.
     var isLivePresented = false
+    /// System-route parking (pending ids + live-screen directives),
+    /// consumed exactly once by the owning screen. In-memory only.
+    var systemRouteStorage = SystemRouteStorage()
+    /// The live screen presents its existing end-confirmation dialog when
+    /// this flag is set (a system surface asked to END the classroom —
+    /// confirmation always happens in-app, never in the activity).
+    var pendingEndConfirmation = false
+    /// The live screen opens its blackboard capture sheet when set.
+    var pendingBlackboardCapture = false
+    /// Home presents the new-classroom form when set (a system surface
+    /// asked to start a classroom — the full validation chain lives
+    /// there, never in the widget).
+    var pendingNewSessionForm = false
 
     /// Present the live classroom (full-screen).
     func openLive() {
@@ -892,6 +962,40 @@ final class AppFlow {
 
     func consumeInboxItemRoute() {
         pendingInboxItemID = nil
+    }
+
+    // MARK: - System-surface directives (consume-once flags)
+
+    /// A system surface (Live Activity / control / intent) asked to end
+    /// the classroom — the live screen presents its existing confirmation
+    /// dialog; nothing is destroyed by the surface itself.
+    func requestEndConfirmation() {
+        pendingEndConfirmation = true
+    }
+
+    func consumeEndConfirmation() {
+        pendingEndConfirmation = false
+    }
+
+    /// A system surface asked to capture the blackboard — the live screen
+    /// opens its existing capture sheet.
+    func requestBlackboardCapture() {
+        pendingBlackboardCapture = true
+    }
+
+    func consumeBlackboardCapture() {
+        pendingBlackboardCapture = false
+    }
+
+    /// A system surface asked to start a classroom — home presents the
+    /// new-classroom form (name, permission, resource checks).
+    func requestNewSessionForm() {
+        selectedTab = .home
+        pendingNewSessionForm = true
+    }
+
+    func consumeNewSessionForm() {
+        pendingNewSessionForm = false
     }
 
     #if DEBUG

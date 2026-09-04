@@ -26,6 +26,9 @@ struct ReviewCenterScreen: View {
     @State private var reviewCourseID: UUID?
     @State private var showingReviewSession = false
     @State private var pushedExamID: UUID?
+    /// System-route pending push (plan detail from Spotlight / widget /
+    /// intent), consumed once here.
+    @State private var pushedSystemPlanID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -82,6 +85,17 @@ struct ReviewCenterScreen: View {
                         .environment(environment)
                 }
             }
+            // System-route target (consume-once): a plan item route
+            // resolves to its owning plan's detail screen.
+            .navigationDestination(isPresented: Binding(
+                get: { pushedSystemPlanID != nil },
+                set: { if !$0 { pushedSystemPlanID = nil } }
+            )) {
+                if let pushedSystemPlanID {
+                    StudyPlanDetailView(planID: pushedSystemPlanID)
+                        .environment(environment)
+                }
+            }
         }
         .task {
             courses = (try? environment.repository.courses()) ?? []
@@ -107,6 +121,11 @@ struct ReviewCenterScreen: View {
         if environment.flow.pendingTodayStudy {
             environment.flow.consumeStudyPlanReminder()
             segment = .today
+        }
+        // System-route plan detail (Spotlight / widget / intent).
+        if let planID = environment.flow.pendingSystemPlanID {
+            environment.flow.pendingSystemPlanID = nil
+            pushedSystemPlanID = planID
         }
     }
 
@@ -751,6 +770,13 @@ struct TodayPlanItemRow: View {
     }
 
     private func startTimer() {
+        // Classroom guard (同层互斥修复): classroom recording time never
+        // becomes study time — route back to the running classroom
+        // instead of starting a second timer under it.
+        if environment.coordinator.isRunning {
+            environment.presentLive()
+            return
+        }
         guard !environment.studyActivityTracker.hasActiveActivity else { return }
         let started = environment.studyActivityTracker.start(StudyActivityDraft(
             planItemID: item.id,

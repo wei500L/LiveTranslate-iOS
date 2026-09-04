@@ -86,6 +86,9 @@ final class AppSession {
         // never read a stale scope).
         publishInboxScope()
         environment = AppEnvironment(profile: accounts.activeProfile)
+        // App Intents (Siri / Shortcuts / Spotlight / Action Button)
+        // perform in this process; point them at the active profile.
+        AppIntentHost.attach(environment)
     }
 
     // MARK: - Shared-inbox scope (Share Extension attribution)
@@ -142,6 +145,10 @@ final class AppSession {
         // with the new profile.
         environment.examReminders.cancelAll()
         environment.studyActivityTracker.checkpoint()
+        // The old profile's system surfaces (snapshot, Live Activities,
+        // Spotlight, queued routes/commands) clear before the new profile
+        // builds — nothing of one scope survives into another.
+        environment.systemCoordinator?.handleProfileTearDown()
         switch profile {
         case .guest:
             accounts.setActive(nil)
@@ -153,6 +160,7 @@ final class AppSession {
         // never read a stale scope).
         publishInboxScope()
         environment = AppEnvironment(profile: profile)
+        AppIntentHost.attach(environment)
         Self.logger.info("profile switched: \(profile.key, privacy: .public)")
         return true
     }
@@ -200,6 +208,10 @@ final class AppSession {
         accounts.remove(id: id)
         if wasActive {
             environment.cloudSync?.shutdown()
+            // The old profile's system surfaces (snapshot, Live
+            // Activities, Spotlight index) go first; the new profile's
+            // launch task rebuilds them for its scope.
+            environment.systemCoordinator?.handleProfileTearDown()
             environment = AppEnvironment(profile: accounts.activeProfile)
             publishInboxScope()
         }
@@ -213,6 +225,7 @@ final class AppSession {
         accounts.deleteLocalData(accountID: id)
         accounts.remove(id: id)
         environment.cloudSync?.shutdown()
+        environment.systemCoordinator?.handleProfileTearDown()
         environment = AppEnvironment(profile: accounts.activeProfile)
         publishInboxScope()
     }
@@ -354,6 +367,7 @@ final class AppSession {
         // never read a stale scope).
         publishInboxScope()
         environment = AppEnvironment(profile: accounts.activeProfile)
+        AppIntentHost.attach(environment)
         // Post-sign-in bookkeeping on the NEW service: label fetch, first
         // upload scheduling, first sync.
         Task {

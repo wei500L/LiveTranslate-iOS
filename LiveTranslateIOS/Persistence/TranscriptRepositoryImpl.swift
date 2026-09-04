@@ -98,8 +98,30 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
     private let container: ModelContainer
     /// SQLite file whose size `storageBytes()` reports.
     private let databaseURL: URL
-    /// Cloud-sync hook: notified after every persisted mutation.
-    var mutationObserver: (any TranscriptMutationObserving)?
+    /// Cloud-sync hook: the primary observer (the sync service). Stored
+    /// separately from the auxiliaries so the sync service's exclusive
+    /// set/nil contract is untouched.
+    private var primaryMutationObserver: (any TranscriptMutationObserving)?
+    /// System-surface observers (Spotlight, widget snapshot). Notified
+    /// alongside the primary through the fanout the getter hands out.
+    var auxiliaryMutationObservers: [any TranscriptMutationObserving] = []
+
+    /// The hook every mutation site notifies. Returns a FORWARDING fanout
+    /// (primary + auxiliaries) when auxiliaries exist, so call sites stay
+    /// single-observer shaped. Allocating the small fanout per
+    /// notification is negligible (mutations are user-paced).
+    var mutationObserver: (any TranscriptMutationObserving)? {
+        get {
+            if auxiliaryMutationObservers.isEmpty {
+                return primaryMutationObserver
+            }
+            return RepositoryMutationFanout(
+                primary: primaryMutationObserver,
+                auxiliaries: auxiliaryMutationObservers
+            )
+        }
+        set { primaryMutationObserver = newValue }
+    }
 
     /// The container's main-actor context. Internal (not private) so the
     /// domain-family extensions (ExamRepositoryImpl) share it.

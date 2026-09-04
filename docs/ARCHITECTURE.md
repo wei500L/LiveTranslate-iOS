@@ -43,6 +43,10 @@ UI 双语字幕 + 持久化更新 + 导出 (Markdown/TXT×3/JSON/SRT)
 | `Security/` | Keychain 封装（API Key 唯一存放处） |
 | `Diagnostics/` | 基准测试、双后端对比报告、性能指标、Signpost |
 | `UI/` | 实时/记录/设置/模型管理/基准 页面与组件 |
+| `System/` | 系统集成：Live Activity 控制器（课堂/学习）、App Group 快照、命令消费、统一系统路由、Spotlight 索引、App Intents/App Entities |
+| `SharedInboxKit/` | 收件箱共享契约（App Group 存储；编译进主 App + Share Extension） |
+| `SharedSystemKit/` | 系统集成共享契约：版本化快照 / 命令队列 / 路由请求 / ActivityKit Attributes（编译进主 App + Widget Extension） |
+| `Widgets/` | Widget Extension：Live Activity 渲染（锁屏 + 灵动岛）、三个小组件、控制中心控件（iOS 18+ 防护）、扩展侧 Intent |
 
 ## 关键不变量
 

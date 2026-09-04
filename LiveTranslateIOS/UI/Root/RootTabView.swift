@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreSpotlight
 
 /// Root layout: native `TabView(selection:)` keeps all five tabs alive
 /// (首页 · 课堂记录 · 复习 · 搜索 · 我的) so each tab's scroll position,
@@ -69,6 +70,10 @@ struct RootTabView: View {
             // Shared inbox: launch-time reconciliation (interrupted
             // receives, orphan temp files, missing payloads).
             environment.inbox.reconcile()
+            // System integration: routes queued while the app was dead,
+            // stale Live Activities from the previous run, initial
+            // snapshot + widget refresh, command observer.
+            environment.systemCoordinator?.handleLaunch()
             #if DEBUG
             environment.presentDemoLaunchScreenIfNeeded()
             #endif
@@ -87,6 +92,42 @@ struct RootTabView: View {
                 // timestamps; the checkpoint folds the elapsed stretch
                 // into the row so the synced duration stays honest.
                 environment.studyActivityTracker.checkpoint()
+                // System surfaces: consume routes/commands queued while
+                // backgrounded (widgets stay live off the snapshot) and
+                // refresh the snapshot itself.
+                environment.systemCoordinator?.handleForeground()
+            }
+        }
+        // Study-timer observation: in-app pause/resume/finish reflect
+        // into the study Live Activity + snapshot.
+        .onChange(of: environment.studyActivityTracker.currentActivity?.id) { _, _ in
+            environment.systemCoordinator?.syncStudyActivity(startIfMissing: true)
+            environment.systemCoordinator?.refreshSnapshotAndWidgets(force: true)
+        }
+        .onChange(of: environment.studyActivityTracker.isPaused) { _, _ in
+            environment.systemCoordinator?.syncStudyActivity(startIfMissing: false)
+            environment.systemCoordinator?.refreshSnapshotAndWidgets(force: true)
+        }
+        // System-route honest feedback: a deleted target lands as a
+        // one-shot banner instead of a silent dead tab.
+        .alert(
+            "内容已不存在",
+            isPresented: Binding(
+                get: { environment.missingTargetMessage != nil },
+                set: { if !$0 { environment.consumeMissingTargetMessage() } }
+            )
+        ) {
+            Button("好", role: .cancel) { environment.consumeMissingTargetMessage() }
+        } message: {
+            Text(environment.missingTargetMessage ?? "")
+        }
+        // Spotlight taps arrive as continue-userActivity with the item's
+        // identifier; route through the unified coordinator.
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in
+            if let identifier = activity.userInfo?
+                .first(where: { $0.key == CSSearchableItemActivityIdentifier })?
+                .value as? String {
+                environment.systemCoordinator?.handleSpotlightIdentifier(identifier)
             }
         }
     }

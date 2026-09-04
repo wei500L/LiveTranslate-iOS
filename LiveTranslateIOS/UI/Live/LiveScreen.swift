@@ -89,6 +89,21 @@ struct LiveScreen: View {
         .onChange(of: showLiveMaterials) { _, showing in
             if showing { reloadLiveMaterials() }
         }
+        // System-surface directives (consume-once): a Live Activity /
+        // control asked to end the classroom (confirmation lives HERE,
+        // never in the activity) or to capture the blackboard.
+        .onChange(of: environment.flow.pendingEndConfirmation) { _, requested in
+            if requested, viewModel.isRunning {
+                environment.flow.consumeEndConfirmation()
+                showEndConfirmation = true
+            }
+        }
+        .onChange(of: environment.flow.pendingBlackboardCapture) { _, requested in
+            if requested, viewModel.isRunning {
+                environment.flow.consumeBlackboardCapture()
+                showAttachmentCapture = true
+            }
+        }
         .task(id: viewModel.state.phase) {
             // The error banner's 切换到另一后端 button must reflect a real
             // disk-backed install check, refreshed whenever the phase

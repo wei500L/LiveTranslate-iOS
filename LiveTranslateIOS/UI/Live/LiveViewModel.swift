@@ -423,6 +423,10 @@ final class LiveViewModel {
     /// classroom's course assignment survives the restart.
     func restartSession() async {
         await environment?.coordinator.start(title: sessionTitle, courseID: activeSessionCourseID)
+        // The restart creates a NEW session row (new id): re-entering the
+        // environment's presentation path re-arms the Live Activity and
+        // refreshes the system snapshot for the new session.
+        environment?.presentLive()
     }
 
     /// Switch to the other backend and restart listening. Bound to a
@@ -437,5 +441,6 @@ final class LiveViewModel {
         }
         environment.settings.preferredBackend = other
         await environment.coordinator.start(title: sessionTitle, courseID: activeSessionCourseID)
+        environment.presentLive()
     }
 }

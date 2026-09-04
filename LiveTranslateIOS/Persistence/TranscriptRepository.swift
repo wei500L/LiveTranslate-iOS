@@ -19,8 +19,15 @@ protocol ClassroomRepositoryProtocol: AnyObject {
 
     // MARK: Cloud-sync support
     /// Hook receiving every persisted mutation (the sync service builds
-    /// its outbox operations from these notifications).
+    /// its outbox operations from these notifications). The getter may
+    /// return a forwarding fanout that also reaches the auxiliary
+    /// observers below — notification call sites are oblivious.
     var mutationObserver: (any TranscriptMutationObserving)? { get set }
+    /// Additional mutation observers (system surfaces: Spotlight indexing
+    /// + widget snapshot refresh). Additive; the sync observer's
+    /// exclusive set/nil contract on `mutationObserver` is unchanged and
+    /// survives sync shutdown.
+    var auxiliaryMutationObservers: [any TranscriptMutationObserving] { get set }
     func renameSession(_ session: ClassroomSession, to title: String) throws
     func recordServerVersion(entityType: SyncEntityType, entityID: UUID, version: Int) throws
     func applyRemoteSession(record: SyncServerRecordDTO, serverVersion: Int) throws
