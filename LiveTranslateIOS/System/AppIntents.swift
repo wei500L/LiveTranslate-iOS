@@ -118,7 +118,7 @@ struct OpenNextExamIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         if let exam {
             await AppIntentHost.open(.exam(exam.id))
-            return .result()
+            return .result(dialog: "已打开考试详情。")
         }
         // No parameter: resolve the nearest scheduled exam from the real
         // repository (nil = honest empty dialog, never a fabricated one).
@@ -136,7 +136,7 @@ struct OpenNextExamIntent: AppIntent {
             return .result(dialog: "近期没有安排的考试。")
         }
         await AppIntentHost.open(.exam(next.id))
-        return .result()
+        return .result(dialog: "已打开最近的考试。")
     }
 }
 

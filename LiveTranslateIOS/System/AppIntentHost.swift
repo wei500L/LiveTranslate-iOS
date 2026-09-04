@@ -25,11 +25,16 @@ enum AppIntentHost {
     /// Run `body` against the active environment on the main actor.
     /// Returns nil when no production environment is attached (demo
     /// mode / very early launch) — callers surface an honest result.
+    ///
+    /// @MainActor (not MainActor.run): the caller-facing generic result
+    /// may be a non-Sendable model object; MainActor.run constrains its
+    /// result to Sendable, an actor-isolated async method may return it.
+    @MainActor
     static func withEnvironment<T>(
-        _ body: @MainActor (AppEnvironment) -> T
+        _ body: (AppEnvironment) -> T
     ) async -> T? {
         guard let environment else { return nil }
-        return await MainActor.run { body(environment) }
+        return body(environment)
     }
 
     /// Navigate through the unified system-route coordinator.
