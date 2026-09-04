@@ -1260,8 +1260,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             predicate: #Predicate { $0.courseID == id }
         ))
         for schedule in schedules {
+            // Hoisted: #Predicate treats a captured value's property as a
+            // key path on the value's type (unbuildable); a local keeps it
+            // a value.
+            let scheduleID = schedule.id
             let exceptions = try context.fetch(FetchDescriptor<ScheduleException>(
-                predicate: #Predicate { $0.scheduleID == schedule.id }
+                predicate: #Predicate { $0.scheduleID == scheduleID }
             ))
             for exception in exceptions { context.delete(exception) }
             context.delete(schedule)
@@ -1663,8 +1667,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         // must show 课堂资料已更新. Bumping the session's updatedAt drives
         // the existing staleness check (no extra sync churn: the session
         // row is not re-notified).
+        let sessionID = attachment.sessionID
         if let session = try? context.fetch(FetchDescriptor<ClassroomSession>(
-            predicate: #Predicate { $0.id == attachment.sessionID }
+            predicate: #Predicate { $0.id == sessionID }
         )).first {
             session.updatedAt = .now
         }
@@ -3311,8 +3316,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
 
     func markMaterialExtractionInterrupted(_ material: CourseMaterial) throws {
         guard material.extractionStatus == .extracting else { return }
+        let materialID = material.id
         let hasPages = ((try? context.fetchCount(FetchDescriptor<MaterialPage>(
-            predicate: #Predicate { $0.materialID == material.id }
+            predicate: #Predicate { $0.materialID == materialID }
         ))) ?? 0) > 0
         material.extractionStatus = hasPages ? .partial : .failed
         material.updatedAt = .now
@@ -3561,8 +3567,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             answerModel: draft.answerModel ?? ""
         )
         context.insert(message)
+        let threadID = draft.threadID
         if let thread = try context.fetch(FetchDescriptor<CourseAssistantThread>(
-            predicate: #Predicate { $0.id == draft.threadID }
+            predicate: #Predicate { $0.id == threadID }
         )).first {
             thread.updatedAt = .now
             // No thread observer notification — the message is the change;
