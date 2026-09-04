@@ -143,9 +143,10 @@ struct TermSaveSheet: View {
     private func save() {
         draft.russian = draft.russian.trimmingCharacters(in: .whitespacesAndNewlines)
         // Dedup within the same course (normalized russian match).
+        // (try? already flattens the optional return — one binding.)
         if let existing = try? environment.repository.findTerm(
             courseID: draft.courseID, russian: draft.russian
-        ), let existing {
+        ) {
             duplicate = existing
             showDuplicateAlert = true
             return
