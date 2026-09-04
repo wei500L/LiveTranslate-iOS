@@ -140,8 +140,12 @@ extension TranscriptRepository {
             predicate: #Predicate { $0.examID == examID }
         ))
         for plan in plans {
+            // Hoisted: a captured value's property inside #Predicate
+            // becomes an unbuildable key path (the same rule as the other
+            // four predicate fixes).
+            let planID = plan.id
             let items = try context.fetch(FetchDescriptor<StudyPlanItem>(
-                predicate: #Predicate { $0.planID == plan.id }
+                predicate: #Predicate { $0.planID == planID }
             ))
             for item in items {
                 context.delete(item)

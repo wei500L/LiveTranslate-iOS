@@ -898,11 +898,11 @@ final class CourseDetailViewModel {
         lastSessionDate = lastDate
         // Learning space: the course's REAL saved learning material —
         // terms, cards and tasks that live in the review center.
-        courseTerms = (try? environment.repository.terms(courseID: id)) ?? []
-        courseCards = (try? environment.repository.cards(courseID: id)) ?? []
-        courseTasks = (try? environment.repository.tasks(courseID: id, includeDone: true)) ?? []
+        courseTerms = (try? environment.repository.terms(courseID: courseID)) ?? []
+        courseCards = (try? environment.repository.cards(courseID: courseID)) ?? []
+        courseTasks = (try? environment.repository.tasks(courseID: courseID, includeDone: true)) ?? []
         // Course materials (资料库).
-        courseMaterials = (try? environment.repository.materials(courseID: id)) ?? []
+        courseMaterials = (try? environment.repository.materials(courseID: courseID)) ?? []
         isLoaded = true
     }
 

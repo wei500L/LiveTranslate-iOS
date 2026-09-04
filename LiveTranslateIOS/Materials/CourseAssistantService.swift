@@ -108,10 +108,11 @@ final class CourseAssistantService {
 
     /// How many retrieved chunks ride one request (the context budget —
     /// the whole course database is NEVER sent).
-    static let sourceLimit = 12
+    // nonisolated: immutable Ints read from the detached retrieval task.
+    nonisolated static let sourceLimit = 12
     /// Characters per source chunk in the prompt (long pages are
     /// windowed around the match instead of sent whole).
-    static let sourceExcerptLimit = 700
+    nonisolated static let sourceExcerptLimit = 700
     /// Past turns included for follow-up understanding.
     static let historyTurnLimit = 4
 
