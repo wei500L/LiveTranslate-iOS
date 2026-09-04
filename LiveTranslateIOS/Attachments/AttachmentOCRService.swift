@@ -15,9 +15,10 @@ enum AttachmentOCRService {
     /// Whether this device's Vision runtime has Russian recognition
     /// support (drives honest UI copy — no fake capability claims).
     static var supportsRussian: Bool {
-        let supported = VNRecognizeTextRequest.supportedRecognitionLanguages(
-            for: .accurate, revision: VNRecognizeTextRequestRevision.current
-        ) ?? []
+        // The class-method + revision constant was removed; the instance
+        // API (iOS 15+) is the replacement.
+        let request = VNRecognizeTextRequest()
+        let supported = (try? request.supportedRecognitionLanguages()) ?? []
         return supported.contains { $0.hasPrefix("ru") }
     }
 

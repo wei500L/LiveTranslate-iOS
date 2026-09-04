@@ -97,7 +97,7 @@ final class StudyActivityController {
         guard let activity, self.activityID == activityID else { return }
         let session = activity
         Task {
-            await session.end(disposition: .immediate)
+            await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         self.activityID = nil
@@ -107,7 +107,7 @@ final class StudyActivityController {
         guard let activity else { return }
         let session = activity
         Task {
-            await session.end(disposition: .immediate)
+            await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         self.activityID = nil

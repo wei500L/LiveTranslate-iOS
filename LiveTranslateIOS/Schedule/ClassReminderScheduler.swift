@@ -147,6 +147,7 @@ final class ClassReminderScheduler {
                 schedule: entry.schedule, fireDate: fireDate,
                 courseName: courseName(entry.occurrence.courseID ?? UUID())
                     ?? courseName(entry.schedule.courseID ?? UUID())
+                    ?? ""
             ) {
                 armedKeys.insert(key)
                 toPersist = true

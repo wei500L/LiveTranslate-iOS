@@ -219,30 +219,7 @@ struct AttachmentSectionView: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: LTSpacing.s)], spacing: LTSpacing.s) {
                     ForEach(attachments, id: \.id) { attachment in
-                        AttachmentGridCell(
-                            attachment: attachment,
-                            progress: environment.attachmentAnalysisGenerator.progressByID[attachment.id]
-                        )
-                        .onTapGesture {
-                            if selectMode {
-                                toggleSelection(attachment.id)
-                            } else {
-                                selectedAttachmentID = attachment.id
-                            }
-                        }
-                        .overlay(alignment: .topLeading) {
-                            if selectMode {
-                                Image(systemName: selectedIDs.contains(attachment.id)
-                                      ? "checkmark.circle.fill" : "circle")
-                                    .font(.system(size: 16))
-                                    .foregroundStyle(
-                                        selectedIDs.contains(attachment.id)
-                                            ? LTColors.accentGreen
-                                            : LTColors.textTertiary
-                                    )
-                                    .padding(4)
-                            }
-                        }
+                        cell(for: attachment)
                     }
                 }
                 if selectMode {
@@ -318,6 +295,35 @@ struct AttachmentSectionView: View {
                 attachmentID: attachment.id,
                 onChanged: onAttachmentSetChanged
             )
+        }
+    }
+
+    /// One grid cell with its tap handling and selection mark — extracted
+    /// so the LazyVGrid body stays small enough for the type checker.
+    @ViewBuilder
+    private func cell(for attachment: SessionAttachment) -> some View {
+        let progress = environment.attachmentAnalysisGenerator.progressByID[attachment.id]
+        AttachmentGridCell(attachment: attachment, progress: progress)
+            .onTapGesture {
+                if selectMode {
+                    toggleSelection(attachment.id)
+                } else {
+                    selectedAttachmentID = attachment.id
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                selectionMark(for: attachment)
+            }
+    }
+
+    @ViewBuilder
+    private func selectionMark(for attachment: SessionAttachment) -> some View {
+        if selectMode {
+            let isSelected = selectedIDs.contains(attachment.id)
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 16))
+                .foregroundStyle(isSelected ? LTColors.accentGreen : LTColors.textTertiary)
+                .padding(4)
         }
     }
 

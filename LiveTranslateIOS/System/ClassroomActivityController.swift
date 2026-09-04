@@ -146,7 +146,7 @@ final class ClassroomActivityController {
                 state: state,
                 staleDate: .now.addingTimeInterval(15)
             ))
-            await session.end(disposition: saved ? .default : .immediate)
+            await session.end(dismissalPolicy: saved ? .default : .immediate)
         }
         self.activity = nil
         activitySessionID = nil
@@ -191,7 +191,7 @@ final class ClassroomActivityController {
         guard let activity else { return }
         let session = activity
         Task {
-            await session.end(disposition: .immediate)
+            await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         activitySessionID = nil
@@ -207,7 +207,7 @@ final class ClassroomActivityController {
         guard let activity else { return }
         let session = activity
         Task {
-            await session.end(disposition: .immediate)
+            await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         activitySessionID = nil
