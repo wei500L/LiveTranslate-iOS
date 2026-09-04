@@ -213,7 +213,7 @@ struct VisualEvidencePickerSheet: View {
                         .font(LTTypography.caption)
                         .foregroundStyle(LTColors.textTertiary)
                 }
-            case .text, .markdown, .other:
+            case .text, .markdown, .link, .other:
                 Text("文字资料无需选图，直接在课程助手里提问即可。")
                     .font(LTTypography.caption)
                     .foregroundStyle(LTColors.textTertiary)

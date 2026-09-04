@@ -641,7 +641,7 @@ struct MaterialReaderScreen: View {
             )]
         case .image:
             return [VisualAskEvidenceLoader.materialImageEvidence(material)]
-        case .text, .markdown, .other:
+        case .text, .markdown, .link, .other:
             return []
         }
     }

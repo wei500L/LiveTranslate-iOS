@@ -244,7 +244,7 @@ final class LiveTranslationCoordinator {
         // row (SessionRecording) is created FIRST so the player's
         // existence probe never races the file creation; the WAV writer
         // opens the file right after.
-        if settings.saveRawAudio, let session {
+        if settings.saveRawAudio, let session, let repository {
             let directory = Self.sessionsDirectory().appendingPathComponent(session.id.uuidString)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             wavWriter = try? WAVFileWriter(url: directory.appendingPathComponent("raw.wav"))

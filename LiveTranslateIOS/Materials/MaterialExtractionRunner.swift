@@ -117,6 +117,10 @@ final class MaterialExtractionRunner {
             runTextFile(material: material)
         case .image:
             runImage(material: material)
+        case .link:
+            // A link carries no file — nothing to extract (the URL and
+            // shared text are the content, stored on the row itself).
+            try? repository.finishMaterialExtraction(material, status: .unsupported)
         case .other:
             // Nothing to extract — the import already marked it
             // unsupported. Keep the row honest.

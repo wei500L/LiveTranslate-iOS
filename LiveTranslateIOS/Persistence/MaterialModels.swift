@@ -364,11 +364,21 @@ final class MaterialPage {
 
     /// Deterministic page id: the same (materialID, pageNumber) on every
     /// device — page rows sync as the same entity regardless of which
-    /// device extracted them.
+    /// device extracted them. SHA-256 over the seed string, first 16 bytes
+    /// shaped as an RFC 4122 name-based (v5) UUID.
     static func deterministicID(materialID: UUID, pageNumber: Int) -> UUID {
         let seed = "\(materialID.uuidString)#\(pageNumber)"
-        let digest = Insecure.SHA1DigestSeed.seed(for: seed)
-        return digest
+        let digest = SHA256.hash(data: Data(seed.utf8))
+        let b = Array(digest.prefix(16))
+        var bytes = b
+        bytes[6] = (bytes[6] & 0x0F) | 0x50  // version 5 (name-based)
+        bytes[8] = (bytes[8] & 0x3F) | 0x80  // RFC 4122 variant
+        return UUID(
+            uuid: (bytes[0], bytes[1], bytes[2], bytes[3],
+                   bytes[4], bytes[5], bytes[6], bytes[7],
+                   bytes[8], bytes[9], bytes[10], bytes[11],
+                   bytes[12], bytes[13], bytes[14], bytes[15])
+        )
     }
 }
 
@@ -610,16 +620,29 @@ struct MaterialDigestResult: Codable, Sendable, Equatable {
         var title = ""
         var detail = ""
         var pageRefs: [Int] = []
+        var children: [OutlineNode] = []
 
-        enum CodingKeys: String, CodingKey { case title, detail, pageRefs }
+        enum CodingKeys: String, CodingKey { case title, detail, pageRefs, children }
 
         init() {}
+
+        init(
+            id: UUID = UUID(), title: String, detail: String,
+            pageRefs: [Int], children: [OutlineNode] = []
+        ) {
+            self.id = id
+            self.title = title
+            self.detail = detail
+            self.pageRefs = pageRefs
+            self.children = children
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
             detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
             pageRefs = try c.decodeIfPresent([Int].self, forKey: .pageRefs) ?? []
+            children = try c.decodeIfPresent([OutlineNode].self, forKey: .children) ?? []
         }
 
         func encode(to encoder: Encoder) throws {
@@ -627,6 +650,7 @@ struct MaterialDigestResult: Codable, Sendable, Equatable {
             try c.encode(title, forKey: .title)
             try c.encode(detail, forKey: .detail)
             try c.encode(pageRefs, forKey: .pageRefs)
+            try c.encode(children, forKey: .children)
         }
     }
 
@@ -641,6 +665,13 @@ struct MaterialDigestResult: Codable, Sendable, Equatable {
         enum CodingKeys: String, CodingKey { case text, detail, pageRefs }
 
         init() {}
+
+        init(id: UUID = UUID(), text: String, detail: String, pageRefs: [Int]) {
+            self.id = id
+            self.text = text
+            self.detail = detail
+            self.pageRefs = pageRefs
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -668,6 +699,17 @@ struct MaterialDigestResult: Codable, Sendable, Equatable {
         enum CodingKeys: String, CodingKey { case russian, chinese, explanation, pageRefs }
 
         init() {}
+
+        init(
+            id: UUID = UUID(), russian: String, chinese: String,
+            explanation: String, pageRefs: [Int]
+        ) {
+            self.id = id
+            self.russian = russian
+            self.chinese = chinese
+            self.explanation = explanation
+            self.pageRefs = pageRefs
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
