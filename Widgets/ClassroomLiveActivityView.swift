@@ -87,7 +87,7 @@ struct ClassroomLiveActivityView: View {
             Text(WidgetFormat.clockLabel(seconds: context.state.accumulatedSeconds))
         } else if let activeSince = context.state.activeSince {
             // System-driven live count while the classroom records.
-            Text(timerInterval: activeSince..., countsDown: false)
+            Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
         } else {
             Text(WidgetFormat.clockLabel(seconds: context.state.accumulatedSeconds))
         }

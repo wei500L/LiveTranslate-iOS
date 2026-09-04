@@ -60,7 +60,7 @@ struct ClassroomLiveActivityWidget: Widget {
                         Text(WidgetFormat.clockLabel(seconds: context.state.accumulatedSeconds))
                             .font(.caption2.weight(.semibold).monospacedDigit())
                     } else if let activeSince = context.state.activeSince {
-                        Text(timerInterval: activeSince..., countsDown: false)
+                        Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
                             .font(.caption2.weight(.semibold).monospacedDigit())
                             .frame(maxWidth: 60)
                     } else {
@@ -112,7 +112,7 @@ struct ClassroomLiveActivityWidget: Widget {
                     Text(WidgetFormat.clockLabel(seconds: context.state.accumulatedSeconds))
                         .monospacedDigit()
                 } else if let activeSince = context.state.activeSince {
-                    Text(timerInterval: activeSince..., countsDown: false)
+                    Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
                         .monospacedDigit()
                         .frame(maxWidth: 48)
                 } else {
@@ -158,7 +158,7 @@ struct StudyLiveActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     if context.state.phase == .running, let activeSince = context.state.activeSince {
-                        Text(timerInterval: activeSince..., countsDown: false)
+                        Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
                             .font(.caption2.weight(.semibold).monospacedDigit())
                             .frame(maxWidth: 60)
                     } else {
@@ -198,7 +198,7 @@ struct StudyLiveActivityWidget: Widget {
                     .symbolRenderingMode(.hierarchical)
             } compactTrailing: {
                 if context.state.phase == .running, let activeSince = context.state.activeSince {
-                    Text(timerInterval: activeSince..., countsDown: false)
+                    Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
                         .monospacedDigit()
                         .frame(maxWidth: 48)
                 } else {

@@ -180,7 +180,7 @@ struct TodayStudyView: View {
     @ViewBuilder
     private func timerText(_ study: WidgetStudyActivity) -> some View {
         if !study.isPaused, let activeSince = study.activeSince {
-            Text(timerInterval: activeSince..., countsDown: false)
+            Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
         } else {
             Text(WidgetFormat.clockLabel(seconds: study.accumulatedSeconds))
         }

@@ -62,7 +62,7 @@ struct StudyLiveActivityView: View {
     @ViewBuilder
     private var timerText: some View {
         if context.state.phase == .running, let activeSince = context.state.activeSince {
-            Text(timerInterval: activeSince..., countsDown: false)
+            Text(timerInterval: activeSince...Date.distantFuture, countsDown: false)
         } else {
             Text(WidgetFormat.clockLabel(seconds: context.state.accumulatedSeconds))
         }
