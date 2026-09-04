@@ -148,7 +148,10 @@ final class AppEnvironment {
     /// system routes, Spotlight). Nil in the Debug demo environment and
     /// the DI test composition (demo mode must never touch the real App
     /// Group, ActivityKit or Spotlight).
-    let systemCoordinator: SystemIntegrationCoordinator?
+    /// `var` (never reassigned after init): the coordinator takes `self`,
+    /// so the property must be nil-initialized first and filled in the
+    /// init's final phase.
+    private(set) var systemCoordinator: SystemIntegrationCoordinator?
     /// Honest feedback when a system route pointed at a deleted target:
     /// a one-shot banner consumed by the root view (never a dead tab).
     private(set) var missingTargetMessage: String?
@@ -552,6 +555,9 @@ final class AppEnvironment {
         // System integration (Live Activities, widgets, commands, system
         // routes, Spotlight): armed only when the profile init passes a
         // scope key (production); demo/tests keep it off entirely.
+        // (Initialize the property first — the coordinator takes `self`,
+        // which is only usable once every stored property is set.)
+        self.systemCoordinator = nil
         if let systemIntegrationScopeKey {
             let coordinator = SystemIntegrationCoordinator(
                 environment: self, scopeKey: systemIntegrationScopeKey
@@ -565,8 +571,6 @@ final class AppEnvironment {
             repository.auxiliaryMutationObservers = [
                 SystemMutationBridge(coordinator: coordinator)
             ]
-        } else {
-            self.systemCoordinator = nil
         }
     }
 
