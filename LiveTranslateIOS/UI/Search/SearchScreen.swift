@@ -575,7 +575,7 @@ struct SearchScreen: View {
             return ("✎ \(note.text)", .note)
         }
         let entries = (try? environment.repository.entries(for: session)) ?? []
-        if let hit = entries.first({
+        if let hit = entries.first(where: {
             $0.originalText.localizedCaseInsensitiveContains(query)
                 || ($0.translatedText ?? "").localizedCaseInsensitiveContains(query)
                 || (correctionsByEntryID[$0.id]?.russianText ?? "")

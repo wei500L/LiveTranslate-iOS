@@ -607,8 +607,7 @@ struct SettingsScreen: View {
     /// 删除本地已同步原图 (local reclaim only — the cloud copy is a
     /// separate, explicit action in 云端同步).
     private func reclaimSyncedAttachmentOriginals() {
-        guard let store = environment.attachmentStore else { return }
-        _ = store.reclaimOriginals(
+        _ = environment.attachmentStore.reclaimOriginals(
             attachmentIDs: syncedAttachmentIDs, sessionIDs: sessionIDsByAttachment
         )
         refreshAttachmentStorage()
