@@ -126,18 +126,15 @@ struct MaterialFileStore: Sendable {
                 throw ImportError.createFailed
             }
             let input = try FileHandle(forReadingFrom: sourceURL)
+            defer { try? input.close() }
             let output = try FileHandle(forWritingTo: temp)
+            defer { try? output.close() }
             var hasher = SHA256()
             var total: Int64 = 0
-            do {
-                while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty {
-                    hasher.update(data: chunk)
-                    try output.write(contentsOf: chunk)
-                    total += Int64(chunk.count)
-                }
-            } finally {
-                try? input.close()
-                try? output.close()
+            while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty {
+                hasher.update(data: chunk)
+                try output.write(contentsOf: chunk)
+                total += Int64(chunk.count)
             }
             guard total > 0 else { throw ImportError.emptyFile }
             // Same-directory move = atomic rename on APFS.
