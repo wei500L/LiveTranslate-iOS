@@ -843,7 +843,7 @@ final class GuestDataMigration {
 /// The write boundary is structural: this type exposes ONLY count / id /
 /// snapshot queries. It performs no inserts, no deletes and no saves — and
 /// it opens the store with `allowsSave: false` as a second layer, plus
-/// `shouldAutosave = false` on its private context. All returned values
+/// `autosaveEnabled = false` on its private context. All returned values
 /// are Sendable snapshots; `@Model` objects never leave this type.
 @MainActor
 struct GuestLibraryReader {
@@ -1078,7 +1078,7 @@ struct GuestLibraryReader {
     func sessionCount() -> Int {
         guard let container = try? containerIfPresent() else { return 0 }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         return (try? context.fetchCount(FetchDescriptor<ClassroomSession>())) ?? 0
     }
 
@@ -1087,7 +1087,7 @@ struct GuestLibraryReader {
     func sessionIDs(excluding done: Set<UUID> = []) throws -> [UUID] {
         guard let container = try containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let sessions = try context.fetch(FetchDescriptor<ClassroomSession>())
         return sessions.map(\.id).filter { !done.contains($0) }
     }
@@ -1097,7 +1097,7 @@ struct GuestLibraryReader {
         guard !ids.isEmpty else { return [] }
         guard let container = try containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let idSet = Set(ids)
         let sessions = try context.fetch(FetchDescriptor<ClassroomSession>())
         var out: [SessionSnapshot] = []
@@ -1127,7 +1127,7 @@ struct GuestLibraryReader {
     func courseSnapshots() -> [CourseSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let courses = (try? context.fetch(FetchDescriptor<Course>())) ?? []
         return courses.map { c in
             CourseSnapshot(
@@ -1141,7 +1141,7 @@ struct GuestLibraryReader {
     func noteSnapshots() -> [NoteSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let notes = (try? context.fetch(FetchDescriptor<SessionNote>())) ?? []
         return notes.map { n in
             NoteSnapshot(
@@ -1155,7 +1155,7 @@ struct GuestLibraryReader {
     func reviewSnapshots() -> [ReviewSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let reviews = (try? context.fetch(FetchDescriptor<StudyReview>())) ?? []
         return reviews.compactMap { r in
             guard !r.contentJSON.isEmpty else { return nil }
@@ -1172,7 +1172,7 @@ struct GuestLibraryReader {
     func attachmentSnapshots() -> [AttachmentSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<SessionAttachment>())) ?? []
         return rows.map { row in
             AttachmentSnapshot(
@@ -1202,7 +1202,7 @@ struct GuestLibraryReader {
     func termSnapshots() -> [TermSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<GlossaryTerm>())) ?? []
         return rows.map { row in
             TermSnapshot(
@@ -1231,7 +1231,7 @@ struct GuestLibraryReader {
     func cardSnapshots() -> [CardSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<StudyCard>())) ?? []
         return rows.map { row in
             CardSnapshot(
@@ -1264,7 +1264,7 @@ struct GuestLibraryReader {
     func taskSnapshots() -> [TaskSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<StudyTask>())) ?? []
         return rows.map { row in
             TaskSnapshot(
@@ -1293,7 +1293,7 @@ struct GuestLibraryReader {
     func scheduleSnapshots() -> [ScheduleSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<CourseSchedule>())) ?? []
         return rows.map { row in
             ScheduleSnapshot(
@@ -1322,7 +1322,7 @@ struct GuestLibraryReader {
     func exceptionSnapshots() -> [ExceptionSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<ScheduleException>())) ?? []
         return rows.map { row in
             ExceptionSnapshot(
@@ -1345,7 +1345,7 @@ struct GuestLibraryReader {
     func materialSnapshots() -> [MaterialSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<CourseMaterial>())) ?? []
         return rows.map { row in
             MaterialSnapshot(
@@ -1378,7 +1378,7 @@ struct GuestLibraryReader {
     func materialPageSnapshots() -> [MaterialPageSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<MaterialPage>())) ?? []
         return rows.map { row in
             MaterialPageSnapshot(
@@ -1396,7 +1396,7 @@ struct GuestLibraryReader {
     func materialAnnotationSnapshots() -> [MaterialAnnotationSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<MaterialAnnotation>())) ?? []
         return rows.map { row in
             MaterialAnnotationSnapshot(
@@ -1413,7 +1413,7 @@ struct GuestLibraryReader {
     func assistantThreadSnapshots() -> [AssistantThreadSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<CourseAssistantThread>())) ?? []
         return rows.map { row in
             AssistantThreadSnapshot(
@@ -1428,7 +1428,7 @@ struct GuestLibraryReader {
     func assistantMessageSnapshots() -> [AssistantMessageSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<CourseAssistantMessage>())) ?? []
         return rows.map { row in
             AssistantMessageSnapshot(
@@ -1452,7 +1452,7 @@ struct GuestLibraryReader {
     func examSnapshots() -> [ExamSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<Exam>())) ?? []
         return rows.map { row in
             ExamSnapshot(
@@ -1478,7 +1478,7 @@ struct GuestLibraryReader {
     func examTopicSnapshots() -> [ExamTopicSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<ExamTopic>())) ?? []
         return rows.map { row in
             ExamTopicSnapshot(
@@ -1499,7 +1499,7 @@ struct GuestLibraryReader {
     func studyPlanSnapshots() -> [StudyPlanSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<StudyPlan>())) ?? []
         return rows.map { row in
             StudyPlanSnapshot(
@@ -1527,7 +1527,7 @@ struct GuestLibraryReader {
     func studyPlanItemSnapshots() -> [StudyPlanItemSnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<StudyPlanItem>())) ?? []
         return rows.map { row in
             StudyPlanItemSnapshot(
@@ -1553,7 +1553,7 @@ struct GuestLibraryReader {
     func studyActivitySnapshots() -> [StudyActivitySnapshot] {
         guard let container = try? containerIfPresent() else { return [] }
         let context = ModelContext(container)
-        context.shouldAutosave = false
+        context.autosaveEnabled = false
         let rows = (try? context.fetch(FetchDescriptor<StudyActivity>())) ?? []
         return rows.map { row in
             StudyActivitySnapshot(
