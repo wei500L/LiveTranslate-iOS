@@ -26,12 +26,14 @@ enum AppIntentHost {
     /// Returns nil when no production environment is attached (demo
     /// mode / very early launch) — callers surface an honest result.
     ///
-    /// @MainActor (not MainActor.run): the caller-facing generic result
-    /// may be a non-Sendable model object; MainActor.run constrains its
-    /// result to Sendable, an actor-isolated async method may return it.
+    /// @MainActor (not MainActor.run): MainActor.run constrains its
+    /// generic result to Sendable, but callers return non-Sendable model
+    /// objects; an actor-isolated async method may return them. The
+    /// closure parameter is @MainActor so literals at nonisolated call
+    /// sites inherit the isolation.
     @MainActor
     static func withEnvironment<T>(
-        _ body: (AppEnvironment) -> T
+        _ body: @MainActor (AppEnvironment) -> T
     ) async -> T? {
         guard let environment else { return nil }
         return body(environment)
