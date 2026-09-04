@@ -61,6 +61,10 @@ enum LTTypography {
     static let liveOriginal = Font.subheadline
     /// Auxiliary explanation.
     static let caption = Font.footnote
+    /// General body text (reader paragraphs, form copy). NOTE: this was
+    /// referenced by CourseDetailView/ScheduleScreen before it existed
+    /// (a latent break from an unverified round) — defined here now.
+    static let body = Font.subheadline
     /// Timestamps and status chips.
     static let timestamp = Font.caption2.monospacedDigit()
     static let statusChip = Font.caption2.weight(.medium)

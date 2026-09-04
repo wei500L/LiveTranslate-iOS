@@ -15,6 +15,10 @@ struct SearchScreen: View {
     @State private var termHits: [GlossaryTerm] = []
     @State private var cardHits: [StudyCard] = []
     @State private var taskHits: [StudyTask] = []
+    /// Material hits (title/file name/digest + page-level text).
+    @State private var materialHits: [MaterialHit] = []
+    /// Assistant-history hits (question/answer text).
+    @State private var assistantHits: [(message: CourseAssistantMessage, thread: CourseAssistantThread)] = []
     @State private var viewingTerm: GlossaryTerm?
     @State private var viewingTask: StudyTask?
     @State private var viewingCard: StudyCard?
@@ -34,6 +38,17 @@ struct SearchScreen: View {
         var id: UUID { session.id }
     }
 
+    /// One matched course material with its best snippet (page-level
+    /// text, digest or metadata).
+    struct MaterialHit: Identifiable {
+        let material: CourseMaterial
+        let snippet: String
+        /// Matched page (nil = digest/metadata match).
+        let pageNumber: Int?
+
+        var id: UUID { material.id }
+    }
+
     var body: some View {
         NavigationStack {
             LTPage {
@@ -48,7 +63,7 @@ struct SearchScreen: View {
                             LTEmptyState(
                                 symbol: "magnifyingglass",
                                 title: "搜索全部课堂",
-                                message: "支持课堂名称、笔记、学习整理、术语、卡片、任务、中文翻译与俄语原文"
+                                message: "支持课堂名称、笔记、学习整理、术语、卡片、任务、课程资料页文字、问答历史、中文翻译与俄语原文"
                             )
                         }
                     }
@@ -115,6 +130,7 @@ struct SearchScreen: View {
 
     private var resultHeader: some View {
         let learningCount = termHits.count + cardHits.count + taskHits.count
+            + materialHits.count + assistantHits.count
         let sessionPart = results.isEmpty ? "没有匹配的课堂" : "共 \(results.count) 堂课匹配"
         let learningPart = learningCount > 0 ? " · 学习资料 \(learningCount) 条" : ""
         return Text(sessionPart + learningPart)
@@ -126,10 +142,27 @@ struct SearchScreen: View {
     /// chip and a real destination).
     @ViewBuilder
     private var learningResultList: some View {
-        if !termHits.isEmpty || !cardHits.isEmpty || !taskHits.isEmpty {
+        if !termHits.isEmpty || !cardHits.isEmpty || !taskHits.isEmpty
+            || !materialHits.isEmpty || !assistantHits.isEmpty {
             VStack(alignment: .leading, spacing: LTSpacing.s) {
                 LTSectionHeader(title: "学习资料")
                 VStack(spacing: LTSpacing.xs) {
+                    ForEach(materialHits) { hit in
+                        NavigationLink {
+                            MaterialReaderScreen(materialID: hit.material.id)
+                                .environment(environment)
+                        } label: {
+                            learningRow(
+                                symbol: hit.material.format.symbol,
+                                tint: LTColors.accentBlue,
+                                title: hit.material.title.isEmpty
+                                    ? hit.material.originalFileName : hit.material.title,
+                                subtitle: hit.snippet,
+                                chip: "课程资料"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                     ForEach(termHits.prefix(5)) { term in
                         Button {
                             viewingTerm = term
@@ -153,6 +186,15 @@ struct SearchScreen: View {
                             learningRow(symbol: "checklist", tint: LTColors.warning, title: task.title, subtitle: task.detail, chip: "作业任务")
                         }
                         .buttonStyle(.plain)
+                    }
+                    ForEach(assistantHits.prefix(3), id: \.message.id) { hit in
+                        learningRow(
+                            symbol: "bubble.left.and.text.bubble.right",
+                            tint: LTColors.accentGreen,
+                            title: hit.thread.title,
+                            subtitle: hit.message.text,
+                            chip: "问答"
+                        )
                     }
                 }
             }
@@ -273,6 +315,8 @@ struct SearchScreen: View {
             termHits = []
             cardHits = []
             taskHits = []
+            materialHits = []
+            assistantHits = []
             return
         }
         debounceTask = Task {
@@ -304,7 +348,52 @@ struct SearchScreen: View {
         termHits = (try? environment.repository.terms(matching: query)) ?? []
         cardHits = (try? environment.repository.cards(matching: query)) ?? []
         taskHits = (try? environment.repository.tasks(matching: query)) ?? []
+        // Course materials: page-level text (extracted + OCR) first, then
+        // the repository's metadata/digest match.
+        materialHits = materialMatches(query)
+        // Assistant history (question and answer text).
+        assistantHits = (try? environment.repository.assistantMessages(matching: query)) ?? []
         appliedQuery = query
+    }
+
+    /// Material matching: page text, digest, title/file name and the
+    /// user's page notes — each hit carries a jump target.
+    private func materialMatches(_ query: String) -> [MaterialHit] {
+        var hits: [MaterialHit] = []
+        let pageMatches = (try? environment.repository.materialPages(matching: query)) ?? []
+        for (page, material) in pageMatches {
+            let snippet = firstMatchingLine(
+                [page.extractedText, page.ocrText], query: query
+            ) ?? page.effectiveText
+            hits.append(MaterialHit(
+                material: material,
+                snippet: "第 \(page.pageNumber) 页 · \(snippet)",
+                pageNumber: page.pageNumber
+            ))
+        }
+        let metadataMatches = (try? environment.repository.materials(matching: query)) ?? []
+        for material in metadataMatches where !hits.contains(where: { $0.material.id == material.id }) {
+            let digestSnippet = material.digest.map {
+                firstMatchingLine([$0.searchableText], query: query)
+            } ?? nil
+            hits.append(MaterialHit(
+                material: material,
+                snippet: digestSnippet ?? material.title,
+                pageNumber: nil
+            ))
+        }
+        return Array(hits.prefix(8))
+    }
+
+    private func firstMatchingLine(_ texts: [String], query: String) -> String? {
+        for text in texts {
+            for line in text.components(separatedBy: "\n") {
+                if line.localizedCaseInsensitiveContains(query) {
+                    return line
+                }
+            }
+        }
+        return nil
     }
 
     /// First matching line of one attachment's stored text (title/caption,

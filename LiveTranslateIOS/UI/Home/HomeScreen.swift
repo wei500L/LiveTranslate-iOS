@@ -7,6 +7,8 @@ struct HomeScreen: View {
     @State private var viewModel = HomeViewModel()
     @State private var showNewSessionSheet = false
     @State private var showModelManagement = false
+    /// 待阅读资料 push (the restrained materials entry).
+    @State private var pushingMaterials = false
     /// Course to preselect in the new-classroom sheet (quick start fall-
     /// back when the one-tap path is not safe).
     @State private var pendingCourse: Course?
@@ -32,6 +34,9 @@ struct HomeScreen: View {
                         statusSection
                         if viewModel.isLoaded && viewModel.hasTodayReview {
                             todayReviewSection
+                        }
+                        if viewModel.isLoaded && viewModel.unreadMaterialCount > 0 {
+                            unreadMaterialsSection
                         }
                         recentSection
                         statsSection
@@ -264,6 +269,42 @@ struct HomeScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint(Text("打开复习中心"))
+    }
+
+    /// 待阅读资料 — a restrained entry that only exists when imported
+    /// materials have never been opened. Tapping opens the global
+    /// material library (全部资料) via the records tab's push.
+    private var unreadMaterialsSection: some View {
+        Button {
+            pushingMaterials = true
+        } label: {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                HStack(spacing: LTSpacing.m) {
+                    LTIconBadge(symbol: "books.vertical", tint: LTColors.accentBlue, size: 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("待阅读资料")
+                            .font(.cardTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                        Text("\(viewModel.unreadMaterialCount) 份资料还没有读过")
+                            .font(.footnote)
+                            .foregroundStyle(LTColors.textSecondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+            .padding(LTSpacing.l)
+            .ltCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text("打开课程资料库"))
+        .navigationDestination(isPresented: $pushingMaterials) {
+            CourseMaterialLibraryScreen(courseID: nil)
+                .environment(environment)
+        }
     }
 
     // MARK: - Ongoing banner

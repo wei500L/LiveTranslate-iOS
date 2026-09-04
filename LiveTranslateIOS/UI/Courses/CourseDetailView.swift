@@ -29,6 +29,8 @@ struct CourseDetailView: View {
     @State private var schedulePendingDelete: CourseSchedule?
     @State private var icsShareItem: SharedFile?
     @State private var minuteTimer: Timer?
+    /// 课程资料库 push (the materials card).
+    @State private var pushingMaterials = false
 
     let courseID: UUID
 
@@ -212,6 +214,7 @@ struct CourseDetailView: View {
                 VStack(spacing: LTSpacing.l) {
                     headerCard(course)
                     schedulesCard
+                    materialsCard(course)
                     statsCard
                     learningSpaceCard
                     if viewModel.sessions.isEmpty {
@@ -235,6 +238,57 @@ struct CourseDetailView: View {
             minuteTimer?.invalidate()
             minuteTimer = nil
         }
+    }
+
+    /// 课程资料 card: the course's material library entry + the honest
+    /// 课前资料 line when materials are linked to the next class.
+    private func materialsCard(_ course: Course) -> some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            HStack(spacing: LTSpacing.m) {
+                LTIconBadge(symbol: "books.vertical", tint: LTColors.accentBlue, size: 38)
+                VStack(alignment: .leading, spacing: LTSpacing.xxs) {
+                    Text("课程资料")
+                        .font(LTTypography.cardTitle)
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text(materialsDetailLine)
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(LTColors.textTertiary)
+            }
+            if !viewModel.preClassMaterials.isEmpty {
+                HStack(spacing: LTSpacing.xs) {
+                    Image(systemName: "book")
+                        .font(.system(size: 12))
+                        .foregroundStyle(LTColors.accentCyan)
+                    Text("课前资料 \(viewModel.preClassMaterials.count) 份")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.accentCyan)
+                }
+            }
+        }
+        .ltCard()
+        .contentShape(Rectangle())
+        .onTapGesture {
+            pushingMaterials = true
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("课程资料，\(materialsDetailLine)"))
+        .navigationDestination(isPresented: $pushingMaterials) {
+            CourseMaterialLibraryScreen(courseID: course.id)
+                .environment(environment)
+        }
+    }
+
+    private var materialsDetailLine: String {
+        let count = viewModel.courseMaterials.count
+        if count == 0 {
+            return "导入讲义、习题或阅读材料"
+        }
+        return count == 1 ? "1 份资料" : "\(count) 份资料"
     }
 
     /// The course's recurring schedules (固定日程): every weekly slot as
@@ -662,8 +716,8 @@ struct CourseDetailView: View {
 
     // MARK: - Export
 
-    /// Learning-material export (terms/cards/tasks) — real saved data
-    /// only, no model calls.
+    /// Learning-material export (terms/cards/tasks/materials) — real
+    /// saved data only, no model calls.
     private func exportLearning(_ kind: LearningExporter.LearningExportKind) {
         guard let course = viewModel.course else { return }
         guard let url = LearningExporter.writeTemporaryFile(
@@ -671,7 +725,9 @@ struct CourseDetailView: View {
             course: course,
             terms: viewModel.courseTerms,
             cards: viewModel.courseCards,
-            tasks: viewModel.courseTasks
+            tasks: viewModel.courseTasks,
+            materials: viewModel.courseMaterials,
+            repository: environment.repository
         ) else {
             exportError = true
             return
@@ -764,6 +820,8 @@ final class CourseDetailViewModel {
         courseTerms = (try? environment.repository.terms(courseID: id)) ?? []
         courseCards = (try? environment.repository.cards(courseID: id)) ?? []
         courseTasks = (try? environment.repository.tasks(courseID: id, includeDone: true)) ?? []
+        // Course materials (资料库).
+        courseMaterials = (try? environment.repository.materials(courseID: id)) ?? []
         isLoaded = true
     }
 
@@ -772,6 +830,37 @@ final class CourseDetailViewModel {
     var courseTerms: [GlossaryTerm] = []
     var courseCards: [StudyCard] = []
     var courseTasks: [StudyTask] = []
+
+    // MARK: Course materials (资料库)
+
+    var courseMaterials: [CourseMaterial] = []
+
+    /// Materials linked to the NEXT class occurrence (课前资料).
+    var preClassMaterials: [CourseMaterial] {
+        guard let nextKey = nextOccurrenceKey else { return [] }
+        return courseMaterials.filter { $0.occurrenceKey == nextKey }
+    }
+
+    /// The next occurrence key of THIS course (materials' 课前资料 link
+    /// resolves against the same computed occurrences the timetable
+    /// uses).
+    var nextOccurrenceKey: String? {
+        guard let environment, let courseID = course?.id else { return nil }
+        let schedules = (try? environment.repository.schedules(courseID: courseID)) ?? []
+        guard !schedules.isEmpty else { return nil }
+        let exceptions = (try? environment.repository.allExceptions()) ?? []
+        let window = Calendar.current.date(byAdding: .day, value: 14, to: .now) ?? .now
+        var upcoming: [ScheduleCalculator.Occurrence] = []
+        for schedule in schedules {
+            upcoming.append(contentsOf: ScheduleCalculator.occurrences(
+                of: schedule, from: .now, to: window, exceptions: exceptions
+            ))
+        }
+        return upcoming
+            .filter { !$0.isCancelled }
+            .min { $0.start < $1.start }?
+            .occurrenceKey
+    }
 
     /// Cards of this course due right now (includes enrolled-new).
     var dueCardCount: Int {

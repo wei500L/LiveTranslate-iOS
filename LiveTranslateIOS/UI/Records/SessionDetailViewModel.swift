@@ -28,6 +28,8 @@ final class SessionDetailViewModel {
     var entries: [TranscriptEntry] = []
     var notes: [SessionNote] = []
     var attachments: [SessionAttachment] = []
+    /// Materials linked to this class (本堂课资料; read-only list).
+    var sessionMaterials: [CourseMaterial] = []
     /// Entry id → correction (effective-text lookups; nil = model only).
     var correctionsByEntryID: [UUID: TranscriptCorrection] = [:]
     private(set) var review: StudyReview?
@@ -70,6 +72,8 @@ final class SessionDetailViewModel {
         entries = (try? environment.repository.entries(for: session)) ?? []
         notes = (try? environment.repository.notes(forSessionID: sessionID)) ?? []
         attachments = (try? environment.repository.attachments(forSessionID: sessionID)) ?? []
+        sessionMaterials = ((try? environment.repository.materials(courseID: nil)) ?? [])
+            .filter { $0.sessionID == sessionID }
         let corrections = (try? environment.repository.corrections(forSessionID: sessionID)) ?? []
         correctionsByEntryID = Dictionary(
             corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }

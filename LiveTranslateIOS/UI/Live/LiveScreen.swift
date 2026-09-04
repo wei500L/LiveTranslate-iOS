@@ -15,6 +15,10 @@ struct LiveScreen: View {
     private let viewModel: LiveViewModel
     @State private var showEndConfirmation = false
     @State private var showAttachmentCapture = false
+    /// 课程资料 sheet (the in-class book button).
+    @State private var showLiveMaterials = false
+    /// Materials relevant to the running class (its links + its course's).
+    @State private var liveMaterials: [CourseMaterial] = []
 
     init(viewModel: LiveViewModel) {
         self.viewModel = viewModel
@@ -45,6 +49,45 @@ struct LiveScreen: View {
                     isPresented: $showAttachmentCapture
                 )
             }
+        }
+        .sheet(isPresented: $showLiveMaterials) {
+            NavigationStack {
+                LTPage {
+                    Group {
+                        if liveMaterials.isEmpty {
+                            LTEmptyState(
+                                symbol: "books.vertical",
+                                title: "本课暂无关联资料",
+                                message: "课前在课程资料库导入讲义并关联这堂课，上课时就能随时翻看"
+                            )
+                        } else {
+                            ScrollView {
+                                VStack(spacing: LTSpacing.s) {
+                                    ForEach(liveMaterials) { material in
+                                        NavigationLink {
+                                            MaterialReaderScreen(materialID: material.id)
+                                                .environment(environment)
+                                        } label: {
+                                            MaterialRow(material: material)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .ltCard(padding: LTSpacing.m)
+                                    }
+                                }
+                                .padding(.horizontal, LTSpacing.screenPadding)
+                                .padding(.top, LTSpacing.s)
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("本课资料")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+            .environment(environment)
+            .preferredColorScheme(.dark)
+        }
+        .onChange(of: showLiveMaterials) { _, showing in
+            if showing { reloadLiveMaterials() }
         }
         .task(id: viewModel.state.phase) {
             // The error banner's 切换到另一后端 button must reflect a real
@@ -199,6 +242,33 @@ struct LiveScreen: View {
         }
     }
 
+    // MARK: - In-class materials
+
+    /// This class's materials: linked to the session, its course, or the
+    /// class's occurrence — a pure read; opening the reader never touches
+    /// the pipeline.
+    private func reloadLiveMaterials() {
+        guard let sessionID = viewModel.sessionID else { return }
+        var materials: [CourseMaterial] = []
+        let session = ((try? environment.repository.sessions(matching: "")) ?? [])
+            .first { $0.id == sessionID }
+        if let session {
+            let linked = ((try? environment.repository.materials(courseID: nil)) ?? [])
+                .filter { $0.sessionID == sessionID }
+            materials.append(contentsOf: linked)
+            if let courseID = session.courseID {
+                let courseMaterials = (try? environment.repository.materials(
+                    courseID: courseID
+                )) ?? []
+                for material in courseMaterials
+                where !materials.contains(where: { $0.id == material.id }) {
+                    materials.append(material)
+                }
+            }
+        }
+        liveMaterials = materials
+    }
+
     // MARK: - In-class toolbar
 
     private var tabBar: some View {
@@ -275,6 +345,24 @@ struct LiveScreen: View {
             .disabled(!viewModel.isRunning)
             .opacity(viewModel.isRunning ? 1 : 0.35)
             .accessibilityLabel(Text("拍摄或导入课堂图片"))
+
+            // 课程资料: jump back to this class's materials (课前资料 or
+            // the course library). Opening a material NEVER touches the
+            // recording / ASR / translation chain.
+            Button {
+                showLiveMaterials = true
+                LTHaptics.tap()
+            } label: {
+                Image(systemName: "book")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(LTColors.textSecondary)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(LTColors.surfacePrimary))
+                    .overlay(Circle().strokeBorder(LTColors.border, lineWidth: 0.5))
+            }
+            .disabled(!viewModel.isRunning)
+            .opacity(viewModel.isRunning ? 1 : 0.35)
+            .accessibilityLabel(Text("查看本课资料"))
 
             controlSpacer
 

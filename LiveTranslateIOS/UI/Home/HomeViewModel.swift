@@ -147,10 +147,20 @@ final class HomeViewModel {
         }.count
         pendingConfirmTaskCount = ((try? environment.repository.pendingConfirmTasks()) ?? []).count
 
+        // Materials awaiting first read (克制的首页入口: only materials
+        // never opened — nothing shows when everything is read).
+        unreadMaterialCount = ((try? environment.repository.materials(courseID: nil)) ?? [])
+            .filter { $0.lastOpenedAt == nil }
+            .count
+
         isLoaded = true
     }
 
     // MARK: - Derived
+
+    /// Materials imported but never opened (待阅读) — the home entry only
+    /// exists when there is real pending material.
+    var unreadMaterialCount = 0
 
     /// Whether the home 今日复习 card should render at all (any real
     /// pending content — never an always-on placeholder).

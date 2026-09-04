@@ -113,6 +113,17 @@ final class AppEnvironment {
     let attachmentImporter: AttachmentImportService
     /// The profile's attachment file store (paths, renditions, cleanup).
     let attachmentStore: AttachmentFileStore
+    /// The profile's course-material file store (paths, page caches).
+    let materialStore: MaterialFileStore
+    /// Course-material import pipeline (Files picker → hash → store → row).
+    let materialImporter: MaterialImportService
+    /// Page-text extraction + per-page Vision OCR (resumable runs).
+    let materialExtractionRunner: MaterialExtractionRunner
+    /// Material digest (导读) generation — chunked, resumable, text-first.
+    let materialDigestGenerator: MaterialDigestGenerator
+    /// The course assistant (问这门课) — grounded local retrieval + one
+    /// model call over the selected sources.
+    let courseAssistant: CourseAssistantService
     /// Classroom-recording playback (one engine per app so starting a new
     /// live classroom or switching accounts can stop it from one place).
     let playback: ClassroomPlaybackService
@@ -263,6 +274,31 @@ final class AppEnvironment {
         let attachmentImporter = AttachmentImportService(
             repository: repository, fileStore: attachmentStore
         )
+        // Course-material library: the file store is built FIRST and
+        // registered globally (repository deletes reap files); the
+        // extraction/digest/assistant services share the same model
+        // service boxes as study review and image analysis — one API key,
+        // one HTTP transport, one provider config.
+        let materialStore = MaterialFileStore(accountID: accountID)
+        MaterialFileStoreShared.store = materialStore
+        let materialExtractionRunner = MaterialExtractionRunner(
+            repository: repository,
+            fileStore: { MaterialFileStoreShared.store }
+        )
+        let materialImporter = MaterialImportService(
+            repository: repository,
+            fileStore: materialStore,
+            extractionRunner: materialExtractionRunner
+        )
+        let materialDigestGenerator = MaterialDigestGenerator(
+            repository: repository,
+            textServiceProvider: { [weak studyBox] in studyBox?.get() },
+            imageServiceProvider: { [weak attachmentBox] in attachmentBox?.get() }
+        )
+        let courseAssistant = CourseAssistantService(
+            repository: repository,
+            textServiceProvider: { [weak studyBox] in studyBox?.get() }
+        )
         let playback = ClassroomPlaybackService()
         let waveformStore = RecordingWaveformStore()
         self.init(
@@ -290,6 +326,11 @@ final class AppEnvironment {
             attachmentAnalysisGenerator: attachmentGenerator,
             attachmentImporter: attachmentImporter,
             attachmentStore: attachmentStore,
+            materialStore: materialStore,
+            materialImporter: materialImporter,
+            materialExtractionRunner: materialExtractionRunner,
+            materialDigestGenerator: materialDigestGenerator,
+            courseAssistant: courseAssistant,
             playback: playback,
             waveformStore: waveformStore
         )
@@ -326,6 +367,11 @@ final class AppEnvironment {
         attachmentAnalysisGenerator: AttachmentAnalysisGenerator? = nil,
         attachmentImporter: AttachmentImportService? = nil,
         attachmentStore: AttachmentFileStore? = nil,
+        materialStore: MaterialFileStore? = nil,
+        materialImporter: MaterialImportService? = nil,
+        materialExtractionRunner: MaterialExtractionRunner? = nil,
+        materialDigestGenerator: MaterialDigestGenerator? = nil,
+        courseAssistant: CourseAssistantService? = nil,
         playback: ClassroomPlaybackService? = nil,
         waveformStore: RecordingWaveformStore? = nil
     ) {
@@ -385,6 +431,50 @@ final class AppEnvironment {
             self.attachmentStore = AttachmentFileStore(accountID: nil)
             AttachmentFileStoreShared.store = self.attachmentStore
         }
+        // Course-material library: same DI-default pattern as attachments
+        // (tests/demo may inject in-memory replacements; production gets
+        // the real store + repository-backed services).
+        if let materialStore {
+            self.materialStore = materialStore
+            MaterialFileStoreShared.store = materialStore
+        } else {
+            self.materialStore = MaterialFileStore(accountID: nil)
+            MaterialFileStoreShared.store = self.materialStore
+        }
+        if let materialExtractionRunner {
+            self.materialExtractionRunner = materialExtractionRunner
+        } else {
+            self.materialExtractionRunner = MaterialExtractionRunner(
+                repository: repository,
+                fileStore: { MaterialFileStoreShared.store }
+            )
+        }
+        if let materialImporter {
+            self.materialImporter = materialImporter
+        } else {
+            self.materialImporter = MaterialImportService(
+                repository: repository,
+                fileStore: self.materialStore,
+                extractionRunner: self.materialExtractionRunner
+            )
+        }
+        if let materialDigestGenerator {
+            self.materialDigestGenerator = materialDigestGenerator
+        } else {
+            self.materialDigestGenerator = MaterialDigestGenerator(
+                repository: repository,
+                textServiceProvider: { [weak studyServiceBox] in studyServiceBox?.get() },
+                imageServiceProvider: { [weak attachmentServiceBox] in attachmentServiceBox?.get() }
+            )
+        }
+        if let courseAssistant {
+            self.courseAssistant = courseAssistant
+        } else {
+            self.courseAssistant = CourseAssistantService(
+                repository: repository,
+                textServiceProvider: { [weak studyServiceBox] in studyServiceBox?.get() }
+            )
+        }
         self.playback = playback ?? ClassroomPlaybackService()
         self.waveformStore = waveformStore ?? RecordingWaveformStore()
     }
@@ -401,14 +491,18 @@ final class AppEnvironment {
     /// entities are device-cloud split: `SessionRecording` never syncs
     /// (audio stays local), `TranscriptCorrection` syncs as its own
     /// entity. The pre-class layer (`CourseSchedule`,
-    /// `ScheduleException`) syncs as its own entities as well.
+    /// `ScheduleException`) and the material library (`CourseMaterial`,
+    /// `MaterialPage`, `MaterialAnnotation`, `CourseAssistantThread`,
+    /// `CourseAssistantMessage`) sync as their own entities as well.
     static let librarySchema = Schema([
         ClassroomSession.self, TranscriptEntry.self,
         Course.self, SessionNote.self, StudyReview.self,
         SessionAttachment.self,
         GlossaryTerm.self, StudyCard.self, StudyTask.self,
         SessionRecording.self, TranscriptCorrection.self,
-        CourseSchedule.self, ScheduleException.self
+        CourseSchedule.self, ScheduleException.self,
+        CourseMaterial.self, MaterialPage.self, MaterialAnnotation.self,
+        CourseAssistantThread.self, CourseAssistantMessage.self
     ])
 
     // MARK: - Translation configuration (single source of truth)
@@ -557,6 +651,10 @@ final class AppEnvironment {
         try? repository.markAbnormalTerminations()
         // Same launch-time reconciliation for interrupted image analyses.
         attachmentAnalysisGenerator.reconcileInterruptedAnalyses()
+        // Same launch-time reconciliation for interrupted material
+        // extraction and digest runs (孤儿 analyzing 状态 → 可继续).
+        materialExtractionRunner.reconcileInterrupted()
+        materialDigestGenerator.reconcileInterrupted()
         // Recording rows ↔ disk: legacy raw.wav files gain metadata rows,
         // removed files flip isDeleted, orphan rows are reaped.
         try? repository.reconcileRecordingState()

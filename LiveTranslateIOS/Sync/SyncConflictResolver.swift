@@ -192,6 +192,66 @@ enum SyncConflictResolver {
             if merged.scheduleId == nil, let serverScheduleID = server.scheduleId {
                 merged.scheduleId = serverScheduleID
             }
+        case .material:
+            // Metadata: local intent wins, server fallback so a rebase
+            // never blanks a field. Identity fields (hash/size/pages) are
+            // immutable server-side. The digest falls back to the
+            // server's when the local run produced none (a failed
+            // re-digest keeps the remote result instead of blanking it).
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.materialFileName ?? "").isEmpty,
+               let serverName = server.materialFileName, !serverName.isEmpty {
+                merged.materialFileName = serverName
+            }
+            if (merged.materialDigest ?? "").isEmpty,
+               let serverDigest = server.materialDigest, !serverDigest.isEmpty {
+                merged.materialDigest = server.materialDigest
+                merged.materialDigestStatus = server.materialDigestStatus
+                merged.materialDigestModel = server.materialDigestModel
+                merged.materialDigestAt = server.materialDigestAt
+                merged.materialDigestSourceHash = server.materialDigestSourceHash
+            }
+            // Reading position: the FURTHER read survives — the other
+            // device may be ahead in the same document.
+            let localPage = merged.materialLastReadPage ?? 0
+            let serverPage = server.materialLastReadPage ?? 0
+            if serverPage > localPage {
+                merged.materialLastReadPage = server.materialLastReadPage
+                merged.materialLastOpenedAt = server.materialLastOpenedAt
+            }
+        case .materialPage:
+            // Both text layers are content-of-record: local wins when
+            // present, the server's fills any gap so a rebase never
+            // blanks a page.
+            if (merged.materialPageText ?? "").isEmpty,
+               let serverText = server.materialPageText, !serverText.isEmpty {
+                merged.materialPageText = serverText
+            }
+            if (merged.materialPageOCR ?? "").isEmpty,
+               let serverOCR = server.materialPageOCR, !serverOCR.isEmpty {
+                merged.materialPageOCR = server.materialPageOCR
+                merged.materialPageOCRStatus = server.materialPageOCRStatus
+            }
+        case .materialAnnotation:
+            // Note text merges like noteText: local wins when non-empty.
+            if (merged.noteText ?? "").isEmpty, let serverText = server.noteText {
+                merged.noteText = serverText
+            }
+        case .assistantThread:
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+        case .assistantMessage:
+            // Messages are immutable once written (append-only history);
+            // the conflict path only fires on a same-id race — local
+            // intent wins, server fallback for an empty local text.
+            if (merged.assistantText ?? "").isEmpty,
+               let serverText = server.assistantText, !serverText.isEmpty {
+                merged.assistantText = server.assistantText
+                merged.assistantCitations = server.assistantCitations
+            }
         }
         return merged
     }

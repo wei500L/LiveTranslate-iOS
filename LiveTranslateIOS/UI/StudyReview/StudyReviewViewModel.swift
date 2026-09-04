@@ -237,7 +237,34 @@ final class StudyReviewViewModel {
     private func noteTexts() -> [String] {
         guard let session else { return [] }
         let notes = (try? environment?.repository.notes(forSessionID: session.id)) ?? []
-        return notes.map(\.text)
+        var texts = notes.map(\.text)
+        // Linked course materials ride as EXTRA study material (额外素
+        // 材): their digests and page-level text inform the review as
+        // reference context — the same standing as the notes, never
+        // cited as transcript lines.
+        let linkedMaterials = ((try? environment?.repository.materials(courseID: nil)) ?? [])
+            .filter { $0.sessionID == session.id }
+        for material in linkedMaterials.prefix(3) {
+            let title = material.title.isEmpty ? material.originalFileName : material.title
+            if let digest = material.digest, !digest.searchableText.isEmpty {
+                texts.append("【课程资料 · \(title) 导读】\(digest.searchableText.prefix(1_500))")
+            } else {
+                let pages = (try? environment?.repository.materialPages(
+                    materialID: material.id
+                )) ?? []
+                let pageText = pages
+                    .compactMap { page -> String? in
+                        let text = page.effectiveText
+                        return text.isEmpty ? nil : "第\(page.pageNumber)页：\(text)"
+                    }
+                    .prefix(6)
+                    .joined(separator: "\n")
+                if !pageText.isEmpty {
+                    texts.append("【课程资料 · \(title)】\(pageText.prefix(1_500))")
+                }
+            }
+        }
+        return texts
     }
 
     // MARK: - Edits (all persist through the repository)

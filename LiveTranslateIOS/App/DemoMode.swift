@@ -100,6 +100,25 @@ extension AppEnvironment {
             .appendingPathComponent("ui-demo-attachments-\(UUID().uuidString)", isDirectory: true)
         let demoAttachmentStore = AttachmentFileStore(root: demoStoreRoot)
         AttachmentFileStoreShared.store = demoAttachmentStore
+        // Demo material storage: the same fresh temp directory rule —
+        // demo material files never reach the real per-account store.
+        let demoMaterialStore = MaterialFileStore(
+            root: demoStoreRoot.appendingPathComponent("Materials", isDirectory: true)
+        )
+        MaterialFileStoreShared.store = demoMaterialStore
+        let demoExtractionRunner = MaterialExtractionRunner(
+            repository: repository,
+            fileStore: { MaterialFileStoreShared.store }
+        )
+        let demoDigestGenerator = MaterialDigestGenerator(
+            repository: repository,
+            textServiceProvider: { [weak studyBox] in studyBox?.get() },
+            imageServiceProvider: { [weak attachmentBox] in attachmentBox?.get() }
+        )
+        let demoAssistant = CourseAssistantService(
+            repository: repository,
+            textServiceProvider: { [weak studyBox] in studyBox?.get() }
+        )
         let attachmentService = DemoAttachmentAnalysisService()
         let attachmentBox = AttachmentServiceBox()
         attachmentBox.set(attachmentService)
@@ -128,7 +147,11 @@ extension AppEnvironment {
             studyServiceBox: studyBox,
             attachmentAnalysisService: attachmentService,
             attachmentServiceBox: attachmentBox,
-            attachmentStore: demoAttachmentStore
+            attachmentStore: demoAttachmentStore,
+            materialStore: demoMaterialStore,
+            materialExtractionRunner: demoExtractionRunner,
+            materialDigestGenerator: demoDigestGenerator,
+            courseAssistant: demoAssistant
         )
 
         environment.flow.demoGreeting = "晚上好，学习者"

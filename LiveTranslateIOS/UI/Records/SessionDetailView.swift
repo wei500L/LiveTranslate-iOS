@@ -192,6 +192,7 @@ struct SessionDetailView: View {
                         reviewCard
                         attachmentsCard(session)
                             .id(attachmentSectionAnchor)
+                        sessionMaterialsCard
                         notesCard
                         searchCard
                         modeChips
@@ -240,6 +241,34 @@ struct SessionDetailView: View {
             attachments: viewModel.attachments,
             onAttachmentSetChanged: { viewModel.reload() }
         )
+    }
+
+    /// 本堂课资料: materials linked to this class (sessionID) — shown
+    /// only when such materials exist (no dead navigation).
+    @ViewBuilder
+    private var sessionMaterialsCard: some View {
+        if !viewModel.sessionMaterials.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.s) {
+                LTSectionHeader(title: "本堂课资料")
+                VStack(spacing: LTSpacing.s) {
+                    ForEach(viewModel.sessionMaterials.prefix(4)) { material in
+                        NavigationLink {
+                            MaterialReaderScreen(materialID: material.id)
+                                .environment(environment)
+                        } label: {
+                            MaterialRow(material: material)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if viewModel.sessionMaterials.count > 4 {
+                        Text("共 \(viewModel.sessionMaterials.count) 份")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textTertiary)
+                    }
+                }
+            }
+            .ltCard()
+        }
     }
 
     private func headerCard(_ session: ClassroomSession) -> some View {

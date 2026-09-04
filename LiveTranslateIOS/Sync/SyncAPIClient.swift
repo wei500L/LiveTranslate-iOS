@@ -276,6 +276,103 @@ actor SyncAPIClient {
         )
     }
 
+    // MARK: - Material binary transfer (NOT part of the JSON push)
+    // Course-material originals (PDF/text/image files) ride dedicated
+    // routes under /v1/materials — the same hash-verified contract as
+    // attachments. The material's metadata row must already exist
+    // server-side (pushed through sync) before the file is accepted.
+
+    /// Uploads one material's original file, STREAMING from a file URL —
+    /// a 200 MB PDF never enters memory. Idempotent by content hash
+    /// server-side.
+    func uploadMaterialFile(
+        materialID: UUID, fileURL: URL, contentHash: String, accessToken: String
+    ) async throws {
+        var urlRequest = URLRequest(url: endpoint("materials/\(materialID.uuidString)/file"))
+        urlRequest.httpMethod = "PUT"
+        urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(contentHash, forHTTPHeaderField: "X-Content-Hash")
+        urlRequest.timeoutInterval = 600
+        let response: URLResponse
+        do {
+            // upload(from:) streams the file body from disk.
+            response = try await session.upload(for: urlRequest, fromFile: fileURL).1
+        } catch {
+            throw SyncAPIError.retryable(reason: error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw SyncAPIError.badResponse }
+        switch http.statusCode {
+        case 200..<300:
+            return
+        case 401: throw SyncAPIError.authExpired
+        case 404:
+            // The metadata row has not landed server-side yet (or was
+            // deleted) — retryable: the outbox push will (re)create it.
+            throw SyncAPIError.retryable(reason: "material not found on server")
+        case 409:
+            // Hash/size contract violation: the metadata row on the server
+            // describes different bytes. Permanent.
+            throw SyncAPIError.permanent(code: "hash_mismatch", reason: "file does not match metadata")
+        case 413:
+            throw SyncAPIError.permanent(code: "too_large", reason: "file exceeds server limit")
+        case 429: throw SyncAPIError.rateLimited(retryAfter: http.retryAfter)
+        case 502, 503, 504: throw SyncAPIError.serverUnavailable(retryAfter: http.retryAfter)
+        default:
+            throw SyncAPIError.permanent(code: "\(http.statusCode)", reason: "HTTP \(http.statusCode)")
+        }
+    }
+
+    /// Downloads one material's original file. Throws `retryable` on 404 —
+    /// the file may simply not be uploaded yet from any device.
+    func downloadMaterialFile(
+        materialID: UUID, accessToken: String
+    ) async throws -> Data {
+        var urlRequest = URLRequest(url: endpoint("materials/\(materialID.uuidString)/file"))
+        urlRequest.httpMethod = "GET"
+        urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        urlRequest.timeoutInterval = 600
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw SyncAPIError.retryable(reason: error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw SyncAPIError.badResponse }
+        switch http.statusCode {
+        case 200..<300:
+            return data
+        case 401: throw SyncAPIError.authExpired
+        case 404:
+            throw SyncAPIError.retryable(reason: "file not uploaded yet")
+        case 429: throw SyncAPIError.rateLimited(retryAfter: http.retryAfter)
+        case 502, 503, 504: throw SyncAPIError.serverUnavailable(retryAfter: http.retryAfter)
+        default:
+            throw SyncAPIError.permanent(code: "\(http.statusCode)", reason: "HTTP \(http.statusCode)")
+        }
+    }
+
+    /// Whether the server holds one material's original (cheap probe).
+    func materialFileUploaded(
+        materialID: UUID, accessToken: String
+    ) async throws -> Bool {
+        struct StatusDTO: Decodable { var uploaded: Bool }
+        let dto: StatusDTO = try await get(
+            "materials/\(materialID.uuidString)/file/status",
+            accessToken: accessToken
+        )
+        return dto.uploaded
+    }
+
+    /// Deletes the server-side FILE of one material (the metadata row and
+    /// its tombstone travel through sync/push).
+    func deleteMaterialFiles(materialID: UUID, accessToken: String) async throws {
+        _ = try await request(
+            "materials/\(materialID.uuidString)",
+            method: "DELETE", accessToken: accessToken
+        )
+    }
+
     // MARK: - Plumbing
 
     /// Builds the request URL. `path` may carry a query string

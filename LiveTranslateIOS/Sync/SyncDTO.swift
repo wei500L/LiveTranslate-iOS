@@ -32,6 +32,15 @@ enum SyncEntityType: String, Codable, Sendable {
     // 15/17 chars — both fit the server's VARCHAR(32) entity_type columns.
     case courseSchedule = "course_schedule"
     case scheduleException = "schedule_exception"
+    // Course-material library: imported documents (PDF/text/image) with
+    // page-level extracted text, user annotations, and the course
+    // assistant's threads. Wire names are 8/13/19/16/17 chars — all fit
+    // the VARCHAR(32) entity_type columns.
+    case material
+    case materialPage = "material_page"
+    case materialAnnotation = "material_annotation"
+    case assistantThread = "assistant_thread"
+    case assistantMessage = "assistant_message"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -328,6 +337,46 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var scheduleChangedStart: Int?
     var scheduleChangedEnd: Int?
     var scheduleMovedToDate: String?
+    // course material (teacher handout / problem set / document). title
+    // rides the shared `title` field; the course/session/occurrence links
+    // ride the shared courseId/sessionId/scheduleOccurrenceKey fields
+    // (sentinel rule); the structured digest rides as a JSON STRING in
+    // `materialDigest` (same convention as attachmentAnalysis). The
+    // ORIGINAL FILE never rides push — it travels on /v1/materials.
+    var materialKind: String?
+    var materialMime: String?
+    var materialFileName: String?
+    var materialFormat: String?
+    var materialFileSize: Int64?
+    var materialHash: String?
+    var materialPageCount: Int?
+    var materialExtraction: String?
+    var materialDigestStatus: String?
+    var materialDigest: String?
+    var materialDigestModel: String?
+    var materialDigestAt: Date?
+    var materialDigestSourceHash: String?
+    var materialLastReadPage: Int?
+    var materialLastOpenedAt: Date?
+    // material page: the parent material rides the shared `materialId`
+    // reference; extraction and OCR text ride separate fields (never
+    // merged — the same layering the local rows keep).
+    var materialId: UUID?
+    var materialPageNumber: Int?
+    var materialPageText: String?
+    var materialPageOCR: String?
+    var materialPageOCRStatus: String?
+    // material annotation: kind (note/bookmark) + the shared noteText for
+    // the note body; the page rides the shared materialPageNumber.
+    var materialAnnotationKind: String?
+    // course assistant: the thread's parent rides `threadId`; a message's
+    // question scope rides the shared materialId/sessionId/materialPageNumber
+    // fields; the answer's citations ride as a JSON STRING in
+    // `assistantCitations`.
+    var threadId: UUID?
+    var assistantRole: String?
+    var assistantText: String?
+    var assistantCitations: String?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -464,6 +513,33 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var scheduleChangedStart: Int?
     var scheduleChangedEnd: Int?
     var scheduleMovedToDate: String?
+    // course material library — names mirror the push payload (materialXxx
+    // family) so one CodingKeys set covers records and conflict payloads.
+    var materialKind: String?
+    var materialMime: String?
+    var materialFileName: String?
+    var materialFormat: String?
+    var materialFileSize: Int64?
+    var materialHash: String?
+    var materialPageCount: Int?
+    var materialExtraction: String?
+    var materialDigestStatus: String?
+    var materialDigest: String?
+    var materialDigestModel: String?
+    var materialDigestAt: Date?
+    var materialDigestSourceHash: String?
+    var materialLastReadPage: Int?
+    var materialLastOpenedAt: Date?
+    var materialId: UUID?
+    var materialPageNumber: Int?
+    var materialPageText: String?
+    var materialPageOCR: String?
+    var materialPageOCRStatus: String?
+    var materialAnnotationKind: String?
+    var threadId: UUID?
+    var assistantRole: String?
+    var assistantText: String?
+    var assistantCitations: String?
     var serverVersion: Int
     var deleted: Bool
 
@@ -572,6 +648,31 @@ struct SyncServerRecordDTO: Codable, Sendable {
         scheduleChangedStart: Int? = nil,
         scheduleChangedEnd: Int? = nil,
         scheduleMovedToDate: String? = nil,
+        materialKind: String? = nil,
+        materialMime: String? = nil,
+        materialFileName: String? = nil,
+        materialFormat: String? = nil,
+        materialFileSize: Int64? = nil,
+        materialHash: String? = nil,
+        materialPageCount: Int? = nil,
+        materialExtraction: String? = nil,
+        materialDigestStatus: String? = nil,
+        materialDigest: String? = nil,
+        materialDigestModel: String? = nil,
+        materialDigestAt: Date? = nil,
+        materialDigestSourceHash: String? = nil,
+        materialLastReadPage: Int? = nil,
+        materialLastOpenedAt: Date? = nil,
+        materialId: UUID? = nil,
+        materialPageNumber: Int? = nil,
+        materialPageText: String? = nil,
+        materialPageOCR: String? = nil,
+        materialPageOCRStatus: String? = nil,
+        materialAnnotationKind: String? = nil,
+        threadId: UUID? = nil,
+        assistantRole: String? = nil,
+        assistantText: String? = nil,
+        assistantCitations: String? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -676,6 +777,31 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.scheduleChangedStart = scheduleChangedStart
         self.scheduleChangedEnd = scheduleChangedEnd
         self.scheduleMovedToDate = scheduleMovedToDate
+        self.materialKind = materialKind
+        self.materialMime = materialMime
+        self.materialFileName = materialFileName
+        self.materialFormat = materialFormat
+        self.materialFileSize = materialFileSize
+        self.materialHash = materialHash
+        self.materialPageCount = materialPageCount
+        self.materialExtraction = materialExtraction
+        self.materialDigestStatus = materialDigestStatus
+        self.materialDigest = materialDigest
+        self.materialDigestModel = materialDigestModel
+        self.materialDigestAt = materialDigestAt
+        self.materialDigestSourceHash = materialDigestSourceHash
+        self.materialLastReadPage = materialLastReadPage
+        self.materialLastOpenedAt = materialLastOpenedAt
+        self.materialId = materialId
+        self.materialPageNumber = materialPageNumber
+        self.materialPageText = materialPageText
+        self.materialPageOCR = materialPageOCR
+        self.materialPageOCRStatus = materialPageOCRStatus
+        self.materialAnnotationKind = materialAnnotationKind
+        self.threadId = threadId
+        self.assistantRole = assistantRole
+        self.assistantText = assistantText
+        self.assistantCitations = assistantCitations
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -784,6 +910,31 @@ struct SyncServerRecordDTO: Codable, Sendable {
         scheduleChangedStart = try container.decodeIfPresent(Int.self, forKey: .scheduleChangedStart)
         scheduleChangedEnd = try container.decodeIfPresent(Int.self, forKey: .scheduleChangedEnd)
         scheduleMovedToDate = try container.decodeIfPresent(String.self, forKey: .scheduleMovedToDate)
+        materialKind = try container.decodeIfPresent(String.self, forKey: .materialKind)
+        materialMime = try container.decodeIfPresent(String.self, forKey: .materialMime)
+        materialFileName = try container.decodeIfPresent(String.self, forKey: .materialFileName)
+        materialFormat = try container.decodeIfPresent(String.self, forKey: .materialFormat)
+        materialFileSize = try container.decodeIfPresent(Int64.self, forKey: .materialFileSize)
+        materialHash = try container.decodeIfPresent(String.self, forKey: .materialHash)
+        materialPageCount = try container.decodeIfPresent(Int.self, forKey: .materialPageCount)
+        materialExtraction = try container.decodeIfPresent(String.self, forKey: .materialExtraction)
+        materialDigestStatus = try container.decodeIfPresent(String.self, forKey: .materialDigestStatus)
+        materialDigest = try container.decodeIfPresent(String.self, forKey: .materialDigest)
+        materialDigestModel = try container.decodeIfPresent(String.self, forKey: .materialDigestModel)
+        materialDigestAt = try container.decodeIfPresent(Date.self, forKey: .materialDigestAt)
+        materialDigestSourceHash = try container.decodeIfPresent(String.self, forKey: .materialDigestSourceHash)
+        materialLastReadPage = try container.decodeIfPresent(Int.self, forKey: .materialLastReadPage)
+        materialLastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .materialLastOpenedAt)
+        materialId = try container.decodeIfPresent(UUID.self, forKey: .materialId)
+        materialPageNumber = try container.decodeIfPresent(Int.self, forKey: .materialPageNumber)
+        materialPageText = try container.decodeIfPresent(String.self, forKey: .materialPageText)
+        materialPageOCR = try container.decodeIfPresent(String.self, forKey: .materialPageOCR)
+        materialPageOCRStatus = try container.decodeIfPresent(String.self, forKey: .materialPageOCRStatus)
+        materialAnnotationKind = try container.decodeIfPresent(String.self, forKey: .materialAnnotationKind)
+        threadId = try container.decodeIfPresent(UUID.self, forKey: .threadId)
+        assistantRole = try container.decodeIfPresent(String.self, forKey: .assistantRole)
+        assistantText = try container.decodeIfPresent(String.self, forKey: .assistantText)
+        assistantCitations = try container.decodeIfPresent(String.self, forKey: .assistantCitations)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -836,4 +987,9 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var transcriptCorrectionCount: Int?
     var courseScheduleCount: Int?
     var scheduleExceptionCount: Int?
+    var materialCount: Int?
+    var materialPageCount: Int?
+    var materialAnnotationCount: Int?
+    var assistantThreadCount: Int?
+    var assistantMessageCount: Int?
 }

@@ -22,6 +22,8 @@ struct ScheduleScreen: View {
     /// Finished-session prompt target (创建额外课堂 flow).
     @State private var pendingExtraStart: ScheduleCalculator.Occurrence?
     @State private var minuteTimer: Timer?
+    /// 课前资料 of the tapped next class (sheet target).
+    @State private var preClassMaterials: [CourseMaterial] = []
 
     enum Mode: String, CaseIterable, Identifiable {
         case today
@@ -104,6 +106,34 @@ struct ScheduleScreen: View {
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
         }
+        .sheet(isPresented: Binding(
+            get: { !preClassMaterials.isEmpty },
+            set: { if !$0 { preClassMaterials = [] } }
+        )) {
+            NavigationStack {
+                LTPage {
+                    ScrollView {
+                        VStack(spacing: LTSpacing.s) {
+                            ForEach(preClassMaterials) { material in
+                                NavigationLink {
+                                    MaterialReaderScreen(materialID: material.id)
+                                        .environment(environment)
+                                } label: {
+                                    MaterialRow(material: material)
+                                }
+                                .buttonStyle(.plain)
+                                .ltCard(padding: LTSpacing.m)
+                            }
+                        }
+                        .padding(.horizontal, LTSpacing.screenPadding)
+                        .padding(.top, LTSpacing.s)
+                    }
+                }
+                .navigationTitle("课前资料")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+            .environment(environment)
+        }
         .confirmationDialog(
             "这堂课已有课堂记录",
             isPresented: Binding(
@@ -169,7 +199,9 @@ struct ScheduleScreen: View {
         }
     }
 
-    /// The next class — prominent, with the start button.
+    /// The next class — prominent, with the start button. 课前资料 shows
+    /// when materials are linked to this occurrence; reading them never
+    /// touches the recording chain.
     private func nextClassCard(_ occurrence: ScheduleCalculator.Occurrence) -> some View {
         ScheduleOccurrenceCard(
             occurrence: occurrence,
@@ -181,8 +213,25 @@ struct ScheduleScreen: View {
             startState: viewModel.startState(for: occurrence),
             isNext: true,
             onStart: { start(occurrence) },
-            onOpenSchedule: nil
+            onOpenSchedule: nil,
+            preClassMaterialCount: preClassMaterialCount(for: occurrence),
+            onOpenPreClassMaterials: { openPreClassMaterials(for: occurrence) }
         )
+    }
+
+    /// Materials linked to one occurrence (课前资料) — a repository read,
+    /// no materialization.
+    private func preClassMaterialCount(for occurrence: ScheduleCalculator.Occurrence) -> Int {
+        ((try? environment.repository.materials(occurrenceKey: occurrence.occurrenceKey)) ?? [])
+            .count
+    }
+
+    /// Opens the occurrence's 课前资料 in the reader (first material; the
+    /// library's filter handles the rest).
+    private func openPreClassMaterials(for occurrence: ScheduleCalculator.Occurrence) {
+        preClassMaterials = (try? environment.repository.materials(
+            occurrenceKey: occurrence.occurrenceKey
+        )) ?? []
     }
 
     private var todayList: some View {
@@ -339,6 +388,10 @@ struct ScheduleOccurrenceCard: View {
     let onStart: () -> Void
     /// nil hides the chevron (the home card deep-links instead).
     let onOpenSchedule: (() -> Void)?
+    /// 课前资料 count (materials linked to this occurrence); 0 hides the
+    /// line. Opening a material never touches recording/ASR.
+    var preClassMaterialCount: Int = 0
+    var onOpenPreClassMaterials: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
@@ -383,6 +436,23 @@ struct ScheduleOccurrenceCard: View {
                             .font(LTTypography.caption)
                             .foregroundStyle(LTColors.textTertiary)
                             .lineLimit(2)
+                    }
+                    if preClassMaterialCount > 0 {
+                        Button {
+                            onOpenPreClassMaterials?()
+                        } label: {
+                            HStack(spacing: LTSpacing.xxs) {
+                                Image(systemName: "book")
+                                    .font(.system(size: 11))
+                                Text("课前资料 \(preClassMaterialCount) 份")
+                                    .font(LTTypography.caption)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                            .foregroundStyle(LTColors.accentCyan)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Text("查看课前资料，共 \(preClassMaterialCount) 份"))
                     }
                     HStack(spacing: LTSpacing.xs) {
                         if occurrence.isCancelled {

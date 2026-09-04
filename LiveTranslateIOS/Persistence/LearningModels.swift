@@ -56,6 +56,10 @@ final class GlossaryTerm {
     var sourceAttachmentID: UUID?
     /// PRIMARY source study review (nil = not from an AI review).
     var sourceReviewID: UUID?
+    /// PRIMARY source course material (nil = not from a material); with
+    /// `sourceMaterialPage` for one-tap jumps back into the reader.
+    var sourceMaterialID: UUID?
+    var sourceMaterialPage: Int
     /// JSON array of session UUID strings — accumulated sources.
     var sourceSessionIDsJSON: String
     var isFavorite: Bool
@@ -78,6 +82,8 @@ final class GlossaryTerm {
         sourceEntryID: UUID? = nil,
         sourceAttachmentID: UUID? = nil,
         sourceReviewID: UUID? = nil,
+        sourceMaterialID: UUID? = nil,
+        sourceMaterialPage: Int = 0,
         sourceSessionIDs: [UUID] = [],
         isFavorite: Bool = false,
         status: GlossaryTermStatus = .new,
@@ -94,6 +100,8 @@ final class GlossaryTerm {
         self.sourceEntryID = sourceEntryID
         self.sourceAttachmentID = sourceAttachmentID
         self.sourceReviewID = sourceReviewID
+        self.sourceMaterialID = sourceMaterialID
+        self.sourceMaterialPage = sourceMaterialPage
         if let data = try? JSONEncoder().encode(sourceSessionIDs),
            let json = String(data: data, encoding: .utf8) {
             self.sourceSessionIDsJSON = json
@@ -193,6 +201,10 @@ final class StudyCard {
     var sourceEntryID: UUID?
     var sourceAttachmentID: UUID?
     var sourceTermID: UUID?
+    /// Optional source material + page (formula/重点 cards created from
+    /// a digest — one-tap jumps back into the reader).
+    var sourceMaterialID: UUID?
+    var sourceMaterialPage: Int
     // --- Scheduling state ---
     /// Raw value of `StudyCardStage`.
     var stageRaw: String
@@ -221,6 +233,8 @@ final class StudyCard {
         sourceEntryID: UUID? = nil,
         sourceAttachmentID: UUID? = nil,
         sourceTermID: UUID? = nil,
+        sourceMaterialID: UUID? = nil,
+        sourceMaterialPage: Int = 0,
         stage: StudyCardStage = .new,
         reviewCount: Int = 0,
         intervalHours: Int = 0,
@@ -240,6 +254,8 @@ final class StudyCard {
         self.sourceEntryID = sourceEntryID
         self.sourceAttachmentID = sourceAttachmentID
         self.sourceTermID = sourceTermID
+        self.sourceMaterialID = sourceMaterialID
+        self.sourceMaterialPage = sourceMaterialPage
         self.stageRaw = stage.rawValue
         self.reviewCount = reviewCount
         self.intervalHours = intervalHours
@@ -337,6 +353,10 @@ final class StudyTask {
     var sourceEntryID: UUID?
     var sourceAttachmentID: UUID?
     var sourceReviewID: UUID?
+    /// Optional source material + page (assignments found IN a material —
+    /// they enter pendingConfirm and jump back to the page).
+    var sourceMaterialID: UUID?
+    var sourceMaterialPage: Int
     var createdAt: Date
     var updatedAt: Date
     /// Cloud-sync metadata (0 = never synced).
@@ -358,6 +378,8 @@ final class StudyTask {
         sourceEntryID: UUID? = nil,
         sourceAttachmentID: UUID? = nil,
         sourceReviewID: UUID? = nil,
+        sourceMaterialID: UUID? = nil,
+        sourceMaterialPage: Int = 0,
         serverVersion: Int = 0
     ) {
         self.id = id
@@ -375,6 +397,8 @@ final class StudyTask {
         self.sourceEntryID = sourceEntryID
         self.sourceAttachmentID = sourceAttachmentID
         self.sourceReviewID = sourceReviewID
+        self.sourceMaterialID = sourceMaterialID
+        self.sourceMaterialPage = sourceMaterialPage
         self.createdAt = .now
         self.updatedAt = .now
         self.serverVersion = serverVersion

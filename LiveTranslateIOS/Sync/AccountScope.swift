@@ -65,6 +65,7 @@ enum AccountScope {
     static let databaseFileName = "LiveTranslate.sqlite"
     static let outboxFileName = "SyncOutbox.json"
     static let attachmentsDirectoryName = "Attachments"
+    static let materialsDirectoryName = "Materials"
 
     /// SwiftData store for a profile: the guest global file, or one
     /// account's isolated store.
@@ -93,6 +94,20 @@ enum AccountScope {
         }
         return accountDirectory(accountID: accountID)
             .appendingPathComponent(attachmentsDirectoryName, isDirectory: true)
+    }
+
+    /// Root directory for a profile's course-material files (PDF 附件、
+    /// 讲义原文件与派生页面缓存). Same isolation rule as attachments —
+    /// one root per account, derived ONLY here (no second path rule).
+    static func materialsRoot(accountID: UUID?) -> URL {
+        let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        guard let accountID else {
+            return support.appendingPathComponent("Materials", isDirectory: true)
+        }
+        return accountDirectory(accountID: accountID)
+            .appendingPathComponent(materialsDirectoryName, isDirectory: true)
     }
 
     // MARK: - Guest (legacy global) paths

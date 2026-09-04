@@ -354,6 +354,144 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func sessions(occurrenceKey: String) throws -> [ClassroomSession]
     /// The user's ongoing session (nil when none is running).
     func ongoingSession() throws -> ClassroomSession?
+
+    // MARK: Course materials (资料库)
+    // Files live under MaterialFileStore; the repository persists
+    // metadata and page rows only. Extraction/digest/OCR in-progress
+    // states (extracting/analyzing/running) are device-local and never
+    // notify the sync observer; terminal states and user edits do.
+    // Materials SURVIVE their sources: deleting a course clears the
+    // material's courseID (资料转入未归类); deleting a session clears the
+    // sessionID (资料仍属于课程). Deleting a MATERIAL cascades to its
+    // pages and annotations and reaps its files.
+
+    // Materials
+
+    /// All materials (nil courseID = every course incl. 未归类), newest
+    /// first.
+    func materials(courseID: UUID?) throws -> [CourseMaterial]
+    /// One material by id.
+    func material(id: UUID) throws -> CourseMaterial?
+    /// Materials whose title/file name/digest text contains the query.
+    func materials(matching query: String) throws -> [CourseMaterial]
+    /// Materials with this original-file hash (duplicate-import prompt;
+    /// never auto-deletes).
+    func materials(contentHash: String) throws -> [CourseMaterial]
+    /// Materials linked to one schedule occurrence (课前资料).
+    func materials(occurrenceKey: String) throws -> [CourseMaterial]
+    /// Persists a fully-imported material (files already on disk — the
+    /// row is written LAST by contract). Notifies sync.
+    func addMaterial(_ draft: MaterialDraft) throws -> CourseMaterial
+    /// Applies every metadata field of the draft (edit sheet save).
+    /// Notifies sync.
+    func updateMaterial(_ material: CourseMaterial, with draft: MaterialDraft) throws
+    /// Reading-progress touch (lastReadPage/lastOpenedAt). Notifies sync.
+    func touchMaterialRead(_ material: CourseMaterial, page: Int) throws
+    /// Deletes the material and its pages/annotations (server cascades
+    /// the children). Notifies sync; files are reaped by the store.
+    func deleteMaterial(_ material: CourseMaterial) throws
+
+    // Material digest (导读) lifecycle. The old digest survives until a
+    // new one succeeds (never blanked at regeneration start); generation
+    // progress (analyzing / chunk state) is device-local.
+
+    /// Starts/restarts a digest run: writes the chunk plan and the local
+    /// analyzing state. The previous digest content stays until
+    /// completion. Local-only.
+    func beginMaterialDigestGeneration(
+        _ material: CourseMaterial, chunkStateJSON: String
+    ) throws
+    /// Persists chunk progress; `terminal` optionally updates the status.
+    /// Local-only.
+    func updateMaterialDigestProgress(
+        _ material: CourseMaterial, chunkStateJSON: String,
+        terminal: MaterialDigestStatus?
+    ) throws
+    /// A finished run: replaces the digest, stamps model and source hash,
+    /// sets completed. Notifies sync.
+    func completeMaterialDigestGeneration(
+        _ material: CourseMaterial, digest: MaterialDigestResult,
+        model: String, sourceHash: String
+    ) throws
+    /// Marks a run failed (previous digest, if any, stays). Notifies sync
+    /// only when a digest worth keeping exists.
+    func failMaterialDigestGeneration(_ material: CourseMaterial) throws
+    /// An orphaned `analyzing` row (app was killed): becomes partial when
+    /// chunks finished, else failed. Local-only.
+    func markMaterialDigestInterrupted(_ material: CourseMaterial) throws
+
+    /// Cloud-sync apply for a material record.
+    func applyRemoteMaterial(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteMaterialByID(_ id: UUID) throws
+
+    // Material pages (extraction + OCR)
+
+    /// All pages of a material, page order.
+    func materialPages(materialID: UUID) throws -> [MaterialPage]
+    /// Pages whose extracted/OCR text contains the query, joined with
+    /// their material for display.
+    func materialPages(matching query: String) throws -> [(page: MaterialPage, material: CourseMaterial)]
+    /// Begins an extraction run: clears stale page rows when re-extracting
+    /// (keep OCR/annotations — the pages are the same), sets the local
+    /// extracting state. Local-only.
+    func beginMaterialExtraction(_ material: CourseMaterial, pageCount: Int) throws
+    /// Upserts one page's extracted text (deterministic row id). Notifies
+    /// sync — each completed page is final content.
+    func upsertMaterialPageText(
+        _ material: CourseMaterial, pageNumber: Int, extractedText: String
+    ) throws -> MaterialPage
+    /// Ends an extraction run with a terminal status. Notifies sync.
+    func finishMaterialExtraction(
+        _ material: CourseMaterial, status: MaterialExtractionStatus
+    ) throws
+    /// Saves page OCR text with its terminal status. Notifies sync.
+    func updateMaterialPageOCR(
+        _ page: MaterialPage, text: String, status: MaterialOCRStatus
+    ) throws
+    /// An orphaned `extracting` row (app was killed): becomes partial when
+    /// any page landed, else failed. Local-only.
+    func markMaterialExtractionInterrupted(_ material: CourseMaterial) throws
+    /// Cloud-sync apply for a page record.
+    func applyRemoteMaterialPage(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteMaterialPageByID(_ id: UUID) throws
+
+    // Material annotations (user note/bookmark layer)
+
+    /// All annotations of a material, page then created order.
+    func materialAnnotations(materialID: UUID) throws -> [MaterialAnnotation]
+    func addMaterialAnnotation(_ draft: MaterialAnnotationDraft) throws -> MaterialAnnotation
+    func updateMaterialAnnotationText(_ annotation: MaterialAnnotation, text: String) throws
+    func deleteMaterialAnnotation(_ annotation: MaterialAnnotation) throws
+    /// Cloud-sync apply for an annotation record.
+    func applyRemoteMaterialAnnotation(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteMaterialAnnotationByID(_ id: UUID) throws
+
+    // Course assistant (问这门课)
+
+    /// All threads of a course (nil = every course incl. 未归类), newest
+    /// activity first.
+    func assistantThreads(courseID: UUID?) throws -> [CourseAssistantThread]
+    func addAssistantThread(courseID: UUID?, title: String) throws -> CourseAssistantThread
+    func renameAssistantThread(_ thread: CourseAssistantThread, title: String) throws
+    /// Deletes the thread and its messages (server cascades). Notifies
+    /// sync.
+    func deleteAssistantThread(_ thread: CourseAssistantThread) throws
+    /// Cloud-sync apply for a thread record.
+    func applyRemoteAssistantThread(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteAssistantThreadByID(_ id: UUID) throws
+
+    // Assistant messages
+
+    /// All messages of a thread, oldest first.
+    func assistantMessages(threadID: UUID) throws -> [CourseAssistantMessage]
+    /// Appends one message (user question or completed answer with its
+    /// citations). Notifies sync.
+    func addAssistantMessage(_ draft: AssistantMessageDraft) throws -> CourseAssistantMessage
+    /// Messages whose text contains the query (search).
+    func assistantMessages(matching query: String) throws -> [(message: CourseAssistantMessage, thread: CourseAssistantThread)]
+    /// Cloud-sync apply for a message record.
+    func applyRemoteAssistantMessage(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteAssistantMessageByID(_ id: UUID) throws
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).
@@ -443,6 +581,8 @@ struct TermDraft: Sendable, Equatable {
     var sourceEntryID: UUID? = nil
     var sourceAttachmentID: UUID? = nil
     var sourceReviewID: UUID? = nil
+    var sourceMaterialID: UUID? = nil
+    var sourceMaterialPage: Int = 0
     var isFavorite: Bool = false
     var status: GlossaryTermStatus = .new
 }
@@ -458,6 +598,8 @@ struct CardDraft: Sendable, Equatable {
     var sourceEntryID: UUID? = nil
     var sourceAttachmentID: UUID? = nil
     var sourceTermID: UUID? = nil
+    var sourceMaterialID: UUID? = nil
+    var sourceMaterialPage: Int = 0
     var origin: StudyCardOrigin = .manual
 }
 
@@ -477,6 +619,48 @@ struct TaskDraft: Sendable, Equatable {
     var sourceEntryID: UUID? = nil
     var sourceAttachmentID: UUID? = nil
     var sourceReviewID: UUID? = nil
+    var sourceMaterialID: UUID? = nil
+    var sourceMaterialPage: Int = 0
+}
+
+/// A fully-imported new material. The FILE is already on disk (or the
+/// material borrows a classroom attachment's files when
+/// `sourceAttachmentID` is set — then no file copy exists); the draft
+/// carries only metadata derived during import.
+struct MaterialDraft: Sendable, Equatable {
+    var title: String
+    var originalFileName: String
+    var mimeType: String = ""
+    var kind: MaterialKind = .other
+    var format: MaterialFormat = .other
+    var fileSize: Int64 = 0
+    var contentHash: String = ""
+    var pageCount: Int = 0
+    var courseID: UUID? = nil
+    var sessionID: UUID? = nil
+    var occurrenceKey: String? = nil
+    var sourceAttachmentID: UUID? = nil
+    /// Terminal extraction state at import time (text materials arrive
+    /// parsed; office documents arrive `unsupported`).
+    var extractionStatus: MaterialExtractionStatus = .pending
+}
+
+/// A new page-level note or bookmark on a material.
+struct MaterialAnnotationDraft: Sendable, Equatable {
+    var materialID: UUID
+    var pageNumber: Int
+    var kind: MaterialAnnotationKind
+    var text: String = ""
+}
+
+/// One assistant message (question or completed answer).
+struct AssistantMessageDraft: Sendable {
+    var threadID: UUID
+    var role: AssistantMessageRole
+    var text: String
+    var scopeMaterialID: UUID? = nil
+    var scopeSessionID: UUID? = nil
+    var citations: [AssistantMessageCitation] = []
 }
 
 extension GlossaryTerm {

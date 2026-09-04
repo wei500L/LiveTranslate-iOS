@@ -87,6 +87,12 @@ enum AttachmentFileStoreShared {
     nonisolated(unsafe) static var store: AttachmentFileStore?
 }
 
+/// Same holder pattern for the profile's MaterialFileStore (course
+/// materials' files) — set by the composition root at profile build.
+enum MaterialFileStoreShared {
+    nonisolated(unsafe) static var store: MaterialFileStore?
+}
+
 @MainActor
 final class TranscriptRepository: ClassroomRepositoryProtocol {
     private let container: ModelContainer
@@ -301,6 +307,16 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         if let recording = try recording(sessionID: sessionID) {
             context.delete(recording)
         }
+        // Materials are course data, not session data — deleting the class
+        // only UNLINKS them (they stay in the course's library).
+        let sessionMaterials = try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.sessionID == sessionID }
+        ))
+        for material in sessionMaterials where material.sessionID != nil {
+            material.sessionID = nil
+            material.updatedAt = .now
+            mutationObserver?.materialUpdated(material)
+        }
         context.delete(session)
         try context.save()
         SessionRecordings.remove(for: sessionID)
@@ -437,6 +453,36 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let exception = try context.fetch(descriptor).first else { return }
             exception.serverVersion = max(exception.serverVersion, version)
+        case .material:
+            let descriptor = FetchDescriptor<CourseMaterial>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let material = try context.fetch(descriptor).first else { return }
+            material.serverVersion = max(material.serverVersion, version)
+        case .materialPage:
+            let descriptor = FetchDescriptor<MaterialPage>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let page = try context.fetch(descriptor).first else { return }
+            page.serverVersion = max(page.serverVersion, version)
+        case .materialAnnotation:
+            let descriptor = FetchDescriptor<MaterialAnnotation>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let annotation = try context.fetch(descriptor).first else { return }
+            annotation.serverVersion = max(annotation.serverVersion, version)
+        case .assistantThread:
+            let descriptor = FetchDescriptor<CourseAssistantThread>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let thread = try context.fetch(descriptor).first else { return }
+            thread.serverVersion = max(thread.serverVersion, version)
+        case .assistantMessage:
+            let descriptor = FetchDescriptor<CourseAssistantMessage>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let message = try context.fetch(descriptor).first else { return }
+            message.serverVersion = max(message.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -799,6 +845,67 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 payload: CloudSyncService.payload(for: exception)
             ))
         }
+        // Course-material library: materials before their pages/annotations
+        // (children reference the parent id server-side). `extracting`/
+        // `analyzing` rows never snapshot (local progress only).
+        let materials = (try? context.fetch(FetchDescriptor<CourseMaterial>())) ?? []
+        for material in materials {
+            items.append(SyncOutboxItem(
+                entityType: .material,
+                entityID: material.id,
+                operation: .upsert,
+                baseServerVersion: material.serverVersion,
+                payload: CloudSyncService.payload(for: material)
+            ))
+            let pages = (try? materialPages(materialID: material.id)) ?? []
+            for page in pages {
+                var payload = CloudSyncService.payload(for: page)
+                payload.materialId = page.materialID
+                items.append(SyncOutboxItem(
+                    entityType: .materialPage,
+                    entityID: page.id,
+                    operation: .upsert,
+                    baseServerVersion: page.serverVersion,
+                    payload: payload
+                ))
+            }
+            let annotations = (try? materialAnnotations(materialID: material.id)) ?? []
+            for annotation in annotations {
+                var payload = CloudSyncService.payload(for: annotation)
+                payload.materialId = annotation.materialID
+                payload.materialPageNumber = annotation.pageNumber
+                items.append(SyncOutboxItem(
+                    entityType: .materialAnnotation,
+                    entityID: annotation.id,
+                    operation: .upsert,
+                    baseServerVersion: annotation.serverVersion,
+                    payload: payload
+                ))
+            }
+        }
+        // Course assistant: threads before their messages.
+        let threads = (try? context.fetch(FetchDescriptor<CourseAssistantThread>())) ?? []
+        for thread in threads {
+            items.append(SyncOutboxItem(
+                entityType: .assistantThread,
+                entityID: thread.id,
+                operation: .upsert,
+                baseServerVersion: thread.serverVersion,
+                payload: CloudSyncService.payload(for: thread)
+            ))
+            let messages = (try? assistantMessages(threadID: thread.id)) ?? []
+            for message in messages {
+                var payload = CloudSyncService.payload(for: message)
+                payload.threadId = message.threadID
+                items.append(SyncOutboxItem(
+                    entityType: .assistantMessage,
+                    entityID: message.id,
+                    operation: .upsert,
+                    baseServerVersion: message.serverVersion,
+                    payload: payload
+                ))
+            }
+        }
         progress?(sessions.count, sessions.count)
         return items
     }
@@ -890,6 +997,26 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 mutationObserver?.taskUpdated(task)
             }
         }
+        // Materials survive as 未归类 (the spec's 转入未归类 default) —
+        // only the course scoping reference is cleared; the server-side
+        // detach does the same.
+        let materials = try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for material in materials {
+            material.courseID = nil
+            material.updatedAt = .now
+            mutationObserver?.materialUpdated(material)
+        }
+        // Assistant threads survive as 未归类 threads too.
+        let threads = try context.fetch(FetchDescriptor<CourseAssistantThread>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for thread in threads {
+            thread.courseID = nil
+            thread.updatedAt = .now
+            mutationObserver?.assistantThreadUpdated(thread)
+        }
         // Schedules are meaningless without their course — they and their
         // exceptions are deleted (the server cascade emits the same
         // deletes; local delete + observer notification covers the
@@ -976,6 +1103,16 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             predicate: #Predicate { $0.courseID == id }
         ))
         for task in tasks { task.courseID = nil }
+        // Materials detach to 未归类; assistant threads detach too
+        // (remote-applied side: no observer notifications).
+        let materials = try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for material in materials { material.courseID = nil }
+        let threads = try context.fetch(FetchDescriptor<CourseAssistantThread>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for thread in threads { thread.courseID = nil }
         // Schedules + exceptions go with the course (mirror of the server
         // cascade). Remote-applied side: no observer notifications.
         let schedules = try context.fetch(FetchDescriptor<CourseSchedule>(
@@ -1557,6 +1694,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             sourceEntryID: draft.sourceEntryID,
             sourceAttachmentID: draft.sourceAttachmentID,
             sourceReviewID: draft.sourceReviewID,
+            sourceMaterialID: draft.sourceMaterialID,
+            sourceMaterialPage: draft.sourceMaterialPage,
             sourceSessionIDs: draft.sessionID.map { [$0] } ?? [],
             isFavorite: draft.isFavorite,
             status: draft.status
@@ -1649,6 +1788,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             term.sourceEntryID = record.entryId
             term.sourceAttachmentID = record.sourceAttachmentId
             term.sourceReviewID = record.sourceReviewId
+            term.sourceMaterialID = record.materialId
+            term.sourceMaterialPage = record.materialPageNumber ?? 0
             term.sourceSessionIDsJSON = record.termSourceSessions ?? "[]"
         } else {
             term = GlossaryTerm(
@@ -1663,6 +1804,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 sourceEntryID: record.entryId,
                 sourceAttachmentID: record.sourceAttachmentId,
                 sourceReviewID: record.sourceReviewId,
+                sourceMaterialID: record.materialId,
+                sourceMaterialPage: record.materialPageNumber ?? 0,
                 sourceSessionIDs: Self.decodeSourceSessions(record.termSourceSessions),
                 isFavorite: record.termFavorite ?? false,
                 status: GlossaryTermStatus(rawValue: record.termStatus ?? "") ?? .new,
@@ -1681,6 +1824,12 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         guard let term = try context.fetch(descriptor).first else { return }
         context.delete(term)
         try context.save()
+    }
+
+    /// ""/nil → nil (a cleared optional string reference on the wire).
+    private static func nonEmptyOrNil(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 
     private static func encodeSourceSessions(_ ids: [UUID]) -> String {
@@ -1749,7 +1898,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             sessionID: draft.sessionID,
             sourceEntryID: draft.sourceEntryID,
             sourceAttachmentID: draft.sourceAttachmentID,
-            sourceTermID: draft.sourceTermID
+            sourceTermID: draft.sourceTermID,
+            sourceMaterialID: draft.sourceMaterialID,
+            sourceMaterialPage: draft.sourceMaterialPage
         )
         context.insert(card)
         try context.save()
@@ -1832,6 +1983,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             card.sourceEntryID = record.entryId
             card.sourceAttachmentID = record.sourceAttachmentId
             card.sourceTermID = record.sourceTermId
+            card.sourceMaterialID = record.materialId
+            card.sourceMaterialPage = record.materialPageNumber ?? 0
             // Review state: the newer lastReviewedAt wins (multi-device
             // review merge — mirrors the server-side rule).
             let remoteReviewed = record.cardLastReviewedAt ?? .distantPast
@@ -1861,6 +2014,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 sourceEntryID: record.entryId,
                 sourceAttachmentID: record.sourceAttachmentId,
                 sourceTermID: record.sourceTermId,
+                sourceMaterialID: record.materialId,
+                sourceMaterialPage: record.materialPageNumber ?? 0,
                 stage: StudyCardStage(rawValue: record.cardStage ?? "") ?? .new,
                 reviewCount: record.cardReviewCount ?? 0,
                 intervalHours: record.cardIntervalHours ?? 0,
@@ -1943,7 +2098,9 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             sessionID: draft.sessionID,
             sourceEntryID: draft.sourceEntryID,
             sourceAttachmentID: draft.sourceAttachmentID,
-            sourceReviewID: draft.sourceReviewID
+            sourceReviewID: draft.sourceReviewID,
+            sourceMaterialID: draft.sourceMaterialID,
+            sourceMaterialPage: draft.sourceMaterialPage
         )
         context.insert(task)
         try context.save()
@@ -2030,6 +2187,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             task.sourceEntryID = record.entryId
             task.sourceAttachmentID = record.sourceAttachmentId
             task.sourceReviewID = record.sourceReviewId
+            task.sourceMaterialID = record.materialId
+            task.sourceMaterialPage = record.materialPageNumber ?? 0
             // Done is sticky: a stale non-done push must not reopen a
             // locally completed task (mirrors the server-side rule).
             let remoteStatus = StudyTaskStatus(rawValue: record.taskStatus ?? "") ?? .pending
@@ -2056,6 +2215,8 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 sourceEntryID: record.entryId,
                 sourceAttachmentID: record.sourceAttachmentId,
                 sourceReviewID: record.sourceReviewId,
+                sourceMaterialID: record.materialId,
+                sourceMaterialPage: record.materialPageNumber ?? 0,
                 serverVersion: serverVersion
             )
             context.insert(task)
@@ -2639,6 +2800,674 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             predicate: #Predicate { $0.endTime == nil }
         )
         return try context.fetch(descriptor).first
+    }
+
+    // MARK: - Course materials (资料库)
+
+    func materials(courseID: UUID?) throws -> [CourseMaterial] {
+        let descriptor: FetchDescriptor<CourseMaterial>
+        if let courseID {
+            descriptor = FetchDescriptor<CourseMaterial>(
+                predicate: #Predicate { $0.courseID == courseID },
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<CourseMaterial>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+        }
+        return try context.fetch(descriptor)
+    }
+
+    func material(id: UUID) throws -> CourseMaterial? {
+        try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.id == id }
+        )).first
+    }
+
+    func materials(matching query: String) throws -> [CourseMaterial] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        // Two passes: metadata (title/file name) via predicate, digest text
+        // via decode-and-match (SwiftData cannot query inside the JSON).
+        var hits: [CourseMaterial] = []
+        for material in try materials(courseID: nil) {
+            if material.title.localizedCaseInsensitiveContains(trimmed)
+                || material.originalFileName.localizedCaseInsensitiveContains(trimmed) {
+                hits.append(material)
+            } else if let digest = material.digest,
+                      digest.searchableText.localizedCaseInsensitiveContains(trimmed) {
+                hits.append(material)
+            }
+        }
+        return hits
+    }
+
+    func materials(contentHash: String) throws -> [CourseMaterial] {
+        guard !contentHash.isEmpty else { return [] }
+        return try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.contentHash == contentHash }
+        ))
+    }
+
+    func materials(occurrenceKey: String) throws -> [CourseMaterial] {
+        guard !occurrenceKey.isEmpty else { return [] }
+        return try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.occurrenceKey == occurrenceKey }
+        ))
+    }
+
+    func addMaterial(_ draft: MaterialDraft) throws -> CourseMaterial {
+        let material = CourseMaterial(
+            courseID: draft.courseID,
+            sessionID: draft.sessionID,
+            occurrenceKey: draft.occurrenceKey,
+            title: draft.title,
+            originalFileName: draft.originalFileName,
+            mimeType: draft.mimeType,
+            kind: draft.kind,
+            format: draft.format,
+            fileSize: draft.fileSize,
+            contentHash: draft.contentHash,
+            pageCount: draft.pageCount,
+            sourceAttachmentID: draft.sourceAttachmentID,
+            extractionStatus: draft.extractionStatus
+        )
+        context.insert(material)
+        if let courseID = draft.courseID,
+           let course = try? course(id: courseID) {
+            course.lastUsedAt = .now
+            course.updatedAt = .now
+        }
+        try context.save()
+        mutationObserver?.materialCreated(material)
+        return material
+    }
+
+    func updateMaterial(_ material: CourseMaterial, with draft: MaterialDraft) throws {
+        material.title = draft.title
+        material.kind = draft.kind
+        material.courseID = draft.courseID
+        material.sessionID = draft.sessionID
+        material.occurrenceKey = draft.occurrenceKey
+        material.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialUpdated(material)
+    }
+
+    func touchMaterialRead(_ material: CourseMaterial, page: Int) throws {
+        material.lastReadPage = max(page, 1)
+        material.lastOpenedAt = .now
+        material.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialUpdated(material)
+    }
+
+    // MARK: Material digest (导读) lifecycle
+
+    func beginMaterialDigestGeneration(
+        _ material: CourseMaterial, chunkStateJSON: String
+    ) throws {
+        material.digestStatus = .analyzing
+        material.digestChunkStateJSON = chunkStateJSON
+        material.updatedAt = .now
+        try context.save()
+        // No observer notification — `analyzing` is device-local.
+    }
+
+    func updateMaterialDigestProgress(
+        _ material: CourseMaterial, chunkStateJSON: String,
+        terminal: MaterialDigestStatus?
+    ) throws {
+        material.digestChunkStateJSON = chunkStateJSON
+        if let terminal { material.digestStatus = terminal }
+        material.updatedAt = .now
+        try context.save()
+    }
+
+    func completeMaterialDigestGeneration(
+        _ material: CourseMaterial, digest: MaterialDigestResult,
+        model: String, sourceHash: String
+    ) throws {
+        guard let json = digest.encodedJSON() else { return }
+        material.digestJSON = json
+        material.digestStatus = .completed
+        material.digestModel = model
+        material.digestGeneratedAt = .now
+        material.digestSourceHash = sourceHash
+        material.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialUpdated(material)
+    }
+
+    func failMaterialDigestGeneration(_ material: CourseMaterial) throws {
+        material.digestStatus = .failed
+        material.updatedAt = .now
+        try context.save()
+        // A failed first run (no digest) stays device-local; a failed
+        // RE-generation keeps the old digest in sync so other devices see
+        // the same state.
+        if !material.digestJSON.isEmpty {
+            mutationObserver?.materialUpdated(material)
+        }
+    }
+
+    func markMaterialDigestInterrupted(_ material: CourseMaterial) throws {
+        guard material.digestStatus == .analyzing else { return }
+        let state = MaterialDigestChunkState.decode(material.digestChunkStateJSON)
+        material.digestStatus = (state?.hasAnyProgress ?? false) ? .partial : .failed
+        material.updatedAt = .now
+        try context.save()
+        if material.digestStatus == .partial {
+            mutationObserver?.materialUpdated(material)
+        }
+    }
+
+    func deleteMaterial(_ material: CourseMaterial) throws {
+        let materialID = material.id
+        // Children first (local mirror of the server cascade; their
+        // tombstones travel with the material's delete server-side).
+        let pages = try context.fetch(FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.materialID == materialID }
+        ))
+        for page in pages { context.delete(page) }
+        let annotations = try context.fetch(FetchDescriptor<MaterialAnnotation>(
+            predicate: #Predicate { $0.materialID == materialID }
+        ))
+        for annotation in annotations { context.delete(annotation) }
+        context.delete(material)
+        try context.save()
+        MaterialFileStoreShared.store?.removeFiles(for: materialID)
+        mutationObserver?.materialDeleted(id: materialID)
+    }
+
+    func applyRemoteMaterial(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id else { return }
+        let descriptor = FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let digestJSON = record.materialDigest ?? ""
+        let material: CourseMaterial
+        if let existing {
+            material = existing
+            if let title = record.title, !title.isEmpty { material.title = title }
+            if let fileName = record.materialFileName, !fileName.isEmpty {
+                material.originalFileName = fileName
+            }
+            if let mime = record.materialMime, !mime.isEmpty { material.mimeType = mime }
+            if let kindRaw = record.materialKind, let kind = MaterialKind(rawValue: kindRaw) {
+                material.kind = kind
+            }
+            if let formatRaw = record.materialFormat, let format = MaterialFormat(rawValue: formatRaw) {
+                material.format = format
+            }
+            // Hash/size/pageCount are identity — immutable after creation.
+            if let extractionRaw = record.materialExtraction,
+               let status = MaterialExtractionStatus(rawValue: extractionRaw),
+               status != .extracting {
+                material.extractionStatus = status
+            }
+            if let digestStatusRaw = record.materialDigestStatus,
+               let status = MaterialDigestStatus(rawValue: digestStatusRaw),
+               status != .analyzing {
+                material.digestStatus = status
+            }
+            if !digestJSON.isEmpty { material.digestJSON = digestJSON }
+            material.digestModel = record.materialDigestModel ?? material.digestModel
+            material.digestGeneratedAt = record.materialDigestAt ?? material.digestGeneratedAt
+            material.digestSourceHash = record.materialDigestSourceHash ?? material.digestSourceHash
+            material.lastReadPage = record.materialLastReadPage ?? material.lastReadPage
+            material.lastOpenedAt = record.materialLastOpenedAt ?? material.lastOpenedAt
+            // Full row state: absent/empty occurrence key = no link (the
+            // schedule override convention — empty clears, never keeps).
+            material.occurrenceKey = Self.nonEmptyOrNil(record.scheduleOccurrenceKey)
+            material.serverVersion = serverVersion
+        } else {
+            material = CourseMaterial(
+                id: recordID,
+                courseID: record.courseId,
+                sessionID: record.sessionId,
+                occurrenceKey: Self.nonEmptyOrNil(record.scheduleOccurrenceKey),
+                title: record.title ?? "",
+                originalFileName: record.materialFileName ?? "",
+                mimeType: record.materialMime ?? "",
+                kind: MaterialKind(rawValue: record.materialKind ?? "") ?? .other,
+                format: MaterialFormat(rawValue: record.materialFormat ?? "") ?? .other,
+                fileSize: record.materialFileSize ?? 0,
+                contentHash: record.materialHash ?? "",
+                pageCount: record.materialPageCount ?? 0,
+                sourceAttachmentID: record.sourceAttachmentId,
+                extractionStatus: MaterialExtractionStatus(
+                    rawValue: record.materialExtraction ?? ""
+                ) ?? .pending,
+                digestStatus: MaterialDigestStatus(
+                    rawValue: record.materialDigestStatus ?? ""
+                ) ?? .pending,
+                digestJSON: digestJSON,
+                digestModel: record.materialDigestModel ?? "",
+                digestGeneratedAt: record.materialDigestAt,
+                digestSourceHash: record.materialDigestSourceHash ?? "",
+                lastReadPage: record.materialLastReadPage ?? 0,
+                lastOpenedAt: record.materialLastOpenedAt,
+                serverVersion: serverVersion
+            )
+            context.insert(material)
+        }
+        try context.save()
+    }
+
+    func deleteMaterialByID(_ id: UUID) throws {
+        let pages = try context.fetch(FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.materialID == id }
+        ))
+        for page in pages { context.delete(page) }
+        let annotations = try context.fetch(FetchDescriptor<MaterialAnnotation>(
+            predicate: #Predicate { $0.materialID == id }
+        ))
+        for annotation in annotations { context.delete(annotation) }
+        guard let material = try context.fetch(FetchDescriptor<CourseMaterial>(
+            predicate: #Predicate { $0.id == id }
+        )).first else {
+            try context.save()
+            return
+        }
+        context.delete(material)
+        try context.save()
+        MaterialFileStoreShared.store?.removeFiles(for: id)
+    }
+
+    // MARK: Material pages (extraction + OCR)
+
+    func materialPages(materialID: UUID) throws -> [MaterialPage] {
+        try context.fetch(FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.materialID == materialID },
+            sortBy: [SortDescriptor(\.pageNumber)]
+        ))
+    }
+
+    func materialPages(matching query: String) throws -> [(page: MaterialPage, material: CourseMaterial)] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        var results: [(MaterialPage, CourseMaterial)] = []
+        for material in try materials(courseID: nil) {
+            for page in try materialPages(materialID: material.id)
+            where page.searchableText.localizedCaseInsensitiveContains(trimmed) {
+                results.append((page, material))
+            }
+        }
+        return results
+    }
+
+    func beginMaterialExtraction(_ material: CourseMaterial, pageCount: Int) throws {
+        material.pageCount = pageCount
+        material.extractionStatus = .extracting
+        material.updatedAt = .now
+        try context.save()
+        // No observer notification — `extracting` is device-local.
+    }
+
+    func upsertMaterialPageText(
+        _ material: CourseMaterial, pageNumber: Int, extractedText: String
+    ) throws -> MaterialPage {
+        let pageID = MaterialPage.deterministicID(materialID: material.id, pageNumber: pageNumber)
+        let existing = try context.fetch(FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.id == pageID }
+        )).first
+        let page: MaterialPage
+        if let existing {
+            page = existing
+            // A re-extraction over a scanned page keeps OCR text only when
+            // the new text layer is empty (the OCR stays the only content).
+            page.extractedText = extractedText
+        } else {
+            page = MaterialPage(
+                id: pageID, materialID: material.id, pageNumber: pageNumber,
+                extractedText: extractedText
+            )
+            context.insert(page)
+        }
+        page.updatedAt = .now
+        material.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialPageUpserted(page)
+        return page
+    }
+
+    func finishMaterialExtraction(
+        _ material: CourseMaterial, status: MaterialExtractionStatus
+    ) throws {
+        material.extractionStatus = status
+        material.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialUpdated(material)
+    }
+
+    func updateMaterialPageOCR(
+        _ page: MaterialPage, text: String, status: MaterialOCRStatus
+    ) throws {
+        page.ocrText = text
+        page.ocrStatus = status
+        page.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialPageUpserted(page)
+    }
+
+    func markMaterialExtractionInterrupted(_ material: CourseMaterial) throws {
+        guard material.extractionStatus == .extracting else { return }
+        let hasPages = ((try? context.fetchCount(FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.materialID == material.id }
+        ))) ?? 0) > 0
+        material.extractionStatus = hasPages ? .partial : .failed
+        material.updatedAt = .now
+        try context.save()
+        if hasPages {
+            mutationObserver?.materialUpdated(material)
+        }
+    }
+
+    func applyRemoteMaterialPage(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id, let materialID = record.materialId,
+              let pageNumber = record.materialPageNumber else { return }
+        let descriptor = FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let page: MaterialPage
+        if let existing {
+            page = existing
+            if let text = record.materialPageText { page.extractedText = text }
+            if let ocr = record.materialPageOCR { page.ocrText = ocr }
+            if let statusRaw = record.materialPageOCRStatus,
+               let status = MaterialOCRStatus(rawValue: statusRaw),
+               status != .running {
+                page.ocrStatus = status
+            }
+            page.serverVersion = serverVersion
+        } else {
+            page = MaterialPage(
+                id: recordID,
+                materialID: materialID,
+                pageNumber: pageNumber,
+                extractedText: record.materialPageText ?? "",
+                ocrText: record.materialPageOCR ?? "",
+                ocrStatus: MaterialOCRStatus(rawValue: record.materialPageOCRStatus ?? "") ?? .none,
+                serverVersion: serverVersion
+            )
+            context.insert(page)
+        }
+        try context.save()
+    }
+
+    func deleteMaterialPageByID(_ id: UUID) throws {
+        guard let page = try context.fetch(FetchDescriptor<MaterialPage>(
+            predicate: #Predicate { $0.id == id }
+        )).first else { return }
+        context.delete(page)
+        try context.save()
+    }
+
+    // MARK: Material annotations (user note/bookmark layer)
+
+    func materialAnnotations(materialID: UUID) throws -> [MaterialAnnotation] {
+        try context.fetch(FetchDescriptor<MaterialAnnotation>(
+            predicate: #Predicate { $0.materialID == materialID },
+            sortBy: [SortDescriptor(\.pageNumber), SortDescriptor(\.createdAt)]
+        ))
+    }
+
+    func addMaterialAnnotation(_ draft: MaterialAnnotationDraft) throws -> MaterialAnnotation {
+        let annotation = MaterialAnnotation(
+            materialID: draft.materialID,
+            pageNumber: draft.pageNumber,
+            kind: draft.kind,
+            text: draft.text
+        )
+        context.insert(annotation)
+        try context.save()
+        mutationObserver?.materialAnnotationCreated(annotation)
+        return annotation
+    }
+
+    func updateMaterialAnnotationText(_ annotation: MaterialAnnotation, text: String) throws {
+        guard annotation.text != text else { return }
+        annotation.text = text
+        annotation.updatedAt = .now
+        try context.save()
+        mutationObserver?.materialAnnotationUpdated(annotation)
+    }
+
+    func deleteMaterialAnnotation(_ annotation: MaterialAnnotation) throws {
+        let annotationID = annotation.id
+        context.delete(annotation)
+        try context.save()
+        mutationObserver?.materialAnnotationDeleted(id: annotationID)
+    }
+
+    func applyRemoteMaterialAnnotation(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id, let materialID = record.materialId,
+              let pageNumber = record.materialPageNumber else { return }
+        let descriptor = FetchDescriptor<MaterialAnnotation>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let annotation: MaterialAnnotation
+        if let existing {
+            annotation = existing
+            annotation.pageNumber = pageNumber
+            annotation.text = record.noteText ?? annotation.text
+            if let kindRaw = record.materialAnnotationKind,
+               let kind = MaterialAnnotationKind(rawValue: kindRaw) {
+                annotation.kind = kind
+            }
+            annotation.serverVersion = serverVersion
+        } else {
+            annotation = MaterialAnnotation(
+                id: recordID,
+                materialID: materialID,
+                pageNumber: pageNumber,
+                kind: MaterialAnnotationKind(rawValue: record.materialAnnotationKind ?? "") ?? .note,
+                text: record.noteText ?? "",
+                serverVersion: serverVersion
+            )
+            context.insert(annotation)
+        }
+        try context.save()
+    }
+
+    func deleteMaterialAnnotationByID(_ id: UUID) throws {
+        guard let annotation = try context.fetch(FetchDescriptor<MaterialAnnotation>(
+            predicate: #Predicate { $0.id == id }
+        )).first else { return }
+        context.delete(annotation)
+        try context.save()
+    }
+
+    // MARK: Course assistant (问这门课)
+
+    func assistantThreads(courseID: UUID?) throws -> [CourseAssistantThread] {
+        let descriptor: FetchDescriptor<CourseAssistantThread>
+        if let courseID {
+            descriptor = FetchDescriptor<CourseAssistantThread>(
+                predicate: #Predicate { $0.courseID == courseID },
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<CourseAssistantThread>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+        }
+        return try context.fetch(descriptor)
+    }
+
+    func addAssistantThread(courseID: UUID?, title: String) throws -> CourseAssistantThread {
+        let thread = CourseAssistantThread(courseID: courseID, title: title)
+        context.insert(thread)
+        try context.save()
+        mutationObserver?.assistantThreadCreated(thread)
+        return thread
+    }
+
+    func renameAssistantThread(_ thread: CourseAssistantThread, title: String) throws {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, thread.title != trimmed else { return }
+        thread.title = trimmed
+        thread.updatedAt = .now
+        try context.save()
+        mutationObserver?.assistantThreadUpdated(thread)
+    }
+
+    func deleteAssistantThread(_ thread: CourseAssistantThread) throws {
+        let threadID = thread.id
+        let messages = try context.fetch(FetchDescriptor<CourseAssistantMessage>(
+            predicate: #Predicate { $0.threadID == threadID }
+        ))
+        for message in messages { context.delete(message) }
+        context.delete(thread)
+        try context.save()
+        mutationObserver?.assistantThreadDeleted(id: threadID)
+    }
+
+    func applyRemoteAssistantThread(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id else { return }
+        let descriptor = FetchDescriptor<CourseAssistantThread>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let thread: CourseAssistantThread
+        if let existing {
+            thread = existing
+            if let title = record.title, !title.isEmpty { thread.title = title }
+            thread.courseID = record.courseId
+            thread.serverVersion = serverVersion
+        } else {
+            thread = CourseAssistantThread(
+                id: recordID,
+                courseID: record.courseId,
+                title: record.title ?? "",
+                serverVersion: serverVersion
+            )
+            context.insert(thread)
+        }
+        try context.save()
+    }
+
+    func deleteAssistantThreadByID(_ id: UUID) throws {
+        let messages = try context.fetch(FetchDescriptor<CourseAssistantMessage>(
+            predicate: #Predicate { $0.threadID == id }
+        ))
+        for message in messages { context.delete(message) }
+        guard let thread = try context.fetch(FetchDescriptor<CourseAssistantThread>(
+            predicate: #Predicate { $0.id == id }
+        )).first else {
+            try context.save()
+            return
+        }
+        context.delete(thread)
+        try context.save()
+    }
+
+    // MARK: Assistant messages
+
+    func assistantMessages(threadID: UUID) throws -> [CourseAssistantMessage] {
+        try context.fetch(FetchDescriptor<CourseAssistantMessage>(
+            predicate: #Predicate { $0.threadID == threadID },
+            sortBy: [SortDescriptor(\.createdAt)]
+        ))
+    }
+
+    func addAssistantMessage(_ draft: AssistantMessageDraft) throws -> CourseAssistantMessage {
+        let citationsJSON: String
+        if draft.citations.isEmpty {
+            citationsJSON = ""
+        } else if let data = try? JSONEncoder().encode(draft.citations),
+                  let json = String(data: data, encoding: .utf8) {
+            citationsJSON = json
+        } else {
+            citationsJSON = ""
+        }
+        let message = CourseAssistantMessage(
+            threadID: draft.threadID,
+            role: draft.role,
+            text: draft.text,
+            scopeMaterialID: draft.scopeMaterialID,
+            scopeSessionID: draft.scopeSessionID,
+            citationsJSON: citationsJSON
+        )
+        context.insert(message)
+        if let thread = try context.fetch(FetchDescriptor<CourseAssistantThread>(
+            predicate: #Predicate { $0.id == draft.threadID }
+        )).first {
+            thread.updatedAt = .now
+            // No thread observer notification — the message is the change;
+            // pushing both would double-count the same user action.
+        }
+        try context.save()
+        mutationObserver?.assistantMessageCreated(message)
+        return message
+    }
+
+    func assistantMessages(matching query: String) throws -> [(message: CourseAssistantMessage, thread: CourseAssistantThread)] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        var threadByID: [UUID: CourseAssistantThread] = [:]
+        for thread in try assistantThreads(courseID: nil) {
+            threadByID[thread.id] = thread
+        }
+        var results: [(CourseAssistantMessage, CourseAssistantThread)] = []
+        for message in try context.fetch(FetchDescriptor<CourseAssistantMessage>()) {
+            guard message.text.localizedCaseInsensitiveContains(trimmed),
+                  let thread = threadByID[message.threadID] else { continue }
+            results.append((message, thread))
+        }
+        return results
+    }
+
+    func applyRemoteAssistantMessage(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id, let threadID = record.threadId else { return }
+        let descriptor = FetchDescriptor<CourseAssistantMessage>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let message: CourseAssistantMessage
+        if let existing {
+            message = existing
+            message.text = record.assistantText ?? message.text
+            if let role = record.assistantRole { message.roleRaw = role }
+            if let citations = record.assistantCitations { message.citationsJSON = citations }
+            message.serverVersion = serverVersion
+        } else {
+            message = CourseAssistantMessage(
+                id: recordID,
+                threadID: threadID,
+                role: AssistantMessageRole(rawValue: record.assistantRole ?? "") ?? .user,
+                text: record.assistantText ?? "",
+                scopeMaterialID: record.materialId,
+                scopeSessionID: record.sessionId,
+                citationsJSON: record.assistantCitations ?? "",
+                serverVersion: serverVersion
+            )
+            context.insert(message)
+        }
+        try context.save()
+    }
+
+    func deleteAssistantMessageByID(_ id: UUID) throws {
+        guard let message = try context.fetch(FetchDescriptor<CourseAssistantMessage>(
+            predicate: #Predicate { $0.id == id }
+        )).first else { return }
+        context.delete(message)
+        try context.save()
     }
 }
 

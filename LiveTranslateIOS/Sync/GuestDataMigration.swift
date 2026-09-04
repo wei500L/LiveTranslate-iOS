@@ -217,6 +217,7 @@ final class GuestDataMigration {
             copyGuestAttachments()
             copyGuestLearningData()
             copyGuestSchedules()
+            copyGuestMaterials()
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -391,6 +392,109 @@ final class GuestDataMigration {
         }
     }
 
+    /// Copies the guest course-material library (materials, pages,
+    /// annotations, assistant threads/messages) into the account store,
+    /// add-only union like every other course-scoped family, AND copies
+    /// each material's ORIGINAL FILE from the guest material store into
+    /// the account's (page thumbnails are regenerable caches and stay
+    /// behind). Materials borrowing a classroom attachment's files are
+    /// copied after copyGuestAttachments has run — they carry no file of
+    /// their own.
+    private func copyGuestMaterials() {
+        let guestFileStore = MaterialFileStore(accountID: nil)
+        let accountFileStore = MaterialFileStoreShared.store
+        for material in reader.materialSnapshots() {
+            guard (try? repository.material(id: material.id)) ?? nil == nil else { continue }
+            let record = SyncServerRecordDTO(
+                id: material.id,
+                title: material.title,
+                courseId: material.courseID,
+                sessionId: material.sessionID,
+                scheduleOccurrenceKey: material.occurrenceKey ?? "",
+                sourceAttachmentId: material.sourceAttachmentID,
+                materialKind: material.kindRaw,
+                materialMime: material.mimeType.isEmpty ? nil : material.mimeType,
+                materialFileName: material.originalFileName.isEmpty ? nil : material.originalFileName,
+                materialFormat: material.formatRaw,
+                materialFileSize: material.fileSize,
+                materialHash: material.contentHash.isEmpty ? nil : material.contentHash,
+                materialPageCount: material.pageCount,
+                materialExtraction: material.extractionStatusRaw,
+                materialDigestStatus: material.digestStatusRaw,
+                materialDigest: material.digestJSON.isEmpty ? nil : material.digestJSON,
+                materialDigestModel: material.digestModel.isEmpty ? nil : material.digestModel,
+                materialDigestAt: material.digestGeneratedAt,
+                materialDigestSourceHash: material.digestSourceHash.isEmpty ? nil : material.digestSourceHash,
+                materialLastReadPage: material.lastReadPage,
+                materialLastOpenedAt: material.lastOpenedAt,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteMaterial(record: record, serverVersion: 0)
+            // The original file follows its metadata (thumbnails are
+            // regenerable — they stay guest-local and die with the copy).
+            if material.ownsFile, let accountFileStore {
+                let ext = MaterialFileStore.fileExtension(
+                    fileName: material.originalFileName, mime: material.mimeType
+                )
+                if let original = guestFileStore.originalData(
+                    materialID: material.id, fileExtension: ext
+                ) {
+                    try? accountFileStore.writeSyncedOriginal(
+                        original, materialID: material.id, fileExtension: ext
+                    )
+                }
+            }
+        }
+        for page in reader.materialPageSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: page.id,
+                materialId: page.materialID,
+                materialPageNumber: page.pageNumber,
+                materialPageText: page.extractedText.isEmpty ? nil : page.extractedText,
+                materialPageOCR: page.ocrText.isEmpty ? nil : page.ocrText,
+                materialPageOCRStatus: page.ocrStatusRaw,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteMaterialPage(record: record, serverVersion: 0)
+        }
+        for annotation in reader.materialAnnotationSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: annotation.id,
+                materialId: annotation.materialID,
+                materialPageNumber: annotation.pageNumber,
+                materialAnnotationKind: annotation.kindRaw,
+                noteText: annotation.text.isEmpty ? nil : annotation.text,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteMaterialAnnotation(record: record, serverVersion: 0)
+        }
+        for thread in reader.assistantThreadSnapshots() {
+            guard (try? repository.assistantThreads(courseID: nil))?.contains {
+                $0.id == thread.id
+            } != true else { continue }
+            let record = SyncServerRecordDTO(
+                id: thread.id,
+                title: thread.title,
+                courseId: thread.courseID,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteAssistantThread(record: record, serverVersion: 0)
+        }
+        for message in reader.assistantMessageSnapshots() {
+            let record = SyncServerRecordDTO(
+                id: message.id,
+                threadId: message.threadID,
+                assistantRole: message.roleRaw,
+                assistantText: message.text.isEmpty ? nil : message.text,
+                assistantCitations: message.citationsJSON.isEmpty ? nil : message.citationsJSON,
+                materialId: message.scopeMaterialID,
+                sessionId: message.scopeSessionID,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteAssistantMessage(record: record, serverVersion: 0)
+        }
+    }
+
     /// Copies guest notes whose session now exists in the account store.
     /// The remote-apply path preserves ids and serverVersion 0.
     private func copyGuestNotes(_ notes: [GuestLibraryReader.NoteSnapshot]) {
@@ -450,6 +554,8 @@ final class GuestDataMigration {
                 entryId: term.sourceEntryID,
                 sourceAttachmentId: term.sourceAttachmentID,
                 sourceReviewId: term.sourceReviewID,
+                materialId: term.sourceMaterialID,
+                materialPageNumber: term.sourceMaterialID == nil ? nil : term.sourceMaterialPage,
                 serverVersion: 0
             )
             try? repository.applyRemoteTerm(record: record, serverVersion: 0)
@@ -473,6 +579,8 @@ final class GuestDataMigration {
                 entryId: card.sourceEntryID,
                 sourceAttachmentId: card.sourceAttachmentID,
                 sourceTermId: card.sourceTermID,
+                materialId: card.sourceMaterialID,
+                materialPageNumber: card.sourceMaterialID == nil ? nil : card.sourceMaterialPage,
                 serverVersion: 0
             )
             try? repository.applyRemoteStudyCard(record: record, serverVersion: 0)
@@ -494,6 +602,8 @@ final class GuestDataMigration {
                 entryId: task.sourceEntryID,
                 sourceAttachmentId: task.sourceAttachmentID,
                 sourceReviewId: task.sourceReviewID,
+                materialId: task.sourceMaterialID,
+                materialPageNumber: task.sourceMaterialID == nil ? nil : task.sourceMaterialPage,
                 serverVersion: 0
             )
             try? repository.applyRemoteStudyTask(record: record, serverVersion: 0)
@@ -597,8 +707,9 @@ final class GuestDataMigration {
         for suffix in ["", "-wal", "-shm"] {
             try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
         }
-        // The guest attachment files follow the guest copy.
+        // The guest attachment AND material files follow the guest copy.
         AttachmentFileStore(accountID: nil).removeAll()
+        MaterialFileStore(accountID: nil).removeAll()
         // Clear the guest bookmark record too (its sessions are gone).
         UserDefaults.standard.removeObject(forKey: AccountScope.bookmarkKey(accountID: nil))
         Self.logger.info("guest copy deleted after migration")
@@ -719,6 +830,8 @@ struct GuestLibraryReader {
         var sourceEntryID: UUID?
         var sourceAttachmentID: UUID?
         var sourceReviewID: UUID?
+        var sourceMaterialID: UUID?
+        var sourceMaterialPage: Int
         var sourceSessionIDsJSON: String
         var isFavorite: Bool
         var statusRaw: String
@@ -737,6 +850,8 @@ struct GuestLibraryReader {
         var sourceEntryID: UUID?
         var sourceAttachmentID: UUID?
         var sourceTermID: UUID?
+        var sourceMaterialID: UUID?
+        var sourceMaterialPage: Int
         var stageRaw: String
         var reviewCount: Int
         var intervalHours: Int
@@ -762,6 +877,8 @@ struct GuestLibraryReader {
         var sourceEntryID: UUID?
         var sourceAttachmentID: UUID?
         var sourceReviewID: UUID?
+        var sourceMaterialID: UUID?
+        var sourceMaterialPage: Int
     }
 
     private static let schema = Schema([
@@ -770,7 +887,9 @@ struct GuestLibraryReader {
         SessionAttachment.self,
         GlossaryTerm.self, StudyCard.self, StudyTask.self,
         SessionRecording.self, TranscriptCorrection.self,
-        CourseSchedule.self, ScheduleException.self
+        CourseSchedule.self, ScheduleException.self,
+        CourseMaterial.self, MaterialPage.self, MaterialAnnotation.self,
+        CourseAssistantThread.self, CourseAssistantMessage.self
     ])
 
     /// Sendable snapshot of one guest course schedule (the pre-class
@@ -990,6 +1109,8 @@ struct GuestLibraryReader {
                 sourceEntryID: row.sourceEntryID,
                 sourceAttachmentID: row.sourceAttachmentID,
                 sourceReviewID: row.sourceReviewID,
+                sourceMaterialID: row.sourceMaterialID,
+                sourceMaterialPage: row.sourceMaterialPage,
                 sourceSessionIDsJSON: row.sourceSessionIDsJSON,
                 isFavorite: row.isFavorite,
                 statusRaw: row.statusRaw
@@ -1017,6 +1138,8 @@ struct GuestLibraryReader {
                 sourceEntryID: row.sourceEntryID,
                 sourceAttachmentID: row.sourceAttachmentID,
                 sourceTermID: row.sourceTermID,
+                sourceMaterialID: row.sourceMaterialID,
+                sourceMaterialPage: row.sourceMaterialPage,
                 stageRaw: row.stageRaw,
                 reviewCount: row.reviewCount,
                 intervalHours: row.intervalHours,
@@ -1051,7 +1174,9 @@ struct GuestLibraryReader {
                 sessionID: row.sessionID,
                 sourceEntryID: row.sourceEntryID,
                 sourceAttachmentID: row.sourceAttachmentID,
-                sourceReviewID: row.sourceReviewID
+                sourceReviewID: row.sourceReviewID,
+                sourceMaterialID: row.sourceMaterialID,
+                sourceMaterialPage: row.sourceMaterialPage
             )
         }
     }
@@ -1107,4 +1232,172 @@ struct GuestLibraryReader {
             )
         }
     }
+
+    /// All guest course materials, values only.
+    func materialSnapshots() -> [MaterialSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<CourseMaterial>())) ?? []
+        return rows.map { row in
+            MaterialSnapshot(
+                id: row.id,
+                courseID: row.courseID,
+                sessionID: row.sessionID,
+                occurrenceKey: row.occurrenceKey,
+                title: row.title,
+                originalFileName: row.originalFileName,
+                mimeType: row.mimeType,
+                kindRaw: row.kindRaw,
+                formatRaw: row.formatRaw,
+                fileSize: row.fileSize,
+                contentHash: row.contentHash,
+                pageCount: row.pageCount,
+                sourceAttachmentID: row.sourceAttachmentID,
+                extractionStatusRaw: row.extractionStatusRaw,
+                digestStatusRaw: row.digestStatusRaw,
+                digestJSON: row.digestJSON,
+                digestModel: row.digestModel,
+                digestGeneratedAt: row.digestGeneratedAt,
+                digestSourceHash: row.digestSourceHash,
+                lastReadPage: row.lastReadPage,
+                lastOpenedAt: row.lastOpenedAt
+            )
+        }
+    }
+
+    /// All guest material pages, values only.
+    func materialPageSnapshots() -> [MaterialPageSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<MaterialPage>())) ?? []
+        return rows.map { row in
+            MaterialPageSnapshot(
+                id: row.id,
+                materialID: row.materialID,
+                pageNumber: row.pageNumber,
+                extractedText: row.extractedText,
+                ocrText: row.ocrText,
+                ocrStatusRaw: row.ocrStatusRaw
+            )
+        }
+    }
+
+    /// All guest material annotations, values only.
+    func materialAnnotationSnapshots() -> [MaterialAnnotationSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<MaterialAnnotation>())) ?? []
+        return rows.map { row in
+            MaterialAnnotationSnapshot(
+                id: row.id,
+                materialID: row.materialID,
+                pageNumber: row.pageNumber,
+                kindRaw: row.kindRaw,
+                text: row.text
+            )
+        }
+    }
+
+    /// All guest assistant threads, values only.
+    func assistantThreadSnapshots() -> [AssistantThreadSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<CourseAssistantThread>())) ?? []
+        return rows.map { row in
+            AssistantThreadSnapshot(
+                id: row.id,
+                courseID: row.courseID,
+                title: row.title
+            )
+        }
+    }
+
+    /// All guest assistant messages, values only.
+    func assistantMessageSnapshots() -> [AssistantMessageSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<CourseAssistantMessage>())) ?? []
+        return rows.map { row in
+            AssistantMessageSnapshot(
+                id: row.id,
+                threadID: row.threadID,
+                roleRaw: row.roleRaw,
+                text: row.text,
+                scopeMaterialID: row.scopeMaterialID,
+                scopeSessionID: row.scopeSessionID,
+                citationsJSON: row.citationsJSON
+            )
+        }
+    }
+}
+
+// MARK: - Material snapshots (guest library)
+
+/// Sendable snapshot of one guest course material.
+struct MaterialSnapshot: Sendable {
+    var id: UUID
+    var courseID: UUID?
+    var sessionID: UUID?
+    var occurrenceKey: String?
+    var title: String
+    var originalFileName: String
+    var mimeType: String
+    var kindRaw: String
+    var formatRaw: String
+    var fileSize: Int64
+    var contentHash: String
+    var pageCount: Int
+    var sourceAttachmentID: UUID?
+    var extractionStatusRaw: String
+    var digestStatusRaw: String
+    var digestJSON: String
+    var digestModel: String
+    var digestGeneratedAt: Date?
+    var digestSourceHash: String
+    var lastReadPage: Int
+    var lastOpenedAt: Date?
+
+    var ownsFile: Bool { sourceAttachmentID == nil }
+}
+
+/// Sendable snapshot of one guest material page.
+struct MaterialPageSnapshot: Sendable {
+    var id: UUID
+    var materialID: UUID
+    var pageNumber: Int
+    var extractedText: String
+    var ocrText: String
+    var ocrStatusRaw: String
+}
+
+/// Sendable snapshot of one guest material annotation.
+struct MaterialAnnotationSnapshot: Sendable {
+    var id: UUID
+    var materialID: UUID
+    var pageNumber: Int
+    var kindRaw: String
+    var text: String
+}
+
+/// Sendable snapshot of one guest assistant thread.
+struct AssistantThreadSnapshot: Sendable {
+    var id: UUID
+    var courseID: UUID?
+    var title: String
+}
+
+/// Sendable snapshot of one guest assistant message.
+struct AssistantMessageSnapshot: Sendable {
+    var id: UUID
+    var threadID: UUID
+    var roleRaw: String
+    var text: String
+    var scopeMaterialID: UUID?
+    var scopeSessionID: UUID?
+    var citationsJSON: String
 }

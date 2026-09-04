@@ -126,6 +126,8 @@ final class CloudSyncService: AuthenticationService {
         syncTask = nil
         attachmentUploadTask?.cancel()
         attachmentUploadTask = nil
+        materialUploadTask?.cancel()
+        materialUploadTask = nil
         pathMonitor.cancel()
         repository.mutationObserver = nil
         bookmarks.syncObserver = nil
@@ -522,6 +524,77 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    private func enqueueMaterialUpsert(_ material: CourseMaterial) {
+        let item = SyncOutboxItem(
+            entityType: .material,
+            entityID: material.id,
+            operation: .upsert,
+            baseServerVersion: material.serverVersion,
+            payload: Self.payload(for: material)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+        // The metadata row is queued — the ORIGINAL FILE rides the
+        // dedicated upload pass (uploadPendingMaterialFiles), not the
+        // JSON push.
+        scheduleMaterialFileUpload()
+    }
+
+    private func enqueueMaterialPageUpsert(_ page: MaterialPage) {
+        var payload = Self.payload(for: page)
+        payload.materialId = page.materialID
+        let item = SyncOutboxItem(
+            entityType: .materialPage,
+            entityID: page.id,
+            operation: .upsert,
+            baseServerVersion: page.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueMaterialAnnotationUpsert(_ annotation: MaterialAnnotation) {
+        var payload = Self.payload(for: annotation)
+        payload.materialId = annotation.materialID
+        payload.materialPageNumber = annotation.pageNumber
+        let item = SyncOutboxItem(
+            entityType: .materialAnnotation,
+            entityID: annotation.id,
+            operation: .upsert,
+            baseServerVersion: annotation.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueAssistantThreadUpsert(_ thread: CourseAssistantThread) {
+        let item = SyncOutboxItem(
+            entityType: .assistantThread,
+            entityID: thread.id,
+            operation: .upsert,
+            baseServerVersion: thread.serverVersion,
+            payload: Self.payload(for: thread)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueAssistantMessageUpsert(_ message: CourseAssistantMessage) {
+        var payload = Self.payload(for: message)
+        payload.threadId = message.threadID
+        let item = SyncOutboxItem(
+            entityType: .assistantMessage,
+            entityID: message.id,
+            operation: .upsert,
+            baseServerVersion: message.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -829,7 +902,9 @@ final class CloudSyncService: AuthenticationService {
         switch entityType {
         case .session, .entry, .course, .note, .studyReview, .attachment,
              .term, .studyCard, .studyTask, .transcriptCorrection,
-             .courseSchedule, .scheduleException:
+             .courseSchedule, .scheduleException,
+             .material, .materialPage, .materialAnnotation,
+             .assistantThread, .assistantMessage:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -890,6 +965,16 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteScheduleByID(entityID)
         case .scheduleException:
             try? repository.deleteExceptionByID(entityID)
+        case .material:
+            try? repository.deleteMaterialByID(entityID)
+        case .materialPage:
+            try? repository.deleteMaterialPageByID(entityID)
+        case .materialAnnotation:
+            try? repository.deleteMaterialAnnotationByID(entityID)
+        case .assistantThread:
+            try? repository.deleteAssistantThreadByID(entityID)
+        case .assistantMessage:
+            try? repository.deleteAssistantMessageByID(entityID)
         }
     }
 
@@ -940,6 +1025,18 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteSchedule(record: record, serverVersion: serverVersion)
         case .scheduleException:
             try? repository.applyRemoteException(record: record, serverVersion: serverVersion)
+        case .material:
+            try? repository.applyRemoteMaterial(record: record, serverVersion: serverVersion)
+            // Newly-learned materials upload their original file on demand —
+            // the file pass picks up anything local worth pushing.
+        case .materialPage:
+            try? repository.applyRemoteMaterialPage(record: record, serverVersion: serverVersion)
+        case .materialAnnotation:
+            try? repository.applyRemoteMaterialAnnotation(record: record, serverVersion: serverVersion)
+        case .assistantThread:
+            try? repository.applyRemoteAssistantThread(record: record, serverVersion: serverVersion)
+        case .assistantMessage:
+            try? repository.applyRemoteAssistantMessage(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -964,6 +1061,7 @@ final class CloudSyncService: AuthenticationService {
         cloudDeletedRecently = true
         defaults.set(false, forKey: initialUploadKey)
         defaults.removeObject(forKey: attachmentUploadKey)
+        defaults.removeObject(forKey: materialUploadKey)
         await outbox.dropAllUpserts()
         refreshPendingCount()
         phase = .cloudDeleted
@@ -989,6 +1087,7 @@ final class CloudSyncService: AuthenticationService {
         cloudDeletedRecently = false
         defaults.set(false, forKey: initialUploadKey)
         defaults.removeObject(forKey: attachmentUploadKey)
+        defaults.removeObject(forKey: materialUploadKey)
         await refreshSignInState()
         phase = .signedOut
         return true
@@ -1142,6 +1241,133 @@ final class CloudSyncService: AuthenticationService {
         var record = attachmentUploadRecord()
         for id in attachmentIDs { record[id.uuidString] = nil }
         saveAttachmentUploadRecord(record)
+    }
+
+    // MARK: - Material file upload (binary, outside the JSON push)
+
+    /// Per-material file upload bookkeeping — same contract as
+    /// attachments: the metadata row is pushed via sync, the ORIGINAL
+    /// FILE follows on /v1/materials/<id>/file. Survives restarts via
+    /// the defaults key.
+    private var materialUploadTask: Task<Void, Never>?
+    private let materialUploadKey = "cloudsync.materialUploads"
+
+    private func materialUploadRecord() -> Set<String> {
+        Set(defaults.stringArray(forKey: materialUploadKey) ?? [])
+    }
+
+    private func saveMaterialUploadRecord(_ record: Set<String>) {
+        defaults.set(Array(record), forKey: materialUploadKey)
+    }
+
+    /// Debounced file-upload pass: uploads the original for every material
+    /// whose metadata has been pushed (serverVersion > 0), that OWNS its
+    /// file (no borrowed attachment), whose file exists locally, and whose
+    /// upload is not yet confirmed server-side. Streams from the file URL —
+    /// large PDFs never enter memory.
+    func scheduleMaterialFileUpload() {
+        materialUploadTask?.cancel()
+        materialUploadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled else { return }
+            await self.uploadPendingMaterialFiles()
+        }
+    }
+
+    private func uploadPendingMaterialFiles() async {
+        guard isSignedIn, cursorStore.isSyncEnabled, isNetworkAvailable else { return }
+        guard let store = MaterialFileStoreShared.store else { return }
+        guard let all = try? repository.materials(courseID: nil) else { return }
+        var record = materialUploadRecord()
+
+        for material in all {
+            if Task.isCancelled { return }
+            guard material.serverVersion > 0 else { continue }
+            guard material.ownsFile, !material.contentHash.isEmpty else { continue }
+            let key = material.id.uuidString
+            if record.contains(key) { continue }
+            // The extension follows the original file name (import source
+            // of truth); fall back to the mime-derived one.
+            let ext = MaterialFileStore.fileExtension(
+                fileName: material.originalFileName, mime: material.mimeType
+            )
+            guard store.originalExists(materialID: material.id, fileExtension: ext) else {
+                continue // reclaimed originals skip
+            }
+            let fileURL = store.originalURL(materialID: material.id, fileExtension: ext)
+            do {
+                try await authSession.authorize { [api] token in
+                    try await api.uploadMaterialFile(
+                        materialID: material.id,
+                        fileURL: fileURL,
+                        contentHash: material.contentHash,
+                        accessToken: token
+                    )
+                }
+            } catch {
+                Self.logger.notice(
+                    "material file upload deferred: \(error.localizedDescription, privacy: .public)"
+                )
+                return
+            }
+            record.insert(key)
+            saveMaterialUploadRecord(record)
+        }
+    }
+
+    /// Downloads one material's original file from the server into the
+    /// local store (on-demand: the reader pulls it when the local file is
+    /// missing). Returns availability after the attempt.
+    func downloadMaterialFile(_ material: CourseMaterial) async -> Bool {
+        guard isSignedIn, material.ownsFile, !material.contentHash.isEmpty else { return false }
+        guard let store = MaterialFileStoreShared.store else { return false }
+        let ext = MaterialFileStore.fileExtension(
+            fileName: material.originalFileName, mime: material.mimeType
+        )
+        if store.originalExists(materialID: material.id, fileExtension: ext) { return true }
+        do {
+            let data = try await authSession.authorize { [api] token in
+                try await api.downloadMaterialFile(materialID: material.id, accessToken: token)
+            }
+            try store.writeSyncedOriginal(
+                data, materialID: material.id, fileExtension: ext
+            )
+            return true
+        } catch {
+            Self.logger.notice(
+                "material download failed: \(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    /// Whether the server holds this material's file (nil = probe failed
+    /// or unsigned-in — the UI shows 仅本机 rather than a wrong claim).
+    func isMaterialFileUploaded(_ material: CourseMaterial) async -> Bool? {
+        guard isSignedIn else { return nil }
+        guard material.serverVersion > 0 else { return false }
+        do {
+            return try await authSession.authorize { [api] token in
+                try await api.materialFileUploaded(
+                    materialID: material.id, accessToken: token
+                )
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    /// 删除云端文件 for materials (storage management); the upload record
+    /// forgets them so a later change re-uploads on demand.
+    func deleteCloudMaterialFiles(materialIDs: [UUID]) async {
+        for id in materialIDs {
+            try? await authSession.authorize { [api] token in
+                try await api.deleteMaterialFiles(materialID: id, accessToken: token)
+            }
+        }
+        var record = materialUploadRecord()
+        for id in materialIDs { record.remove(id.uuidString) }
+        saveMaterialUploadRecord(record)
     }
 
     // MARK: - Derived state
@@ -1372,7 +1598,9 @@ final class CloudSyncService: AuthenticationService {
             sessionId: term.sessionID ?? .nilSentinel,
             entryId: term.sourceEntryID ?? .nilSentinel,
             sourceAttachmentId: term.sourceAttachmentID ?? .nilSentinel,
-            sourceReviewId: term.sourceReviewID ?? .nilSentinel
+            sourceReviewId: term.sourceReviewID ?? .nilSentinel,
+            materialId: term.sourceMaterialID ?? .nilSentinel,
+            materialPageNumber: term.sourceMaterialID == nil ? nil : term.sourceMaterialPage
         )
     }
 
@@ -1395,7 +1623,9 @@ final class CloudSyncService: AuthenticationService {
             sessionId: card.sessionID ?? .nilSentinel,
             entryId: card.sourceEntryID ?? .nilSentinel,
             sourceAttachmentId: card.sourceAttachmentID ?? .nilSentinel,
-            sourceTermId: card.sourceTermID ?? .nilSentinel
+            sourceTermId: card.sourceTermID ?? .nilSentinel,
+            materialId: card.sourceMaterialID ?? .nilSentinel,
+            materialPageNumber: card.sourceMaterialID == nil ? nil : card.sourceMaterialPage
         )
     }
 
@@ -1417,7 +1647,89 @@ final class CloudSyncService: AuthenticationService {
             sessionId: task.sessionID ?? .nilSentinel,
             entryId: task.sourceEntryID ?? .nilSentinel,
             sourceAttachmentId: task.sourceAttachmentID ?? .nilSentinel,
-            sourceReviewId: task.sourceReviewID ?? .nilSentinel
+            sourceReviewId: task.sourceReviewID ?? .nilSentinel,
+            materialId: task.sourceMaterialID ?? .nilSentinel,
+            materialPageNumber: task.sourceMaterialID == nil ? nil : task.sourceMaterialPage
+        )
+    }
+
+    /// Course material metadata (the original FILE travels on
+    /// /v1/materials). The structured digest rides as a JSON string;
+    /// `extracting`/`analyzing` are device-local states never pushed —
+    /// terminal states only.
+    static func payload(for material: CourseMaterial) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: material.title,
+            materialKind: material.kindRaw,
+            materialMime: material.mimeType.isEmpty ? nil : material.mimeType,
+            materialFileName: material.originalFileName.isEmpty ? nil : material.originalFileName,
+            materialFormat: material.formatRaw,
+            materialFileSize: material.fileSize,
+            materialHash: material.contentHash.isEmpty ? nil : material.contentHash,
+            materialPageCount: material.pageCount,
+            materialExtraction: material.extractionStatus == .extracting
+                ? MaterialExtractionStatus.pending.rawValue
+                : material.extractionStatusRaw,
+            materialDigestStatus: material.digestStatus == .analyzing
+                ? MaterialDigestStatus.pending.rawValue
+                : material.digestStatusRaw,
+            materialDigest: material.digestJSON.isEmpty ? nil : material.digestJSON,
+            materialDigestModel: material.digestModel.isEmpty ? nil : material.digestModel,
+            materialDigestAt: material.digestGeneratedAt,
+            materialDigestSourceHash: material.digestSourceHash.isEmpty
+                ? nil : material.digestSourceHash,
+            materialLastReadPage: material.lastReadPage,
+            materialLastOpenedAt: material.lastOpenedAt,
+            courseId: material.courseID ?? .nilSentinel,
+            sessionId: material.sessionID ?? .nilSentinel,
+            // Empty string = no occurrence link (the schedule override
+            // convention: clearable fields ride empty, not absent).
+            scheduleOccurrenceKey: material.occurrenceKey ?? "",
+            sourceAttachmentId: material.sourceAttachmentID ?? .nilSentinel
+        )
+    }
+
+    /// Material page: the parent material rides the shared materialId
+    /// (set by the enqueue helper); `running` OCR is device-local and maps
+    /// to the last terminal state the wire should keep (none → stays).
+    static func payload(for page: MaterialPage) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            materialPageNumber: page.pageNumber,
+            materialPageText: page.extractedText.isEmpty ? nil : page.extractedText,
+            materialPageOCR: page.ocrText.isEmpty ? nil : page.ocrText,
+            materialPageOCRStatus: page.ocrStatus == .running
+                ? MaterialOCRStatus.none.rawValue
+                : page.ocrStatusRaw
+        )
+    }
+
+    /// Material annotation (kind + page ride their fields; the note body
+    /// rides the shared noteText).
+    static func payload(for annotation: MaterialAnnotation) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            materialAnnotationKind: annotation.kindRaw,
+            noteText: annotation.text.isEmpty ? nil : annotation.text
+        )
+    }
+
+    /// Assistant thread (title + course reference).
+    static func payload(for thread: CourseAssistantThread) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: thread.title,
+            courseId: thread.courseID ?? .nilSentinel
+        )
+    }
+
+    /// Assistant message: the parent thread rides the shared threadId
+    /// (set by the enqueue helper); the question scope rides the shared
+    /// materialId/sessionId; citations ride as a JSON string.
+    static func payload(for message: CourseAssistantMessage) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            assistantRole: message.roleRaw,
+            assistantText: message.text.isEmpty ? nil : message.text,
+            assistantCitations: message.citationsJSON.isEmpty ? nil : message.citationsJSON,
+            materialId: message.scopeMaterialID ?? .nilSentinel,
+            sessionId: message.scopeSessionID ?? .nilSentinel
         )
     }
 }
@@ -1462,6 +1774,17 @@ protocol TranscriptMutationObserving: AnyObject {
     func exceptionCreated(_ exception: ScheduleException)
     func exceptionUpdated(_ exception: ScheduleException)
     func exceptionDeleted(id: UUID)
+    func materialCreated(_ material: CourseMaterial)
+    func materialUpdated(_ material: CourseMaterial)
+    func materialDeleted(id: UUID)
+    func materialPageUpserted(_ page: MaterialPage)
+    func materialAnnotationCreated(_ annotation: MaterialAnnotation)
+    func materialAnnotationUpdated(_ annotation: MaterialAnnotation)
+    func materialAnnotationDeleted(id: UUID)
+    func assistantThreadCreated(_ thread: CourseAssistantThread)
+    func assistantThreadUpdated(_ thread: CourseAssistantThread)
+    func assistantThreadDeleted(id: UUID)
+    func assistantMessageCreated(_ message: CourseAssistantMessage)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -1595,5 +1918,49 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func exceptionDeleted(id: UUID) {
         enqueueDelete(entityType: .scheduleException, entityID: id)
+    }
+
+    func materialCreated(_ material: CourseMaterial) {
+        enqueueMaterialUpsert(material)
+    }
+
+    func materialUpdated(_ material: CourseMaterial) {
+        enqueueMaterialUpsert(material)
+    }
+
+    func materialDeleted(id: UUID) {
+        enqueueDelete(entityType: .material, entityID: id)
+    }
+
+    func materialPageUpserted(_ page: MaterialPage) {
+        enqueueMaterialPageUpsert(page)
+    }
+
+    func materialAnnotationCreated(_ annotation: MaterialAnnotation) {
+        enqueueMaterialAnnotationUpsert(annotation)
+    }
+
+    func materialAnnotationUpdated(_ annotation: MaterialAnnotation) {
+        enqueueMaterialAnnotationUpsert(annotation)
+    }
+
+    func materialAnnotationDeleted(id: UUID) {
+        enqueueDelete(entityType: .materialAnnotation, entityID: id)
+    }
+
+    func assistantThreadCreated(_ thread: CourseAssistantThread) {
+        enqueueAssistantThreadUpsert(thread)
+    }
+
+    func assistantThreadUpdated(_ thread: CourseAssistantThread) {
+        enqueueAssistantThreadUpsert(thread)
+    }
+
+    func assistantThreadDeleted(id: UUID) {
+        enqueueDelete(entityType: .assistantThread, entityID: id)
+    }
+
+    func assistantMessageCreated(_ message: CourseAssistantMessage) {
+        enqueueAssistantMessageUpsert(message)
     }
 }

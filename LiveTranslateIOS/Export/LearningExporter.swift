@@ -105,6 +105,72 @@ enum LearningExporter {
         return line
     }
 
+    // MARK: Course materials
+
+    /// 资料目录与导读 Markdown: the course's material catalog — each
+    /// material with its pages, digest (with page refs) and the user's
+    /// page notes. Real rows only; never a model call.
+    static func materialsMarkdown(
+        course: Course,
+        materials: [CourseMaterial],
+        pagesByMaterial: [UUID: [MaterialPage]] = [:],
+        annotationsByMaterial: [UUID: [MaterialAnnotation]] = [:]
+    ) -> String {
+        var lines: [String] = []
+        lines.append("# \(course.name) · 课程资料")
+        lines.append("")
+        lines.append("> 共 \(materials.count) 份资料 · 导出于 \(Self.dateStamp())")
+        lines.append("")
+        if materials.isEmpty {
+            lines.append("（还没有导入资料）")
+            return lines.joined(separator: "\n") + "\n"
+        }
+        for material in materials {
+            var title = "## \(material.title.isEmpty ? material.originalFileName : material.title)"
+            title += "（\(material.kind.displayName) · \(material.format.displayName)"
+            if material.pageCount > 0 { title += " · \(material.pageCount) 页" }
+            title += "）"
+            lines.append(title)
+            lines.append("")
+            if let digest = material.digest {
+                for section in digest.markdownSections {
+                    lines.append("### \(section.title)")
+                    lines.append("")
+                    lines.append(section.body)
+                    lines.append("")
+                }
+            } else {
+                lines.append("（未生成导读）")
+                lines.append("")
+            }
+            let annotations = annotationsByMaterial[material.id] ?? []
+            let notes = annotations.filter { $0.kind == .note }
+            if !notes.isEmpty {
+                lines.append("### 我的资料笔记")
+                lines.append("")
+                for note in notes {
+                    lines.append("- 第 \(note.pageNumber) 页：\(note.text)")
+                }
+                lines.append("")
+            }
+            let pages = pagesByMaterial[material.id] ?? []
+            let textPages = pages.filter { !$0.effectiveText.isEmpty }
+            if !textPages.isEmpty {
+                lines.append("<details><summary>页面文字（\(textPages.count) 页有内容）</summary>")
+                lines.append("")
+                for page in textPages {
+                    lines.append("**第 \(page.pageNumber) 页**")
+                    lines.append("")
+                    lines.append(page.effectiveText)
+                    lines.append("")
+                }
+                lines.append("</details>")
+                lines.append("")
+            }
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     // MARK: Full learning material JSON
 
     /// 完整课程学习资料 JSON（terms + cards + tasks with their real
@@ -195,6 +261,7 @@ enum LearningExporter {
         case cardsTSV = "卡片 TSV"
         case cardsCSV = "卡片 CSV"
         case tasksMarkdown = "作业清单 Markdown"
+        case materialsMarkdown = "资料目录与导读 Markdown"
         case fullJSON = "完整学习资料 JSON"
 
         var id: String { rawValue }
@@ -204,8 +271,26 @@ enum LearningExporter {
     /// failure — the caller shows the honest failure alert).
     static func writeTemporaryFile(
         kind: LearningExportKind, course: Course,
-        terms: [GlossaryTerm], cards: [StudyCard], tasks: [StudyTask]
+        terms: [GlossaryTerm], cards: [StudyCard], tasks: [StudyTask],
+        materials: [CourseMaterial] = [],
+        pagesByMaterial: [UUID: [MaterialPage]] = [:],
+        annotationsByMaterial: [UUID: [MaterialAnnotation]] = [:],
+        repository: (any ClassroomRepositoryProtocol)? = nil
     ) -> URL? {
+        // Material sub-rows load lazily — only when a material export is
+        // requested (or rows were not prefetched).
+        var pageMap = pagesByMaterial
+        var annotationMap = annotationsByMaterial
+        if kind == .materialsMarkdown, let repository, pageMap.isEmpty {
+            for material in materials {
+                pageMap[material.id] = (try? repository.materialPages(
+                    materialID: material.id
+                )) ?? []
+                annotationMap[material.id] = (try? repository.materialAnnotations(
+                    materialID: material.id
+                )) ?? []
+            }
+        }
         let content: String
         let fileName: String
         let safeName = course.name.replacingOccurrences(of: "/", with: "-")
@@ -225,6 +310,12 @@ enum LearningExporter {
         case .tasksMarkdown:
             content = tasksMarkdown(course: course, tasks: tasks)
             fileName = "\(safeName)-作业清单.md"
+        case .materialsMarkdown:
+            content = materialsMarkdown(
+                course: course, materials: materials,
+                pagesByMaterial: pageMap, annotationsByMaterial: annotationMap
+            )
+            fileName = "\(safeName)-资料目录与导读.md"
         case .fullJSON:
             content = fullJSON(course: course, terms: terms, cards: cards, tasks: tasks)
             fileName = "\(safeName)-学习资料.json"
