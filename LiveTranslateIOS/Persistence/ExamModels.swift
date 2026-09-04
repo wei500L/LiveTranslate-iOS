@@ -438,10 +438,11 @@ final class ExamTopic {
         set { statusRaw = newValue.rawValue }
     }
 
-    /// The AI candidate's origin snapshot; nil = the user added the topic
-    /// by hand (the same accessor shape Exam exposes).
-    var source: ExamSource? {
-        get { sourceJSON.isEmpty ? nil : ExamSource.decode(sourceJSON) }
+    /// The topic's origin snapshot (TopicSource — the exam-level
+    /// ExamSource is a different, exam-row-only payload); nil = the user
+    /// added the topic by hand.
+    var source: TopicSource? {
+        get { sourceJSON.isEmpty ? nil : TopicSource.decode(sourceJSON) }
         set { sourceJSON = newValue.map { $0.encode() } ?? "" }
     }
 }

@@ -164,7 +164,7 @@ final class ExamReminderScheduler {
             [.year, .month, .day, .hour, .minute], from: fireDate
         )
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-        center.add(UNNotificationRequest(
+        try? await center.add(UNNotificationRequest(
             identifier: Self.notificationID(exam.id), content: content, trigger: trigger
         ))
         return true
@@ -233,7 +233,7 @@ final class ExamReminderScheduler {
         components.hour = minuteOfDay / 60
         components.minute = minuteOfDay % 60
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-        center.add(UNNotificationRequest(
+        try? await center.add(UNNotificationRequest(
             identifier: Self.studyNotificationID, content: content, trigger: trigger
         ))
     }

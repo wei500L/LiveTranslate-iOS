@@ -634,7 +634,7 @@ struct ExamTopicRow: View {
                     Text(topic.importance.displayName)
                     Text("·")
                     Text("自评：\(topic.selfRating.displayName)")
-                    if topic.source != nil {
+                    if let source = topic.source, source.kind != .user {
                         Text("· AI 建议已确认")
                     }
                 }

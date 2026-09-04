@@ -120,9 +120,9 @@ enum ExamExporter {
             lines.append(contentsOf: ["", "## 知识主题", ""])
             for topic in topics {
                 var marks = [topic.importance.displayName, topic.selfRating.displayName, topic.status.displayName]
-                // No recorded source = the user added the topic by hand;
-                // any source = an AI candidate the user confirmed.
-                marks.append(topic.source == nil ? "来源：手动添加" : "来源：AI 建议，已确认")
+                if let source = topic.source {
+                    marks.append("来源：\(source.kind == .user ? "手动添加" : "AI 建议，已确认")")
+                }
                 lines.append("- \(topic.title)（\(marks.joined(separator: " · "))）")
             }
         }
