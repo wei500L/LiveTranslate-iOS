@@ -71,7 +71,7 @@ struct MaterialReaderScreen: View {
                             Label("编辑资料信息", systemImage: "square.and.pencil")
                         }
                         Button {
-                            shareItem = viewModel.shareFile()
+                            shareItem = viewModel.shareFile().map { SharedFile(url: $0) }
                         } label: {
                             Label("分享原文件", systemImage: "square.and.arrow.up")
                         }
@@ -245,7 +245,7 @@ struct MaterialReaderScreen: View {
         if !material.ownsFile {
             parts.append("来自课堂图片")
         }
-        parts.append(Format.bytes(material.fileSize))
+        parts.append(Format.bytes(Int(material.fileSize)))
         return parts.joined(separator: " · ")
     }
 
@@ -540,7 +540,7 @@ struct MaterialReaderScreen: View {
                 }
                 .buttonStyle(LTSecondaryButtonStyle())
                 Button {
-                    shareItem = viewModel.shareFile()
+                    shareItem = viewModel.shareFile().map { SharedFile(url: $0) }
                 } label: {
                     Label("分享", systemImage: "square.and.arrow.up")
                 }

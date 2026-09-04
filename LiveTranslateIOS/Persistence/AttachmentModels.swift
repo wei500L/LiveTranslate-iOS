@@ -273,7 +273,7 @@ struct AttachmentAnalysisResult: Codable, Sendable, Equatable {
     /// the field).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = (try? c.decode(Int.self, forKey: .schemaVersion)) ?? currentSchemaVersion
+        schemaVersion = (try? c.decode(Int.self, forKey: .schemaVersion)) ?? Self.currentSchemaVersion
         title = try? c.decodeIfPresent(String.self, forKey: .title)
         visibleText = Self.flexibleStrings(c, .visibleText)
         formulas = Self.flexibleStrings(c, .formulas)

@@ -737,7 +737,7 @@ struct MaterialDigestResult: Codable, Sendable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? currentSchemaVersion
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
         overview = try c.decodeIfPresent(String.self, forKey: .overview)
         outline = try c.decodeIfPresent([OutlineNode].self, forKey: .outline)
         keyConcepts = try c.decodeIfPresent([RefItem].self, forKey: .keyConcepts)
@@ -953,13 +953,16 @@ enum InsecureSHA1DigestSeed {
     /// device — page rows sync as one entity, never duplicates.
     static func seed(for string: String) -> UUID {
         let digest = Insecure.SHA1.hash(data: Data(string.utf8))
-        var bytes = [UInt8](digest.prefix(16))
+        var bytes = Array(digest.prefix(16))
         // RFC 4122 version/variant bits (cosmetic — stability is what
         // matters; the shape just keeps the id a valid-looking UUID).
         bytes[6] = (bytes[6] & 0x0F) | 0x40
         bytes[8] = (bytes[8] & 0x3F) | 0x80
-        var value = uuid_t()
-        for (index, byte) in bytes.enumerated() { value[index] = byte }
-        return UUID(uuid: value)
+        return UUID(
+            uuid: (bytes[0], bytes[1], bytes[2], bytes[3],
+                   bytes[4], bytes[5], bytes[6], bytes[7],
+                   bytes[8], bytes[9], bytes[10], bytes[11],
+                   bytes[12], bytes[13], bytes[14], bytes[15])
+        )
     }
 }
