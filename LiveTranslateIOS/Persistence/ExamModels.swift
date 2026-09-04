@@ -437,6 +437,13 @@ final class ExamTopic {
         get { ExamTopicStatus(rawValue: statusRaw) ?? .notStarted }
         set { statusRaw = newValue.rawValue }
     }
+
+    /// The AI candidate's origin snapshot; nil = the user added the topic
+    /// by hand (the same accessor shape Exam exposes).
+    var source: ExamSource? {
+        get { sourceJSON.isEmpty ? nil : ExamSource.decode(sourceJSON) }
+        set { sourceJSON = newValue.map { $0.encode() } ?? "" }
+    }
 }
 
 // MARK: - StudyPlan

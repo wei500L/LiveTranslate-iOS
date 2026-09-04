@@ -114,21 +114,21 @@ enum ExamExporter {
             }
         }
         if !exam.location.isEmpty { lines.append("地点：\(exam.location)") }
-        if !exam.scopeText.isEmpty { lines.append("", "## 考试范围", "", exam.scopeText) }
+        if !exam.scopeText.isEmpty { lines.append(contentsOf: ["", "## 考试范围", "", exam.scopeText]) }
 
         if !topics.isEmpty {
-            lines.append("", "## 知识主题", "")
+            lines.append(contentsOf: ["", "## 知识主题", ""])
             for topic in topics {
                 var marks = [topic.importance.displayName, topic.selfRating.displayName, topic.status.displayName]
-                if let source = topic.source {
-                    marks.append("来源：\(source.kind == .user ? "手动添加" : "AI 建议，已确认")")
-                }
+                // No recorded source = the user added the topic by hand;
+                // any source = an AI candidate the user confirmed.
+                marks.append(topic.source == nil ? "来源：手动添加" : "来源：AI 建议，已确认")
                 lines.append("- \(topic.title)（\(marks.joined(separator: " · "))）")
             }
         }
 
         if let plan, !items.isEmpty {
-            lines.append("", "## 学习计划（\(plan.status.displayName)）", "")
+            lines.append(contentsOf: ["", "## 学习计划（\(plan.status.displayName)）", ""])
             let grouped = Dictionary(grouping: items, by: \.itemDateKey)
             for dateKey in grouped.keys.sorted() {
                 guard let date = Exam.parseDateKey(dateKey) else { continue }
@@ -142,7 +142,7 @@ enum ExamExporter {
             }
         }
 
-        lines.append("", "---", "", "由 LiveTranslate 生成")
+        lines.append(contentsOf: ["", "---", "", "由 LiveTranslate 生成"])
         return writeMarkdown(lines, fileName: "LiveTranslate-复习计划-\(exam.title)")
     }
 
@@ -157,7 +157,7 @@ enum ExamExporter {
         for offset in 0..<7 {
             guard let day = calendar.date(byAdding: .day, value: offset, to: startDate) else { continue }
             let key = Exam.dateKey(day)
-            lines.append("## \(day.formatted(date: .abbreviated, weekday: .wide))")
+            lines.append("## \(day.formatted(.dateTime.weekday(.wide).day().month()))")
             let dayItems = itemsByDate[key] ?? []
             if dayItems.isEmpty {
                 lines.append("- 无安排")
@@ -169,7 +169,7 @@ enum ExamExporter {
             }
             lines.append("")
         }
-        lines.append("---", "", "由 LiveTranslate 生成")
+        lines.append(contentsOf: ["---", "", "由 LiveTranslate 生成"])
         return writeMarkdown(lines, fileName: "LiveTranslate-一周学习安排-\(Exam.dateKey(startDate))")
     }
 
