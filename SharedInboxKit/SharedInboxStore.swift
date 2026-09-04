@@ -122,6 +122,9 @@ struct SharedInboxStore: Sendable {
                 }
             }
             try? fm.removeItem(at: tmp)
+        } catch {
+            // Non-fatal by design: a failed manifest save leaves the
+            // previous manifest in place.
         }
     }
 
@@ -215,7 +218,7 @@ struct SharedInboxStore: Sendable {
             return StagedPayload(
                 relativePath: "items/\(itemID.uuidString)/payload.\(ext)",
                 byteCount: total,
-                contentHash: hasher.map { String(format: "%02x", $0) }.joined()
+                contentHash: hasher.finalize().map { String(format: "%02x", $0) }.joined()
             )
         } catch {
             try? fm.removeItem(at: tmp)
@@ -240,7 +243,7 @@ struct SharedInboxStore: Sendable {
             return StagedPayload(
                 relativePath: staged.relativePath,
                 byteCount: staged.byteCount,
-                contentHash: hasher.map { String(format: "%02x", $0) }.joined()
+                contentHash: hasher.finalize().map { String(format: "%02x", $0) }.joined()
             )
         } catch {
             throw ReceiveError.writeFailed

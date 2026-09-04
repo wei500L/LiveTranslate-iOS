@@ -112,7 +112,7 @@ final class MaterialImportService {
             while let chunk = try? input.read(upToCount: 1 << 20), !chunk.isEmpty {
                 hasher.update(data: chunk)
             }
-            return hasher.map { String(format: "%02x", $0) }.joined()
+            return hasher.finalize().map { String(format: "%02x", $0) }.joined()
         }
         return await task.value
     }

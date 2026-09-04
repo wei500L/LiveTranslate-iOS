@@ -145,7 +145,7 @@ struct MaterialFileStore: Sendable {
             } else {
                 try FileManager.default.moveItem(at: temp, to: destination)
             }
-            let hex = hasher.map { String(format: "%02x", $0) }.joined()
+            let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             return ImportOutcome(contentHash: hex, fileSize: total)
         } catch {
             try? FileManager.default.removeItem(at: temp) // no half-imports
