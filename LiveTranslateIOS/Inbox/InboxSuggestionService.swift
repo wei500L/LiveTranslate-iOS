@@ -242,7 +242,6 @@ struct InboxSuggestionService {
                 var end: String?
                 var recurrence: String?
                 var teacher: String?
-                var timeUncertain: Bool?
                 var parityUncertain: Bool?
                 var teacherUncertain: Bool?
                 // note
@@ -333,7 +332,7 @@ struct InboxSuggestionService {
                     endSecs: ScheduleImageParser.parseTime(raw.end) ?? 0,
                     recurrenceRaw: ScheduleRecurrence(
                         rawValue: raw.recurrence ?? ""
-                    )?.rawValue ?? .weekly.rawValue,
+                    )?.rawValue ?? ScheduleRecurrence.weekly.rawValue,
                     teacher: raw.teacher ?? "",
                     location: raw.location ?? "",
                     timeUncertain: raw.timeUncertain ?? false,

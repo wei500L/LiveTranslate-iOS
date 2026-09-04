@@ -64,7 +64,10 @@ struct SyncDeviceDTO: Codable, Sendable, Equatable {
     var appVersion: String
 }
 
-struct SyncTokenPairDTO: Codable, Sendable, Equatable {
+/// Server login/verify/refresh response. Decode-only: nothing ever encodes
+/// a token pair back to the wire, and Equatable is not needed (the fields
+/// the app persists are read individually).
+struct SyncTokenPairDTO: Decodable, Sendable {
     var accessToken: String
     var refreshToken: String
     var tokenType: String
