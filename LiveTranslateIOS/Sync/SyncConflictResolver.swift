@@ -154,6 +154,44 @@ enum SyncConflictResolver {
             if merged.correctionModifiedAt == nil, let serverModified = server.correctionModifiedAt {
                 merged.correctionModifiedAt = serverModified
             }
+        case .courseSchedule:
+            // Rules merge by newest user intent: local wins, server
+            // fallback for absent fields so a rebase never blanks a rule.
+            // Dates ride as strings — absent means "unset locally", the
+            // server's stays.
+            if merged.scheduleParityAnchor == nil, let serverAnchor = server.scheduleParityAnchor {
+                merged.scheduleParityAnchor = serverAnchor
+            }
+            if merged.scheduleSemesterStart == nil, let serverStart = server.scheduleSemesterStart {
+                merged.scheduleSemesterStart = serverStart
+            }
+            if merged.scheduleSemesterEnd == nil, let serverEnd = server.scheduleSemesterEnd {
+                merged.scheduleSemesterEnd = serverEnd
+            }
+            if merged.scheduleOnceDate == nil, let serverOnce = server.scheduleOnceDate {
+                merged.scheduleOnceDate = serverOnce
+            }
+            if merged.scheduleTimezone == nil, let serverTZ = server.scheduleTimezone {
+                merged.scheduleTimezone = serverTZ
+            }
+            if merged.scheduleRecurrence == nil, let serverRecurrence = server.scheduleRecurrence {
+                merged.scheduleRecurrence = serverRecurrence
+            }
+        case .scheduleException:
+            // Same rules convention: local intent wins, server fallback
+            // for absent fields.
+            if merged.scheduleOriginalDate == nil, let serverOriginal = server.scheduleOriginalDate {
+                merged.scheduleOriginalDate = serverOriginal
+            }
+            if merged.scheduleMovedToDate == nil, let serverMoved = server.scheduleMovedToDate {
+                merged.scheduleMovedToDate = serverMoved
+            }
+            if merged.scheduleExceptionKind == nil, let serverKind = server.scheduleExceptionKind {
+                merged.scheduleExceptionKind = serverKind
+            }
+            if merged.scheduleId == nil, let serverScheduleID = server.scheduleId {
+                merged.scheduleId = serverScheduleID
+            }
         }
         return merged
     }

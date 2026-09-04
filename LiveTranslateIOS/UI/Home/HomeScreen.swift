@@ -10,6 +10,10 @@ struct HomeScreen: View {
     /// Course to preselect in the new-classroom sheet (quick start fall-
     /// back when the one-tap path is not safe).
     @State private var pendingCourse: Course?
+    /// The pre-class layer: next-class card + reminder-tap routing.
+    @State private var scheduleViewModel = ScheduleViewModel()
+    @State private var pendingExtraStart: ScheduleCalculator.Occurrence?
+    @State private var minuteTimer: Timer?
 
     var body: some View {
         NavigationStack {
@@ -21,6 +25,9 @@ struct HomeScreen: View {
                             ongoingBanner
                         }
                         startCard
+                        if scheduleViewModel.isLoaded, scheduleViewModel.nextOccurrence != nil {
+                            nextClassSection
+                        }
                         quickStartSection
                         statusSection
                         if viewModel.isLoaded && viewModel.hasTodayReview {
@@ -42,15 +49,56 @@ struct HomeScreen: View {
             .navigationDestination(isPresented: $showModelManagement) {
                 ModelManagementScreen()
             }
+            .navigationDestination(for: ScheduleRoute.self) { route in
+                ScheduleScreen()
+            }
+            .confirmationDialog(
+                "这堂课已有课堂记录",
+                isPresented: Binding(
+                    get: { pendingExtraStart != nil },
+                    set: { if !$0 { pendingExtraStart = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("再开一堂") {
+                    if let occurrence = pendingExtraStart {
+                        Task { await scheduleViewModel.startOccurrence(occurrence, force: true) }
+                    }
+                    pendingExtraStart = nil
+                }
+                Button("取消", role: .cancel) { pendingExtraStart = nil }
+            } message: {
+                Text("该日程已关联一堂结束的课堂。是否为同一次课再创建一堂记录？")
+            }
         }
         .task {
             viewModel.attach(environment)
+            scheduleViewModel.attach(environment)
             #if DEBUG
             if let greeting = environment.flow.demoGreeting {
                 viewModel.greetingOverride = greeting
             }
             #endif
             await viewModel.reload()
+            await scheduleViewModel.reload()
+            consumePendingReminder()
+        }
+        .onAppear {
+            // Tab switches destroy this view; refresh readiness + recents
+            // (e.g. right after a classroom ended) and the next class.
+            #if DEBUG
+            if environment.flow.pendingDemoScreen == .newSession {
+                environment.flow.pendingDemoScreen = nil
+                showNewSessionSheet = true
+            }
+            #endif
+            startMinuteTimer()
+            Task { await viewModel.reload() }
+            Task { await scheduleViewModel.reload() }
+        }
+        .onDisappear {
+            minuteTimer?.invalidate()
+            minuteTimer = nil
         }
         // Network reachability is live state (the coordinator owns the
         // monitor); the readiness card must follow it instead of showing
@@ -58,16 +106,89 @@ struct HomeScreen: View {
         .onChange(of: environment.coordinator.isNetworkAvailable) { _, _ in
             Task { await viewModel.reload() }
         }
-        .onAppear {
-            // Tab switches destroy this view; refresh readiness + recents
-            // (e.g. right after a classroom ended).
-            #if DEBUG
-            if environment.flow.pendingDemoScreen == .newSession {
-                environment.flow.pendingDemoScreen = nil
-                showNewSessionSheet = true
+    }
+
+    // MARK: - Next class (下一堂课)
+
+    /// The reminder-tap route target: AppFlow parks the tapped
+    /// occurrence key; HomeScreen resolves it and runs the same
+    /// controlled start chain. Consume-once.
+    private func consumePendingReminder() {
+        if let key = environment.flow.pendingClassOccurrenceKey {
+            environment.flow.consumeClassReminder()
+            if let occurrence = scheduleViewModel.occurrences.first(where: {
+                $0.occurrenceKey == key
+            }) {
+                Task {
+                    let fallback = await scheduleViewModel.startOccurrence(occurrence)
+                    if fallback != nil, case .finishedSession = scheduleViewModel.startState(for: occurrence) {
+                        pendingExtraStart = occurrence
+                    }
+                }
             }
-            #endif
-            Task { await viewModel.reload() }
+            // An unresolvable key (schedule deleted, out of window) just
+            // lands on the home tab — the next-class card is visible.
+        }
+    }
+
+    private var nextClassSection: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "下一堂课")
+            if let next = scheduleViewModel.nextOccurrence {
+                ScheduleOccurrenceCard(
+                    occurrence: next,
+                    courseName: scheduleViewModel.course(for: next)?.name ?? "课程",
+                    teacher: scheduleViewModel.teacher(for: next),
+                    location: scheduleViewModel.location(for: next),
+                    colorIndex: scheduleViewModel.course(for: next)?.colorIndex ?? 0,
+                    relativeLabel: scheduleViewModel.relativeLabel(for: next),
+                    startState: scheduleViewModel.startState(for: next),
+                    isNext: true,
+                    onStart: { startNext(next) },
+                    onOpenSchedule: nil
+                )
+                // Course-task linkage: unfinished tasks of this course.
+                let openTasks = scheduleViewModel.openTaskCount(for: next)
+                if openTasks > 0 {
+                    HStack(spacing: LTSpacing.xs) {
+                        Image(systemName: "checklist")
+                            .font(.system(size: 11))
+                        Text("本课程有 \(openTasks) 项未完成作业")
+                            .font(LTTypography.caption)
+                        Spacer()
+                        Button("查看") {
+                            environment.flow.selectedTab = .review
+                        }
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.accentGreen)
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundStyle(LTColors.textSecondary)
+                }
+                NavigationLink(value: ScheduleRoute.timetable) {
+                    Text("查看课程表")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func startNext(_ occurrence: ScheduleCalculator.Occurrence) {
+        Task {
+            let fallback = await scheduleViewModel.startOccurrence(occurrence)
+            if fallback != nil, case .finishedSession = scheduleViewModel.startState(for: occurrence) {
+                pendingExtraStart = occurrence
+            }
+        }
+    }
+
+    /// Minute-level refresh for the next-class relative label.
+    private func startMinuteTimer() {
+        minuteTimer?.invalidate()
+        minuteTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            Task { @MainActor in scheduleViewModel.tick() }
         }
     }
 

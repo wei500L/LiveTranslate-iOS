@@ -6,6 +6,15 @@ import Foundation
 /// dependency-inversion boundary — views never check a global "is demo"
 /// flag, they just receive whichever environment was assembled at launch.
 
+/// Schedule attribution handed to `start(title:courseID:schedule:)` when a
+/// session is launched from the timetable. A value type — safe to build
+/// from a computed occurrence and pass across views.
+struct ScheduleSessionContext: Sendable, Equatable {
+    var scheduleID: UUID
+    var occurrenceKey: String
+    var plannedStart: Date
+}
+
 /// The surface of the live-classroom pipeline the UI reads and drives.
 @MainActor
 protocol LiveTranslationCoordinating: AnyObject {
@@ -23,7 +32,7 @@ protocol LiveTranslationCoordinating: AnyObject {
     /// across a restart of the same classroom.
     var activeSessionCourseID: UUID? { get }
 
-    func start(title: String?, courseID: UUID?) async
+    func start(title: String?, courseID: UUID?, schedule: ScheduleSessionContext?) async
     func pause()
     func resume()
     func stop() async

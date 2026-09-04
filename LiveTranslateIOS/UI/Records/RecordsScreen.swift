@@ -37,7 +37,19 @@ struct RecordsScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    sortMenu
+                    HStack(spacing: LTSpacing.m) {
+                        // 课程表 entry: the timetable lives one tap from
+                        // the course list (no new bottom tab).
+                        NavigationLink {
+                            ScheduleScreen()
+                        } label: {
+                            Image(systemName: "calendar")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(LTColors.textSecondary)
+                        }
+                        .accessibilityLabel(Text("课程表"))
+                        sortMenu
+                    }
                 }
             }
             .navigationDestination(isPresented: $isPushingDemoDetail) {

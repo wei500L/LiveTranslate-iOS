@@ -19,6 +19,16 @@ struct CourseDetailView: View {
     @State private var showingCourseReview = false
     /// Learning-material export picker.
     @State private var showingLearningExport = false
+    /// The course's schedule list (固定日程) + the shared pre-class engine.
+    @State private var scheduleViewModel = ScheduleViewModel()
+    @State private var showScheduleForm = false
+    @State private var editingSchedule: CourseSchedule?
+    @State private var copyingSchedule: CourseSchedule?
+    @State private var exceptionTarget: CourseSchedule?
+    @State private var editingException: ScheduleException?
+    @State private var schedulePendingDelete: CourseSchedule?
+    @State private var icsShareItem: SharedFile?
+    @State private var minuteTimer: Timer?
 
     let courseID: UUID
 
@@ -70,11 +80,63 @@ struct CourseDetailView: View {
         .task {
             viewModel.attach(environment)
             viewModel.load(courseID: courseID)
+            scheduleViewModel.attach(environment)
+            await scheduleViewModel.reload()
         }
         .onAppear {
             if viewModel.isLoaded {
                 viewModel.reload()
             }
+        }
+        .sheet(isPresented: $showScheduleForm) {
+            NavigationStack {
+                ScheduleFormView(courses: viewModel.course.map { [$0] } ?? [])
+                    .environment(environment)
+            }
+            .presentationDetents([.large])
+        }
+        .sheet(item: $editingSchedule) { schedule in
+            NavigationStack {
+                ScheduleFormView(
+                    courses: viewModel.course.map { [$0] } ?? [], editing: schedule
+                )
+                .environment(environment)
+            }
+        }
+        .sheet(item: $copyingSchedule) { schedule in
+            NavigationStack {
+                ScheduleFormView(
+                    courses: viewModel.course.map { [$0] } ?? [], copying: schedule
+                )
+                .environment(environment)
+            }
+        }
+        .sheet(item: $exceptionTarget) { schedule in
+            NavigationStack {
+                ScheduleExceptionSheet(schedule: schedule)
+                    .environment(environment)
+            }
+        }
+        .sheet(item: $icsShareItem) { item in
+            ShareSheet(items: [item.url])
+        }
+        .confirmationDialog(
+            "删除这条日程？",
+            isPresented: Binding(
+                get: { schedulePendingDelete != nil },
+                set: { if !$0 { schedulePendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除日程", role: .destructive) {
+                if let schedule = schedulePendingDelete {
+                    scheduleViewModel.deleteSchedule(schedule)
+                }
+                schedulePendingDelete = nil
+            }
+            Button("取消", role: .cancel) { schedulePendingDelete = nil }
+        } message: {
+            Text("固定的重复规则会停止并删除；已关联的历史课堂保留。")
         }
         .sheet(isPresented: $showEditForm) {
             if let course = viewModel.course {
@@ -149,6 +211,7 @@ struct CourseDetailView: View {
             ScrollView {
                 VStack(spacing: LTSpacing.l) {
                     headerCard(course)
+                    schedulesCard
                     statsCard
                     learningSpaceCard
                     if viewModel.sessions.isEmpty {
@@ -166,6 +229,218 @@ struct CourseDetailView: View {
                 .padding(.bottom, 90)
             }
             bottomToolbar(course)
+        }
+        .onAppear { startMinuteTimer() }
+        .onDisappear {
+            minuteTimer?.invalidate()
+            minuteTimer = nil
+        }
+    }
+
+    /// The course's recurring schedules (固定日程): every weekly slot as
+    /// its own row (周一 10:30–12:05 · 仅单周), with pause / edit / 停课调课
+    /// / copy / delete. The next class of THIS course and its remaining
+    /// semester count ride on top.
+    private var schedulesCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            HStack {
+                LTSectionHeader(title: "固定日程")
+                Spacer()
+                Button {
+                    showScheduleForm = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(LTColors.accentGreen)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("添加日程"))
+            }
+            if scheduleViewModel.schedules.filter({ $0.courseID == courseID }).isEmpty {
+                VStack(spacing: LTSpacing.xs) {
+                    Text("还没有固定日程")
+                        .font(LTTypography.body)
+                        .foregroundStyle(LTColors.textTertiary)
+                    Text("添加后可收到上课提醒，从课程表一键开课")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, LTSpacing.m)
+            } else {
+                VStack(spacing: LTSpacing.s) {
+                    if let next = nextCourseOccurrence {
+                        ScheduleOccurrenceCard(
+                            occurrence: next,
+                            courseName: viewModel.course?.name ?? "课程",
+                            teacher: scheduleViewModel.teacher(for: next),
+                            location: scheduleViewModel.location(for: next),
+                            colorIndex: viewModel.course?.colorIndex ?? 0,
+                            relativeLabel: scheduleViewModel.relativeLabel(for: next),
+                            startState: scheduleViewModel.startState(for: next),
+                            isNext: true,
+                            onStart: { startOccurrence(next) },
+                            onOpenSchedule: nil
+                        )
+                    }
+                    ForEach(
+                        scheduleViewModel.schedules.filter { $0.courseID == courseID },
+                        id: \.id
+                    ) { schedule in
+                        scheduleRow(schedule)
+                    }
+                }
+                if nextCourseOccurrence != nil {
+                    Text("本学期剩余 \(remainingCount) 次课")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+            }
+            // .ics export of this course's schedule.
+            Button {
+                exportCourseICS()
+            } label: {
+                Label("导出课程日程（.ics）", systemImage: "calendar.badge.arrow.up")
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(scheduleViewModel.schedules.filter { $0.courseID == courseID }.isEmpty)
+        }
+        .ltCard()
+    }
+
+    /// One schedule rule row: 周一 10:30–12:05 · 仅单周（下拉操作）.
+    private func scheduleRow(_ schedule: CourseSchedule) -> some View {
+        HStack(spacing: LTSpacing.m) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(scheduleLine(schedule))
+                    .font(LTTypography.cardTitle)
+                    .foregroundStyle(schedule.isEnabled ? LTColors.textPrimary : LTColors.textTertiary)
+                HStack(spacing: LTSpacing.xs) {
+                    Text(schedule.recurrence.displayName)
+                    if !schedule.teacherOverride.isEmpty || !schedule.locationOverride.isEmpty {
+                        Text("·")
+                        Text(
+                            [schedule.teacherOverride, schedule.locationOverride]
+                                .filter { !$0.isEmpty }.joined(separator: " ")
+                        )
+                    }
+                    if schedule.reminderLeadMins >= 0 {
+                        Text("· 提醒 \(reminderLabel(schedule.reminderLeadMins))")
+                    }
+                }
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textTertiary)
+            }
+            Spacer()
+            if !schedule.isEnabled {
+                StatusChip(text: "已暂停", tint: LTColors.textTertiary)
+            }
+            Menu {
+                Button {
+                    editingSchedule = schedule
+                } label: {
+                    Label("编辑日程", systemImage: "pencil")
+                }
+                Button {
+                    copyingSchedule = schedule
+                } label: {
+                    Label("复制为新日程", systemImage: "doc.on.doc")
+                }
+                Button {
+                    exceptionTarget = schedule
+                } label: {
+                    Label("停课或调课", systemImage: "calendar.badge.minus")
+                }
+                Button {
+                    scheduleViewModel.setScheduleEnabled(
+                        schedule, isEnabled: !schedule.isEnabled
+                    )
+                } label: {
+                    Label(
+                        schedule.isEnabled ? "暂停日程" : "恢复日程",
+                        systemImage: schedule.isEnabled ? "pause" : "play"
+                    )
+                }
+                Button(role: .destructive) {
+                    schedulePendingDelete = schedule
+                } label: {
+                    Label("删除日程", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(LTColors.textSecondary)
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel(Text("日程操作"))
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func scheduleLine(_ schedule: CourseSchedule) -> String {
+        let tz = TimeZone(identifier: schedule.timezoneID) ?? .current
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        let ref = schedule.onceDate ?? .now
+        let day = cal.startOfDay(for: ref)
+        let start = cal.date(byAdding: .second, value: schedule.startSecs, to: day) ?? day
+        let end = cal.date(byAdding: .second, value: schedule.endSecs, to: day) ?? day
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateFormat = "HH:mm"
+        let dayName = ScheduleFormView.weekdayName(schedule.weekday)
+        if schedule.recurrence == .once, let once = schedule.onceDate {
+            let dayFormatter = DateFormatter()
+            dayFormatter.locale = Locale(identifier: "zh_CN")
+            dayFormatter.dateFormat = "M月d日"
+            return "\(dayName) \(formatter.string(from: start))–\(formatter.string(from: end))"
+                + "（\(dayFormatter.string(from: once))）"
+        }
+        return "\(dayName) \(formatter.string(from: start))–\(formatter.string(from: end))"
+    }
+
+    private func reminderLabel(_ minutes: Int) -> String {
+        if minutes == 0 { return "上课时" }
+        if minutes >= 60 { return "提前 \(minutes / 60) 小时" }
+        return "提前 \(minutes) 分钟"
+    }
+
+    /// The next upcoming occurrence of THIS course.
+    private var nextCourseOccurrence: ScheduleCalculator.Occurrence? {
+        scheduleViewModel.occurrences.first {
+            $0.courseID == courseID && !$0.isCancelled && $0.end > scheduleViewModel.now
+        }
+    }
+
+    /// Remaining class count this semester (non-cancelled, from today).
+    private var remainingCount: Int {
+        scheduleViewModel.occurrences.filter {
+            $0.courseID == courseID && !$0.isCancelled && $0.end > scheduleViewModel.now
+        }.count
+    }
+
+    private func startOccurrence(_ occurrence: ScheduleCalculator.Occurrence) {
+        Task { _ = await scheduleViewModel.startOccurrence(occurrence) }
+    }
+
+    private func exportCourseICS() {
+        let exporter = ScheduleICSExporter(
+            schedules: scheduleViewModel.schedules.filter { $0.courseID == courseID },
+            exceptions: scheduleViewModel.exceptions.filter { $0.courseID == courseID },
+            courses: viewModel.course.map { [$0] } ?? []
+        )
+        if let url = exporter.writeTemporaryFile() {
+            icsShareItem = SharedFile(url: url)
+        }
+    }
+
+    private func startMinuteTimer() {
+        minuteTimer?.invalidate()
+        minuteTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            Task { @MainActor in scheduleViewModel.tick() }
         }
     }
 

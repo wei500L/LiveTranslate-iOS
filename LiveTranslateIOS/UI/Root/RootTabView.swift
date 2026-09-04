@@ -65,15 +65,19 @@ struct RootTabView: View {
             environment.reconcileAbnormalTerminations()
             environment.modelManager.refreshStates()
             environment.cloudSync?.start()
+            await environment.refreshClassReminders()
             #if DEBUG
             environment.presentDemoLaunchScreenIfNeeded()
             #endif
         }
         // Returning to the foreground is a sync trigger: anything that
-        // accumulated while the app was backgrounded flushes now.
+        // accumulated while the app was backgrounded flushes now, and the
+        // reminder rolling window re-arms (schedules may have changed via
+        // pull).
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 environment.cloudSync?.syncNow()
+                Task { await environment.refreshClassReminders() }
             }
         }
     }

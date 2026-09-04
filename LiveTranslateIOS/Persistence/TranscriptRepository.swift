@@ -306,6 +306,54 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// Cloud-sync delete for a correction (revert to model original; never
     /// resurrects locally).
     func deleteCorrectionByID(_ id: UUID) throws
+
+    // MARK: Course schedules (pre-class layer)
+    // Recurring rules + dated exceptions; occurrences are computed by
+    // ScheduleCalculator, never materialized. Deleting a course deletes
+    // its schedules and their exceptions (a rule without its course is
+    // meaningless); sessions keep their scheduleID/occurrenceKey (the
+    // references dangle — the UI shows 来源已不存在).
+
+    /// All schedules (nil courseID = every course), newest first.
+    func schedules(courseID: UUID?) throws -> [CourseSchedule]
+    /// Creates a schedule. Notifies sync.
+    func addSchedule(_ draft: ScheduleDraft) throws -> CourseSchedule
+    /// Applies every draft field. Notifies sync.
+    func updateSchedule(_ schedule: CourseSchedule, with draft: ScheduleDraft) throws
+    /// Flips the enabled flag (pause/resume). Notifies sync.
+    func setScheduleEnabled(_ schedule: CourseSchedule, isEnabled: Bool) throws
+    /// Deletes the schedule. Its exceptions are deleted too (matching the
+    /// server's cascade). Notifies sync.
+    func deleteSchedule(_ schedule: CourseSchedule) throws
+    /// Cloud-sync apply for a schedule record.
+    func applyRemoteSchedule(record: SyncServerRecordDTO, serverVersion: Int) throws
+    /// Cloud-sync delete for a schedule (also removes its exceptions —
+    /// the server cascade arrives as separate delete changes, but the
+    /// local rows go together).
+    func deleteScheduleByID(_ id: UUID) throws
+
+    /// All exceptions of one schedule (any order — the calculator groups).
+    func exceptions(scheduleID: UUID) throws -> [ScheduleException]
+    /// All exceptions across schedules (calculator input).
+    func allExceptions() throws -> [ScheduleException]
+    /// Creates an exception. Notifies sync.
+    func addException(_ draft: ScheduleExceptionDraft) throws -> ScheduleException
+    /// Applies every draft field. Notifies sync.
+    func updateException(_ exception: ScheduleException, with draft: ScheduleExceptionDraft) throws
+    /// Deletes the exception. Notifies sync.
+    func deleteException(_ exception: ScheduleException) throws
+    /// Cloud-sync apply for an exception record.
+    func applyRemoteException(record: SyncServerRecordDTO, serverVersion: Int) throws
+    /// Cloud-sync delete for an exception.
+    func deleteExceptionByID(_ id: UUID) throws
+
+    // MARK: Schedule-attributed session queries
+
+    /// Sessions whose occurrenceKey matches (duplicate-start protection
+    /// and attendance grouping). Includes finished sessions.
+    func sessions(occurrenceKey: String) throws -> [ClassroomSession]
+    /// The user's ongoing session (nil when none is running).
+    func ongoingSession() throws -> ClassroomSession?
 }
 
 /// Minimal comparable projection of a classroom session (Sendable).
@@ -325,6 +373,11 @@ struct SessionDraft: Sendable {
     var sourceLanguage: String = "ru"
     var targetLanguage: String = "zh-CN"
     var courseID: UUID? = nil
+    /// Schedule attribution (schedule-launched sessions only): nil on
+    /// manual starts. Written once at creation, never edited after.
+    var scheduleID: UUID? = nil
+    var occurrenceKey: String? = nil
+    var plannedStart: Date? = nil
 }
 
 struct EntryDraft: Sendable {

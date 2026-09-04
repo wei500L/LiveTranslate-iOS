@@ -350,7 +350,11 @@ final class DemoLiveCoordinator: LiveTranslationCoordinating {
         sessionID != nil && state.phase != .finished
     }
 
-    func start(title: String? = nil, courseID: UUID? = nil) async {
+    func start(
+        title: String? = nil,
+        courseID: UUID? = nil,
+        schedule: ScheduleSessionContext? = nil
+    ) async {
         guard !isRunning else { return }
         sessionID = UUID()
         sessionTitleValue = title ?? "演示课堂"
@@ -722,6 +726,106 @@ enum DemoSeed {
             }
             return nil
         }
+
+        // Demo schedules — a one-week real structure: a plain weekly
+        // course, an odd/even course, one cancellation, one time change,
+        // and a class happening around now (the next-class card / 进行中
+        // states). Relative to today so screenshots stay deterministic;
+        // demo mode never registers real notifications (classReminders'
+        // refresh runs against the demo defaults but notifications are
+        // never requested in demo composition).
+        let anchorMonday = {
+            var comps = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
+            comps.weekday = 2
+            return calendar.date(from: comps)!
+        }()
+        let semesterStart = calendar.date(byAdding: .day, value: -28, to: anchorMonday)!
+        let semesterEnd = calendar.date(byAdding: .day, value: 84, to: anchorMonday)!
+        func secs(_ hour: Int, _ minute: Int) -> Int { hour * 3600 + minute * 60 }
+        func next(_ weekday: Int) -> Date {
+            calendar.nextDate(
+                after: today, matching: DateComponents(weekday: weekday + 1),
+                matchingPolicy: .nextTime
+            ) ?? today
+        }
+
+        let mathSchedule = CourseSchedule(
+            courseID: courseByName["高等数学 II"]?.id,
+            weekday: 1,
+            startSecs: secs(10, 30),
+            endSecs: secs(12, 5),
+            recurrence: .weekly,
+            weekParityAnchor: anchorMonday,
+            firstWeekIsOdd: true,
+            semesterStart: semesterStart,
+            semesterEnd: semesterEnd,
+            timezoneID: TimeZone.current.identifier,
+            reminderLeadMins: 15
+        )
+        context.insert(mathSchedule)
+
+        let russianSchedule = CourseSchedule(
+            courseID: courseByName["现代俄语精读"]?.id,
+            weekday: 3,
+            startSecs: secs(15, 30),
+            endSecs: secs(17, 5),
+            recurrence: .oddWeeks,
+            weekParityAnchor: anchorMonday,
+            firstWeekIsOdd: true,
+            semesterStart: semesterStart,
+            semesterEnd: semesterEnd,
+            timezoneID: TimeZone.current.identifier,
+            locationOverride: "语言楼 210",
+            reminderLeadMins: 30
+        )
+        context.insert(russianSchedule)
+
+        // A class happening NOW (the home next-class card shows 正在上课).
+        let nowComps = calendar.dateComponents([.hour, .minute], from: .now)
+        let nowHour = nowComps.hour ?? 10
+        let liveSchedule = CourseSchedule(
+            courseID: courseByName["量子力学导论"]?.id,
+            weekday: max(0, min(6, calendar.component(.weekday, from: today) - 1)),
+            startSecs: secs(max(0, nowHour - 1), 30),
+            endSecs: secs(nowHour + 1, 5),
+            recurrence: .weekly,
+            semesterStart: semesterStart,
+            semesterEnd: semesterEnd,
+            timezoneID: TimeZone.current.identifier,
+            reminderLeadMins: -1
+        )
+        context.insert(liveSchedule)
+        _ = next(1)
+
+        // One cancelled date + one time change on the weekly course.
+        let cancelDate = calendar.date(byAdding: .day, value: 7, to: next(1)) ?? today
+        context.insert(ScheduleException(
+            scheduleID: mathSchedule.id,
+            courseID: mathSchedule.courseID,
+            originalDate: cancelDate,
+            kind: .cancelled,
+            note: "老师出差"
+        ))
+        let moveDate = calendar.date(byAdding: .day, value: 14, to: next(1)) ?? today
+        context.insert(ScheduleException(
+            scheduleID: mathSchedule.id,
+            courseID: mathSchedule.courseID,
+            originalDate: moveDate,
+            kind: .timeChanged,
+            changedStart: secs(12, 0),
+            changedEnd: secs(13, 35),
+            note: "与下午课对调"
+        ))
+        // An ad-hoc extra class next Saturday.
+        context.insert(ScheduleException(
+            scheduleID: russianSchedule.id,
+            courseID: russianSchedule.courseID,
+            kind: .adHoc,
+            changedStart: secs(10, 0),
+            changedEnd: secs(11, 35),
+            movedToDate: next(6),
+            note: "补课"
+        ))
 
         for spec in specs {
             let session = ClassroomSession(

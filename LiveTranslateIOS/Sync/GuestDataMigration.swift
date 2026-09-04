@@ -216,6 +216,7 @@ final class GuestDataMigration {
             copyGuestReviews(guestReviews)
             copyGuestAttachments()
             copyGuestLearningData()
+            copyGuestSchedules()
             mergeGuestBookmarks()
 
             if record.copiedCount == 0 && (!record.failedSessionIDs.isEmpty || !record.conflictedSessionIDs.isEmpty) {
@@ -328,6 +329,65 @@ final class GuestDataMigration {
                 serverVersion: 0
             )
             try? repository.applyRemoteCourse(record: record, serverVersion: 0)
+        }
+    }
+
+    /// Copies the guest pre-class layer (schedules + exceptions) into the
+    /// account store, add-only union: an account row with the same id
+    /// always wins, so a re-run never duplicates. Rows keep their guest
+    /// UUIDs and arrive with serverVersion 0 — the initial upload picks
+    /// them up like every other copied row. Schedules are course-scoped
+    /// (mergeGuestCourses ran first) and exceptions follow their schedules.
+    private func copyGuestSchedules() {
+        for schedule in reader.scheduleSnapshots() {
+            guard (try? repository.schedules(courseID: nil))?.contains { $0.id == schedule.id } != true else {
+                continue
+            }
+            let record = SyncServerRecordDTO(
+                id: schedule.id,
+                courseId: schedule.courseID,
+                scheduleWeekday: schedule.weekday,
+                scheduleStartSecs: schedule.startSecs,
+                scheduleEndSecs: schedule.endSecs,
+                scheduleRecurrence: schedule.recurrenceRaw,
+                scheduleParityAnchor: schedule.weekParityAnchor.map {
+                    ScheduleCalculator.formatDay($0)
+                },
+                scheduleFirstWeekIsOdd: schedule.firstWeekIsOdd,
+                scheduleSemesterStart: ScheduleCalculator.formatDay(schedule.semesterStart),
+                scheduleSemesterEnd: ScheduleCalculator.formatDay(schedule.semesterEnd),
+                scheduleTimezone: schedule.timezoneID,
+                scheduleTeacher: schedule.teacherOverride.isEmpty ? nil : schedule.teacherOverride,
+                scheduleLocation: schedule.locationOverride.isEmpty ? nil : schedule.locationOverride,
+                scheduleNote: schedule.note.isEmpty ? nil : schedule.note,
+                scheduleReminderMins: schedule.reminderLeadMins,
+                scheduleEnabled: schedule.isEnabled,
+                scheduleOnceDate: schedule.onceDate.map { ScheduleCalculator.formatDay($0) },
+                serverVersion: 0
+            )
+            try? repository.applyRemoteSchedule(record: record, serverVersion: 0)
+        }
+        for exception in reader.exceptionSnapshots() {
+            guard let scheduleID = exception.scheduleID else { continue }
+            let record = SyncServerRecordDTO(
+                id: exception.id,
+                scheduleId: scheduleID,
+                courseId: exception.courseID,
+                scheduleOriginalDate: exception.originalDate.map {
+                    ScheduleCalculator.formatDay($0)
+                },
+                scheduleExceptionKind: exception.kindRaw,
+                scheduleChangedStart: exception.changedStart,
+                scheduleChangedEnd: exception.changedEnd,
+                scheduleMovedToDate: exception.movedToDate.map {
+                    ScheduleCalculator.formatDay($0)
+                },
+                scheduleTeacher: exception.teacherOverride.isEmpty ? nil : exception.teacherOverride,
+                scheduleLocation: exception.locationOverride.isEmpty ? nil : exception.locationOverride,
+                scheduleNote: exception.note.isEmpty ? nil : exception.note,
+                serverVersion: 0
+            )
+            try? repository.applyRemoteException(record: record, serverVersion: 0)
         }
     }
 
@@ -709,8 +769,46 @@ struct GuestLibraryReader {
         Course.self, SessionNote.self, StudyReview.self,
         SessionAttachment.self,
         GlossaryTerm.self, StudyCard.self, StudyTask.self,
-        SessionRecording.self, TranscriptCorrection.self
+        SessionRecording.self, TranscriptCorrection.self,
+        CourseSchedule.self, ScheduleException.self
     ])
+
+    /// Sendable snapshot of one guest course schedule (the pre-class
+    /// layer — rules migrate so the timetable survives sign-in).
+    struct ScheduleSnapshot: Sendable {
+        var id: UUID
+        var courseID: UUID?
+        var weekday: Int
+        var startSecs: Int
+        var endSecs: Int
+        var recurrenceRaw: String
+        var weekParityAnchor: Date?
+        var firstWeekIsOdd: Bool
+        var semesterStart: Date
+        var semesterEnd: Date
+        var timezoneID: String
+        var teacherOverride: String
+        var locationOverride: String
+        var note: String
+        var reminderLeadMins: Int
+        var isEnabled: Bool
+        var onceDate: Date?
+    }
+
+    /// Sendable snapshot of one guest schedule exception.
+    struct ExceptionSnapshot: Sendable {
+        var id: UUID
+        var scheduleID: UUID?
+        var courseID: UUID?
+        var originalDate: Date?
+        var kindRaw: String
+        var changedStart: Int?
+        var changedEnd: Int?
+        var movedToDate: Date?
+        var locationOverride: String
+        var teacherOverride: String
+        var note: String
+    }
 
     private var guestURL: URL { AccountScope.guestDatabaseURL }
 
@@ -954,6 +1052,58 @@ struct GuestLibraryReader {
                 sourceEntryID: row.sourceEntryID,
                 sourceAttachmentID: row.sourceAttachmentID,
                 sourceReviewID: row.sourceReviewID
+            )
+        }
+    }
+
+    /// All guest course schedules, values only.
+    func scheduleSnapshots() -> [ScheduleSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<CourseSchedule>())) ?? []
+        return rows.map { row in
+            ScheduleSnapshot(
+                id: row.id,
+                courseID: row.courseID,
+                weekday: row.weekday,
+                startSecs: row.startSecs,
+                endSecs: row.endSecs,
+                recurrenceRaw: row.recurrenceRaw,
+                weekParityAnchor: row.weekParityAnchor,
+                firstWeekIsOdd: row.firstWeekIsOdd,
+                semesterStart: row.semesterStart,
+                semesterEnd: row.semesterEnd,
+                timezoneID: row.timezoneID,
+                teacherOverride: row.teacherOverride,
+                locationOverride: row.locationOverride,
+                note: row.note,
+                reminderLeadMins: row.reminderLeadMins,
+                isEnabled: row.isEnabled,
+                onceDate: row.onceDate
+            )
+        }
+    }
+
+    /// All guest schedule exceptions, values only.
+    func exceptionSnapshots() -> [ExceptionSnapshot] {
+        guard let container = try? containerIfPresent() else { return [] }
+        let context = ModelContext(container)
+        context.shouldAutosave = false
+        let rows = (try? context.fetch(FetchDescriptor<ScheduleException>())) ?? []
+        return rows.map { row in
+            ExceptionSnapshot(
+                id: row.id,
+                scheduleID: row.scheduleID,
+                courseID: row.courseID,
+                originalDate: row.originalDate,
+                kindRaw: row.kindRaw,
+                changedStart: row.changedStart,
+                changedEnd: row.changedEnd,
+                movedToDate: row.movedToDate,
+                locationOverride: row.locationOverride,
+                teacherOverride: row.teacherOverride,
+                note: row.note
             )
         }
     }

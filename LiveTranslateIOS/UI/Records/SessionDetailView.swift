@@ -278,6 +278,17 @@ struct SessionDetailView: View {
                     if let end = session.endTime {
                         LabeledRow(label: "结束时间", value: Format.time(end))
                     }
+                    // Schedule attribution (schedule-launched sessions):
+                    // the planned class time vs the actual recording.
+                    if let planned = session.plannedStart {
+                        LabeledRow(
+                            label: "计划上课",
+                            value: Format.date(planned) + " " + Format.time(planned)
+                        )
+                    }
+                    if session.occurrenceKey != nil {
+                        LabeledRow(label: "来源", value: "来自课程表日程")
+                    }
                     LabeledRow(label: "识别模式", value: backendName(session))
                     if !session.computePreference.isEmpty {
                         LabeledRow(label: "计算配置", value: session.computePreference)

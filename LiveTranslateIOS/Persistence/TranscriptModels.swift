@@ -78,6 +78,19 @@ final class ClassroomSession {
     /// its course — the id survives that ordering, the UI resolves the
     /// course at display time.
     var courseID: UUID?
+    /// The schedule this session was started from (nil = manual/standalone
+    /// start). Same plain-id convention as courseID. Set once at creation
+    /// — historical attribution never changes; a deleted schedule leaves
+    /// the reference dangling by design.
+    var scheduleID: UUID?
+    /// The stable occurrence key of the class this session belongs to
+    /// ("scheduleUUID:YYYY-MM-DD" in the schedule's timezone; nil for
+    /// manual starts). Duplicate-start protection and attendance grouping
+    /// key on it; the server treats it as an opaque string.
+    var occurrenceKey: String?
+    /// The class's planned start (nil = manual start). Only ever written
+    /// at creation — a later schedule edit never rewrites history.
+    var plannedStart: Date?
     /// Cloud-sync metadata: server version of the last acknowledged push
     /// (0 = never synced). Added with a default so existing stores
     /// lightweight-migrate in place.
@@ -103,6 +116,9 @@ final class ClassroomSession {
         entryCount: Int = 0,
         abnormalTermination: Bool = false,
         courseID: UUID? = nil,
+        scheduleID: UUID? = nil,
+        occurrenceKey: String? = nil,
+        plannedStart: Date? = nil,
         serverVersion: Int = 0
     ) {
         self.id = id
@@ -121,6 +137,9 @@ final class ClassroomSession {
         self.entryCount = entryCount
         self.abnormalTermination = abnormalTermination
         self.courseID = courseID
+        self.scheduleID = scheduleID
+        self.occurrenceKey = occurrenceKey
+        self.plannedStart = plannedStart
         self.createdAt = .now
         self.updatedAt = .now
         self.serverVersion = serverVersion

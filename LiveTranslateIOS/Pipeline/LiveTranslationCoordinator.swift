@@ -134,8 +134,14 @@ final class LiveTranslationCoordinator {
     /// Start a classroom session. The optional `title` comes from the
     /// new-classroom form; when nil the previous behavior (date-derived
     /// default title) applies unchanged. `courseID` assigns the session to
-    /// a course (nil = standalone).
-    func start(title: String? = nil, courseID: UUID? = nil) async {
+    /// a course (nil = standalone). `schedule` carries the schedule
+    /// attribution (schedule-launched sessions): the occurrence key and
+    /// planned start are written once at creation and never edited.
+    func start(
+        title: String? = nil,
+        courseID: UUID? = nil,
+        schedule: ScheduleSessionContext? = nil
+    ) async {
         guard state.phase == .idle || state.phase == .finished || state.phase == .backendError else {
             return
         }
@@ -226,7 +232,10 @@ final class LiveTranslationCoordinator {
                 modelVersion: "gigaam-v3-e2e-rnnt",
                 computePreference: compute,
                 translationModel: settings.translationModel,
-                courseID: courseID
+                courseID: courseID,
+                scheduleID: schedule?.scheduleID,
+                occurrenceKey: schedule?.occurrenceKey,
+                plannedStart: schedule?.plannedStart
             )
             session = try? repository.createSession(draft)
         }

@@ -7,6 +7,16 @@ struct LiveTranslateIOSApp: App {
     /// account switches (multi-profile isolation). In the Debug UI-demo
     /// mode the demo environment is assembled once and never switched.
     @State private var session = AppSession()
+    /// Class-reminder notification routing (tap + 开始课堂 action). The
+    /// delegate is a plain NSObject kept here so it outlives views; it
+    /// hops to the MainActor to steer AppFlow.
+    @State private var notificationRouter = NotificationRouter()
+
+    init() {
+        // Register the course-reminder category (开始课堂 action) before
+        // any reminder can fire. Plain registration — never prompts.
+        NotificationRouter.registerCategories()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -23,6 +33,15 @@ struct LiveTranslateIOSApp: App {
                 // token stays in memory; RootTabView presents the flow.
                 .onOpenURL { url in
                     session.handleDeepLink(url)
+                }
+                .onAppear {
+                    notificationRouter.attach(flow: session.environment.flow)
+                }
+                .onChange(of: session.profileKey) {
+                    // The view tree reset (account switch) re-attaches via
+                    // onAppear; also re-point immediately so a notification
+                    // tapped mid-switch is never lost.
+                    notificationRouter.attach(flow: session.environment.flow)
                 }
         }
         .modelContainer(session.environment.modelContainer)
@@ -66,6 +85,9 @@ final class AppEnvironment {
     /// Local-notification reminders for tasks (device-only, account-scoped
     /// defaults; never synced, never server-side).
     let taskReminders: TaskReminderScheduler
+    /// Local-notification 上课提醒 (rolling window over schedule
+    /// occurrences; device-only, account-scoped defaults; never synced).
+    let classReminders: ClassReminderScheduler
     /// Private-server cloud sync. Nil when the build configures no server
     /// URL (and always nil in the Debug demo environment — demo mode never
     /// touches the production server). One instance per app lifetime.
@@ -189,6 +211,7 @@ final class AppEnvironment {
             storageKey: AccountStore.bookmarkKey(accountID: accountID)
         )
         let taskReminders = TaskReminderScheduler(defaults: syncDefaults)
+        let classReminders = ClassReminderScheduler(defaults: syncDefaults)
         let cloudSync: CloudSyncService?
         if let baseURL = ServerConfiguration.baseURL {
             cloudSync = CloudSyncService(
@@ -256,6 +279,7 @@ final class AppEnvironment {
             translationServiceBox: box,
             bookmarks: bookmarks,
             taskReminders: taskReminders,
+            classReminders: classReminders,
             cloudSync: cloudSync,
             guestMigration: guestMigration,
             studyReviewService: studyService,
@@ -287,6 +311,7 @@ final class AppEnvironment {
         translationServiceBox: TranslationServiceBox,
         bookmarks: BookmarkStore,
         taskReminders: TaskReminderScheduler? = nil,
+        classReminders: ClassReminderScheduler? = nil,
         cloudSync: CloudSyncService?,
         guestMigration: GuestDataMigration? = nil,
         studyReviewService: any StudyReviewModelService = OpenAICompatibleStudyService(
@@ -317,6 +342,7 @@ final class AppEnvironment {
         self.translationServiceBox = translationServiceBox
         self.bookmarks = bookmarks
         self.taskReminders = taskReminders ?? TaskReminderScheduler(defaults: .standard)
+        self.classReminders = classReminders ?? ClassReminderScheduler(defaults: .standard)
         self.cloudSync = cloudSync
         self.guestMigration = guestMigration
         self.studyReviewService = studyReviewService
@@ -374,13 +400,15 @@ final class AppEnvironment {
     /// tests) enumerates the same entities. Recording and correction
     /// entities are device-cloud split: `SessionRecording` never syncs
     /// (audio stays local), `TranscriptCorrection` syncs as its own
-    /// entity.
+    /// entity. The pre-class layer (`CourseSchedule`,
+    /// `ScheduleException`) syncs as its own entities as well.
     static let librarySchema = Schema([
         ClassroomSession.self, TranscriptEntry.self,
         Course.self, SessionNote.self, StudyReview.self,
         SessionAttachment.self,
         GlossaryTerm.self, StudyCard.self, StudyTask.self,
-        SessionRecording.self, TranscriptCorrection.self
+        SessionRecording.self, TranscriptCorrection.self,
+        CourseSchedule.self, ScheduleException.self
     ])
 
     // MARK: - Translation configuration (single source of truth)
@@ -533,6 +561,23 @@ final class AppEnvironment {
         // removed files flip isDeleted, orphan rows are reaped.
         try? repository.reconcileRecordingState()
     }
+
+    /// Re-arms the class-reminder rolling window (launch, foreground
+    /// entry, schedule mutations). Pulls current rules + exceptions,
+    /// resolves course names for the notification bodies, hands the window
+    /// to the scheduler. A denied authorization just cancels — the
+    /// timetable itself never depends on it.
+    func refreshClassReminders() async {
+        guard let schedules = try? repository.schedules(courseID: nil),
+              let exceptions = try? repository.allExceptions()
+        else { return }
+        let courses = (try? repository.courses()) ?? []
+        var names: [UUID: String] = [:]
+        for course in courses { names[course.id] = course.name }
+        await classReminders.refresh(
+            schedules: schedules, exceptions: exceptions
+        ) { courseID in names[courseID] }
+    }
 }
 
 /// Thread-safe holder for the current translator. Exists so the coordinator
@@ -613,6 +658,28 @@ final class AppFlow {
     func collapseLive(to tab: LTTab = .home) {
         isLivePresented = false
         selectedTab = tab
+    }
+
+    // MARK: - Course-reminder routing
+
+    /// A class-reminder notification tapped (or its 开始课堂 action fired).
+    /// Non-nil means "route to the timetable and offer the class start" —
+    /// IN-MEMORY ONLY, consumed by HomeScreen exactly once. The occurrence
+    /// key identifies the concrete class; the schedule view resolves it
+    /// against the current store (a deleted schedule shows 来源已不存在).
+    var pendingClassOccurrenceKey: String?
+
+    /// Routes a tapped class reminder: land on the home tab (where the
+    /// next-class card handles the start flow with every permission and
+    /// resource check) with the occurrence flagged.
+    func openClassReminder(occurrenceKey: String) {
+        selectedTab = .home
+        pendingClassOccurrenceKey = occurrenceKey
+    }
+
+    /// The start flow consumed the reminder target.
+    func consumeClassReminder() {
+        pendingClassOccurrenceKey = nil
     }
 
     #if DEBUG

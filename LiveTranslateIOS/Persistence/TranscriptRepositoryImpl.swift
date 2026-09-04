@@ -425,6 +425,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let correction = try context.fetch(descriptor).first else { return }
             correction.serverVersion = max(correction.serverVersion, version)
+        case .courseSchedule:
+            let descriptor = FetchDescriptor<CourseSchedule>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let schedule = try context.fetch(descriptor).first else { return }
+            schedule.serverVersion = max(schedule.serverVersion, version)
+        case .scheduleException:
+            let descriptor = FetchDescriptor<ScheduleException>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let exception = try context.fetch(descriptor).first else { return }
+            exception.serverVersion = max(exception.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -766,6 +778,27 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 payload: CloudSyncService.payload(for: task)
             ))
         }
+        // Pre-class layer: schedules first (exceptions reference them).
+        let schedules = (try? context.fetch(FetchDescriptor<CourseSchedule>())) ?? []
+        for schedule in schedules {
+            items.append(SyncOutboxItem(
+                entityType: .courseSchedule,
+                entityID: schedule.id,
+                operation: .upsert,
+                baseServerVersion: schedule.serverVersion,
+                payload: CloudSyncService.payload(for: schedule)
+            ))
+        }
+        let exceptions = (try? context.fetch(FetchDescriptor<ScheduleException>())) ?? []
+        for exception in exceptions {
+            items.append(SyncOutboxItem(
+                entityType: .scheduleException,
+                entityID: exception.id,
+                operation: .upsert,
+                baseServerVersion: exception.serverVersion,
+                payload: CloudSyncService.payload(for: exception)
+            ))
+        }
         progress?(sessions.count, sessions.count)
         return items
     }
@@ -857,6 +890,25 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 mutationObserver?.taskUpdated(task)
             }
         }
+        // Schedules are meaningless without their course — they and their
+        // exceptions are deleted (the server cascade emits the same
+        // deletes; local delete + observer notification covers the
+        // single-device path, remote pull mirrors it).
+        let schedules = try context.fetch(FetchDescriptor<CourseSchedule>(
+            predicate: #Predicate { $0.courseID == courseID }
+        ))
+        for schedule in schedules {
+            let scheduleID = schedule.id
+            let exceptions = try context.fetch(FetchDescriptor<ScheduleException>(
+                predicate: #Predicate { $0.scheduleID == scheduleID }
+            ))
+            for exception in exceptions {
+                context.delete(exception)
+                mutationObserver?.exceptionDeleted(id: exception.id)
+            }
+            context.delete(schedule)
+            mutationObserver?.scheduleDeleted(id: scheduleID)
+        }
         context.delete(course)
         try context.save()
         mutationObserver?.courseDeleted(id: courseID)
@@ -924,6 +976,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             predicate: #Predicate { $0.courseID == id }
         ))
         for task in tasks { task.courseID = nil }
+        // Schedules + exceptions go with the course (mirror of the server
+        // cascade). Remote-applied side: no observer notifications.
+        let schedules = try context.fetch(FetchDescriptor<CourseSchedule>(
+            predicate: #Predicate { $0.courseID == id }
+        ))
+        for schedule in schedules {
+            let exceptions = try context.fetch(FetchDescriptor<ScheduleException>(
+                predicate: #Predicate { $0.scheduleID == schedule.id }
+            ))
+            for exception in exceptions { context.delete(exception) }
+            context.delete(schedule)
+        }
         let descriptor = FetchDescriptor<Course>(predicate: #Predicate { $0.id == id })
         guard let course = try context.fetch(descriptor).first else {
             try context.save()
@@ -2285,6 +2349,296 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         guard let correction = try context.fetch(descriptor).first else { return }
         context.delete(correction)
         try context.save()
+    }
+
+    // MARK: - Course schedules (pre-class layer)
+
+    func schedules(courseID: UUID?) throws -> [CourseSchedule] {
+        let all = try context.fetch(FetchDescriptor<CourseSchedule>())
+        let scoped: [CourseSchedule]
+        if let courseID {
+            scoped = all.filter { $0.courseID == courseID }
+        } else {
+            scoped = all
+        }
+        return scoped.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func addSchedule(_ draft: ScheduleDraft) throws -> CourseSchedule {
+        let schedule = CourseSchedule(
+            courseID: draft.courseID,
+            weekday: draft.weekday,
+            startSecs: draft.startSecs,
+            endSecs: draft.endSecs,
+            recurrence: draft.recurrence,
+            weekParityAnchor: draft.weekParityAnchor,
+            firstWeekIsOdd: draft.firstWeekIsOdd,
+            semesterStart: draft.semesterStart,
+            semesterEnd: draft.semesterEnd,
+            timezoneID: draft.timezoneID,
+            teacherOverride: draft.teacherOverride,
+            locationOverride: draft.locationOverride,
+            note: draft.note,
+            reminderLeadMins: draft.reminderLeadMins,
+            isEnabled: draft.isEnabled,
+            onceDate: draft.onceDate
+        )
+        context.insert(schedule)
+        try context.save()
+        mutationObserver?.scheduleCreated(schedule)
+        return schedule
+    }
+
+    func updateSchedule(_ schedule: CourseSchedule, with draft: ScheduleDraft) throws {
+        schedule.courseID = draft.courseID
+        schedule.weekday = draft.weekday
+        schedule.startSecs = draft.startSecs
+        schedule.endSecs = draft.endSecs
+        schedule.recurrence = draft.recurrence
+        schedule.weekParityAnchor = draft.weekParityAnchor
+        schedule.firstWeekIsOdd = draft.firstWeekIsOdd
+        schedule.semesterStart = draft.semesterStart
+        schedule.semesterEnd = draft.semesterEnd
+        schedule.timezoneID = draft.timezoneID
+        schedule.teacherOverride = draft.teacherOverride
+        schedule.locationOverride = draft.locationOverride
+        schedule.note = draft.note
+        schedule.reminderLeadMins = draft.reminderLeadMins
+        schedule.isEnabled = draft.isEnabled
+        schedule.onceDate = draft.onceDate
+        schedule.updatedAt = .now
+        try context.save()
+        mutationObserver?.scheduleUpdated(schedule)
+    }
+
+    func setScheduleEnabled(_ schedule: CourseSchedule, isEnabled: Bool) throws {
+        guard schedule.isEnabled != isEnabled else { return }
+        schedule.isEnabled = isEnabled
+        schedule.updatedAt = .now
+        try context.save()
+        mutationObserver?.scheduleUpdated(schedule)
+    }
+
+    func deleteSchedule(_ schedule: CourseSchedule) throws {
+        let scheduleID = schedule.id
+        // Exceptions go with their rule (the server cascade emits the same
+        // delete changes; doing it together keeps a half-synced state from
+        // ever being visible).
+        let exceptionDescriptor = FetchDescriptor<ScheduleException>(
+            predicate: #Predicate { $0.scheduleID == scheduleID }
+        )
+        for exception in try context.fetch(exceptionDescriptor) {
+            context.delete(exception)
+        }
+        context.delete(schedule)
+        try context.save()
+        mutationObserver?.scheduleDeleted(id: scheduleID)
+    }
+
+    func applyRemoteSchedule(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id,
+              let recurrence = record.scheduleRecurrence,
+              let recurrenceValue = ScheduleRecurrence(rawValue: recurrence),
+              let semesterStart = record.scheduleSemesterStart,
+              let semesterEnd = record.scheduleSemesterEnd
+        else { return }
+        let descriptor = FetchDescriptor<CourseSchedule>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let schedule: CourseSchedule
+        if let existing {
+            schedule = existing
+        } else {
+            schedule = CourseSchedule(
+                id: recordID,
+                courseID: record.courseId,
+                weekday: record.scheduleWeekday ?? 1,
+                startSecs: record.scheduleStartSecs ?? 0,
+                endSecs: record.scheduleEndSecs ?? 0,
+                recurrence: recurrenceValue,
+                weekParityAnchor: record.scheduleParityAnchor,
+                firstWeekIsOdd: record.scheduleFirstWeekIsOdd ?? true,
+                semesterStart: semesterStart,
+                semesterEnd: semesterEnd,
+                timezoneID: record.scheduleTimezone ?? TimeZone.current.identifier,
+                teacherOverride: record.scheduleTeacher ?? "",
+                locationOverride: record.scheduleLocation ?? "",
+                note: record.scheduleNote ?? "",
+                reminderLeadMins: record.scheduleReminderMins ?? -1,
+                isEnabled: record.scheduleEnabled ?? true,
+                onceDate: record.scheduleOnceDate,
+                serverVersion: serverVersion
+            )
+            context.insert(schedule)
+        }
+        schedule.courseID = record.courseId
+        schedule.weekday = record.scheduleWeekday ?? 1
+        schedule.startSecs = record.scheduleStartSecs ?? 0
+        schedule.endSecs = record.scheduleEndSecs ?? 0
+        schedule.recurrence = recurrenceValue
+        schedule.weekParityAnchor = record.scheduleParityAnchor
+        schedule.firstWeekIsOdd = record.scheduleFirstWeekIsOdd ?? true
+        schedule.semesterStart = semesterStart
+        schedule.semesterEnd = semesterEnd
+        schedule.timezoneID = record.scheduleTimezone ?? schedule.timezoneID
+        schedule.teacherOverride = record.scheduleTeacher ?? ""
+        schedule.locationOverride = record.scheduleLocation ?? ""
+        schedule.note = record.scheduleNote ?? ""
+        schedule.reminderLeadMins = record.scheduleReminderMins ?? -1
+        schedule.isEnabled = record.scheduleEnabled ?? true
+        schedule.onceDate = record.scheduleOnceDate
+        schedule.serverVersion = serverVersion
+        schedule.updatedAt = .now
+        try context.save()
+    }
+
+    func deleteScheduleByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<CourseSchedule>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let schedule = try context.fetch(descriptor).first else { return }
+        // The remote delete may arrive before the exception deletes —
+        // remove them together (idempotent with the per-id deletes).
+        let exceptionDescriptor = FetchDescriptor<ScheduleException>(
+            predicate: #Predicate { $0.scheduleID == id }
+        )
+        for exception in try context.fetch(exceptionDescriptor) {
+            context.delete(exception)
+        }
+        context.delete(schedule)
+        try context.save()
+    }
+
+    // MARK: - Schedule exceptions
+
+    func exceptions(scheduleID: UUID) throws -> [ScheduleException] {
+        let descriptor = FetchDescriptor<ScheduleException>(
+            predicate: #Predicate { $0.scheduleID == scheduleID }
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func allExceptions() throws -> [ScheduleException] {
+        try context.fetch(FetchDescriptor<ScheduleException>())
+    }
+
+    func addException(_ draft: ScheduleExceptionDraft) throws -> ScheduleException {
+        let exception = ScheduleException(
+            scheduleID: draft.scheduleID,
+            courseID: draft.courseID,
+            originalDate: draft.originalDate,
+            kind: draft.kind,
+            changedStart: draft.changedStart,
+            changedEnd: draft.changedEnd,
+            movedToDate: draft.movedToDate,
+            locationOverride: draft.locationOverride,
+            teacherOverride: draft.teacherOverride,
+            note: draft.note
+        )
+        context.insert(exception)
+        try context.save()
+        mutationObserver?.exceptionCreated(exception)
+        return exception
+    }
+
+    func updateException(
+        _ exception: ScheduleException, with draft: ScheduleExceptionDraft
+    ) throws {
+        exception.scheduleID = draft.scheduleID
+        exception.courseID = draft.courseID
+        exception.originalDate = draft.originalDate
+        exception.kind = draft.kind
+        exception.changedStart = draft.changedStart
+        exception.changedEnd = draft.changedEnd
+        exception.movedToDate = draft.movedToDate
+        exception.locationOverride = draft.locationOverride
+        exception.teacherOverride = draft.teacherOverride
+        exception.note = draft.note
+        exception.updatedAt = .now
+        try context.save()
+        mutationObserver?.exceptionUpdated(exception)
+    }
+
+    func deleteException(_ exception: ScheduleException) throws {
+        let exceptionID = exception.id
+        context.delete(exception)
+        try context.save()
+        mutationObserver?.exceptionDeleted(id: exceptionID)
+    }
+
+    func applyRemoteException(record: SyncServerRecordDTO, serverVersion: Int) throws {
+        guard let recordID = record.id,
+              let scheduleID = record.scheduleId,
+              let kindRaw = record.scheduleExceptionKind,
+              let kind = ScheduleExceptionKind(rawValue: kindRaw)
+        else { return }
+        let descriptor = FetchDescriptor<ScheduleException>(
+            predicate: #Predicate { $0.id == recordID }
+        )
+        let existing = try context.fetch(descriptor).first
+        if let existing, existing.serverVersion >= serverVersion { return }
+
+        let exception: ScheduleException
+        if let existing {
+            exception = existing
+        } else {
+            exception = ScheduleException(
+                id: recordID,
+                scheduleID: scheduleID,
+                courseID: record.courseId,
+                originalDate: record.scheduleOriginalDate,
+                kind: kind,
+                changedStart: record.scheduleChangedStart,
+                changedEnd: record.scheduleChangedEnd,
+                movedToDate: record.scheduleMovedToDate,
+                locationOverride: record.scheduleLocation ?? "",
+                teacherOverride: record.scheduleTeacher ?? "",
+                note: record.scheduleNote ?? "",
+                serverVersion: serverVersion
+            )
+            context.insert(exception)
+        }
+        exception.scheduleID = scheduleID
+        exception.courseID = record.courseId
+        exception.originalDate = record.scheduleOriginalDate
+        exception.kind = kind
+        exception.changedStart = record.scheduleChangedStart
+        exception.changedEnd = record.scheduleChangedEnd
+        exception.movedToDate = record.scheduleMovedToDate
+        exception.locationOverride = record.scheduleLocation ?? ""
+        exception.teacherOverride = record.scheduleTeacher ?? ""
+        exception.note = record.scheduleNote ?? ""
+        exception.serverVersion = serverVersion
+        exception.updatedAt = .now
+        try context.save()
+    }
+
+    func deleteExceptionByID(_ id: UUID) throws {
+        let descriptor = FetchDescriptor<ScheduleException>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let exception = try context.fetch(descriptor).first else { return }
+        context.delete(exception)
+        try context.save()
+    }
+
+    // MARK: - Schedule-attributed session queries
+
+    func sessions(occurrenceKey: String) throws -> [ClassroomSession] {
+        let descriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.occurrenceKey == occurrenceKey }
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func ongoingSession() throws -> ClassroomSession? {
+        let descriptor = FetchDescriptor<ClassroomSession>(
+            predicate: #Predicate { $0.endTime == nil }
+        )
+        return try context.fetch(descriptor).first
     }
 }
 

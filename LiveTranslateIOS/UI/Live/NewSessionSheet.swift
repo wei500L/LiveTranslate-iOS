@@ -46,6 +46,7 @@ struct NewSessionSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: LTSpacing.l) {
                         titleBlock
+                        suggestedScheduleSection
                         courseSection
                         nameSection
                         directionSection
@@ -115,6 +116,10 @@ struct NewSessionSheet: View {
             if selectedCourseID == nil, let course = preselectedCourse {
                 selectCourse(course, prefillName: name.isEmpty)
             }
+            // Near-time class suggestions (suggestion-only; the user picks).
+            if selectedCourseID == nil && name.isEmpty {
+                loadSuggestedOccurrences()
+            }
             // The demo environment short-circuits real permission state so
             // the sheet never depends on (or prompts) the microphone.
             if environment.capabilities.assumesMicrophoneAuthorized {
@@ -148,6 +153,83 @@ struct NewSessionSheet: View {
     }
 
     // MARK: - Course
+
+    /// Auto-suggested classes near now (upcoming / in progress / just
+    /// ended, per the ScheduleViewModel windows). SUGGESTIONS ONLY —
+    /// tapping fills the course + name (the class's own default title);
+    /// overlapping candidates all show so the user picks, never a silent
+    /// guess, and nothing auto-starts.
+    @State private var suggestedOccurrences: [ScheduleCalculator.Occurrence] = []
+    @State private var suggestedCourseNames: [UUID: String] = [:]
+    @State private var suggestedLocations: [UUID: String] = [:]
+
+    @ViewBuilder
+    private var suggestedScheduleSection: some View {
+        if !suggestedOccurrences.isEmpty {
+            VStack(alignment: .leading, spacing: LTSpacing.xs) {
+                Text("按当前时间，这些课可能正在上课")
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.textTertiary)
+                ForEach(suggestedOccurrences.prefix(3)) { occurrence in
+                    Button {
+                        applySuggestion(occurrence)
+                    } label: {
+                        HStack(spacing: LTSpacing.s) {
+                            Image(systemName: "clock.badge.checkmark")
+                                .font(.system(size: 12))
+                                .foregroundStyle(LTColors.accentGreen)
+                            Text(suggestedCourseNames[occurrence.courseID ?? UUID()] ?? "课程")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(LTColors.textPrimary)
+                            if let location = suggestedLocations[occurrence.scheduleID],
+                               !location.isEmpty {
+                                Text(location)
+                                    .font(.footnote)
+                                    .foregroundStyle(LTColors.textTertiary)
+                            }
+                            Spacer()
+                            Text("使用")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(LTColors.accentGreen)
+                        }
+                        .padding(.horizontal, LTSpacing.m)
+                        .padding(.vertical, LTSpacing.xs + 1)
+                        .background(RoundedRectangle(cornerRadius: LTRadius.small)
+                            .fill(LTColors.surfacePrimary))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func applySuggestion(_ occurrence: ScheduleCalculator.Occurrence) {
+        guard let courseID = occurrence.courseID,
+              let course = courses.first(where: { $0.id == courseID })
+        else { return }
+        selectCourse(course, prefillName: true)
+    }
+
+    private func loadSuggestedOccurrences() {
+        let model = ScheduleViewModel()
+        model.attach(environment)
+        Task {
+            await model.reload()
+            let suggestions = model.suggestOccurrencesForNewSession()
+            suggestedOccurrences = suggestions
+            var names: [UUID: String] = [:]
+            var locations: [UUID: String] = [:]
+            for occurrence in suggestions {
+                if let courseID = occurrence.courseID,
+                   let course = try? environment.repository.course(id: courseID) {
+                    names[courseID] = course.name
+                }
+                locations[occurrence.scheduleID] = model.location(for: occurrence)
+            }
+            suggestedCourseNames = names
+            suggestedLocations = locations
+        }
+    }
 
     /// Course picker: chips of the user's courses plus standalone and a
     /// create entry. Selecting a course pre-fills the session name (still

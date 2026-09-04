@@ -103,6 +103,11 @@ final class AppSession {
             return false
         }
         environment.cloudSync?.shutdown()
+        // Class reminders live in the system notification center (global
+        // across accounts): the previous profile's pending notifications
+        // are cancelled; the new profile's window re-arms on its launch
+        // task (refreshClassReminders reads the new account's schedules).
+        environment.classReminders.cancelAll()
         switch profile {
         case .guest:
             accounts.setActive(nil)

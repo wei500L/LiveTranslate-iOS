@@ -28,6 +28,10 @@ enum SyncEntityType: String, Codable, Sendable {
     /// entry id). 21 chars — fits VARCHAR(32) on the 00008 table; the
     /// change-log columns are VARCHAR(32) since 00008 as well.
     case transcriptCorrection = "transcript_correction"
+    // Pre-class layer: recurring rules + dated exceptions. Wire names are
+    // 15/17 chars — both fit the server's VARCHAR(32) entity_type columns.
+    case courseSchedule = "course_schedule"
+    case scheduleException = "schedule_exception"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -290,6 +294,40 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var correctionChinese: String?
     var correctionModifiedAt: Date?
     var correctionNeedsRetranslation: Bool?
+    // course_schedule. The course reference rides the shared courseId
+    // sentinel field. Times are wall-clock seconds since midnight in the
+    // schedule's timezone; dates ride as "YYYY-MM-DD" strings (the
+    // schedule's timezone rules the calendar). Reminder lead: -1 none |
+    // 0 at start | >0 minutes before.
+    var scheduleWeekday: Int?
+    var scheduleStartSecs: Int?
+    var scheduleEndSecs: Int?
+    var scheduleRecurrence: String?
+    var scheduleParityAnchor: String?
+    var scheduleFirstWeekIsOdd: Bool?
+    var scheduleSemesterStart: String?
+    var scheduleSemesterEnd: String?
+    var scheduleTimezone: String?
+    var scheduleTeacher: String?
+    var scheduleLocation: String?
+    var scheduleNote: String?
+    var scheduleReminderMins: Int?
+    var scheduleEnabled: Bool?
+    var scheduleOnceDate: String?
+    // session schedule linkage: occurrence key + planned start of the
+    // class a session belongs to. Written once at session creation.
+    var scheduleOccurrenceKey: String?
+    var schedulePlannedStart: Date?
+    // Shared schedule reference: the schedule that owns an exception, and
+    // the schedule a session was started from. Absent (nil) keeps the
+    // server value; `UUID.nilSentinel` explicitly clears it.
+    var scheduleId: UUID?
+    // schedule_exception: originalDate "YYYY-MM-DD" ("" = ad-hoc extra).
+    var scheduleOriginalDate: String?
+    var scheduleExceptionKind: String?
+    var scheduleChangedStart: Int?
+    var scheduleChangedEnd: Int?
+    var scheduleMovedToDate: String?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -400,6 +438,32 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var correctionChinese: String?
     var correctionModifiedAt: Date?
     var correctionNeedsRetranslation: Bool?
+    // course_schedule / schedule_exception — names mirror the push payload
+    // (scheduleXxx family) so one CodingKeys set covers records and
+    // conflict payloads. Dates are "YYYY-MM-DD" strings.
+    var scheduleWeekday: Int?
+    var scheduleStartSecs: Int?
+    var scheduleEndSecs: Int?
+    var scheduleRecurrence: String?
+    var scheduleParityAnchor: String?
+    var scheduleFirstWeekIsOdd: Bool?
+    var scheduleSemesterStart: String?
+    var scheduleSemesterEnd: String?
+    var scheduleTimezone: String?
+    var scheduleTeacher: String?
+    var scheduleLocation: String?
+    var scheduleNote: String?
+    var scheduleReminderMins: Int?
+    var scheduleEnabled: Bool?
+    var scheduleOnceDate: String?
+    var scheduleOccurrenceKey: String?
+    var schedulePlannedStart: Date?
+    var scheduleId: UUID?
+    var scheduleOriginalDate: String?
+    var scheduleExceptionKind: String?
+    var scheduleChangedStart: Int?
+    var scheduleChangedEnd: Int?
+    var scheduleMovedToDate: String?
     var serverVersion: Int
     var deleted: Bool
 
@@ -485,6 +549,29 @@ struct SyncServerRecordDTO: Codable, Sendable {
         correctionChinese: String? = nil,
         correctionModifiedAt: Date? = nil,
         correctionNeedsRetranslation: Bool? = nil,
+        scheduleWeekday: Int? = nil,
+        scheduleStartSecs: Int? = nil,
+        scheduleEndSecs: Int? = nil,
+        scheduleRecurrence: String? = nil,
+        scheduleParityAnchor: String? = nil,
+        scheduleFirstWeekIsOdd: Bool? = nil,
+        scheduleSemesterStart: String? = nil,
+        scheduleSemesterEnd: String? = nil,
+        scheduleTimezone: String? = nil,
+        scheduleTeacher: String? = nil,
+        scheduleLocation: String? = nil,
+        scheduleNote: String? = nil,
+        scheduleReminderMins: Int? = nil,
+        scheduleEnabled: Bool? = nil,
+        scheduleOnceDate: String? = nil,
+        scheduleOccurrenceKey: String? = nil,
+        schedulePlannedStart: Date? = nil,
+        scheduleId: UUID? = nil,
+        scheduleOriginalDate: String? = nil,
+        scheduleExceptionKind: String? = nil,
+        scheduleChangedStart: Int? = nil,
+        scheduleChangedEnd: Int? = nil,
+        scheduleMovedToDate: String? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -566,6 +653,29 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.correctionChinese = correctionChinese
         self.correctionModifiedAt = correctionModifiedAt
         self.correctionNeedsRetranslation = correctionNeedsRetranslation
+        self.scheduleWeekday = scheduleWeekday
+        self.scheduleStartSecs = scheduleStartSecs
+        self.scheduleEndSecs = scheduleEndSecs
+        self.scheduleRecurrence = scheduleRecurrence
+        self.scheduleParityAnchor = scheduleParityAnchor
+        self.scheduleFirstWeekIsOdd = scheduleFirstWeekIsOdd
+        self.scheduleSemesterStart = scheduleSemesterStart
+        self.scheduleSemesterEnd = scheduleSemesterEnd
+        self.scheduleTimezone = scheduleTimezone
+        self.scheduleTeacher = scheduleTeacher
+        self.scheduleLocation = scheduleLocation
+        self.scheduleNote = scheduleNote
+        self.scheduleReminderMins = scheduleReminderMins
+        self.scheduleEnabled = scheduleEnabled
+        self.scheduleOnceDate = scheduleOnceDate
+        self.scheduleOccurrenceKey = scheduleOccurrenceKey
+        self.schedulePlannedStart = schedulePlannedStart
+        self.scheduleId = scheduleId
+        self.scheduleOriginalDate = scheduleOriginalDate
+        self.scheduleExceptionKind = scheduleExceptionKind
+        self.scheduleChangedStart = scheduleChangedStart
+        self.scheduleChangedEnd = scheduleChangedEnd
+        self.scheduleMovedToDate = scheduleMovedToDate
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -651,6 +761,29 @@ struct SyncServerRecordDTO: Codable, Sendable {
         correctionChinese = try container.decodeIfPresent(String.self, forKey: .correctionChinese)
         correctionModifiedAt = try container.decodeIfPresent(Date.self, forKey: .correctionModifiedAt)
         correctionNeedsRetranslation = try container.decodeIfPresent(Bool.self, forKey: .correctionNeedsRetranslation)
+        scheduleWeekday = try container.decodeIfPresent(Int.self, forKey: .scheduleWeekday)
+        scheduleStartSecs = try container.decodeIfPresent(Int.self, forKey: .scheduleStartSecs)
+        scheduleEndSecs = try container.decodeIfPresent(Int.self, forKey: .scheduleEndSecs)
+        scheduleRecurrence = try container.decodeIfPresent(String.self, forKey: .scheduleRecurrence)
+        scheduleParityAnchor = try container.decodeIfPresent(String.self, forKey: .scheduleParityAnchor)
+        scheduleFirstWeekIsOdd = try container.decodeIfPresent(Bool.self, forKey: .scheduleFirstWeekIsOdd)
+        scheduleSemesterStart = try container.decodeIfPresent(String.self, forKey: .scheduleSemesterStart)
+        scheduleSemesterEnd = try container.decodeIfPresent(String.self, forKey: .scheduleSemesterEnd)
+        scheduleTimezone = try container.decodeIfPresent(String.self, forKey: .scheduleTimezone)
+        scheduleTeacher = try container.decodeIfPresent(String.self, forKey: .scheduleTeacher)
+        scheduleLocation = try container.decodeIfPresent(String.self, forKey: .scheduleLocation)
+        scheduleNote = try container.decodeIfPresent(String.self, forKey: .scheduleNote)
+        scheduleReminderMins = try container.decodeIfPresent(Int.self, forKey: .scheduleReminderMins)
+        scheduleEnabled = try container.decodeIfPresent(Bool.self, forKey: .scheduleEnabled)
+        scheduleOnceDate = try container.decodeIfPresent(String.self, forKey: .scheduleOnceDate)
+        scheduleOccurrenceKey = try container.decodeIfPresent(String.self, forKey: .scheduleOccurrenceKey)
+        schedulePlannedStart = try container.decodeIfPresent(Date.self, forKey: .schedulePlannedStart)
+        scheduleId = try container.decodeIfPresent(UUID.self, forKey: .scheduleId)
+        scheduleOriginalDate = try container.decodeIfPresent(String.self, forKey: .scheduleOriginalDate)
+        scheduleExceptionKind = try container.decodeIfPresent(String.self, forKey: .scheduleExceptionKind)
+        scheduleChangedStart = try container.decodeIfPresent(Int.self, forKey: .scheduleChangedStart)
+        scheduleChangedEnd = try container.decodeIfPresent(Int.self, forKey: .scheduleChangedEnd)
+        scheduleMovedToDate = try container.decodeIfPresent(String.self, forKey: .scheduleMovedToDate)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -701,4 +834,6 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var studyCardCount: Int?
     var studyTaskCount: Int?
     var transcriptCorrectionCount: Int?
+    var courseScheduleCount: Int?
+    var scheduleExceptionCount: Int?
 }

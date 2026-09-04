@@ -498,6 +498,30 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    private func enqueueScheduleUpsert(_ schedule: CourseSchedule) {
+        let item = SyncOutboxItem(
+            entityType: .courseSchedule,
+            entityID: schedule.id,
+            operation: .upsert,
+            baseServerVersion: schedule.serverVersion,
+            payload: Self.payload(for: schedule)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueExceptionUpsert(_ exception: ScheduleException) {
+        let item = SyncOutboxItem(
+            entityType: .scheduleException,
+            entityID: exception.id,
+            operation: .upsert,
+            baseServerVersion: exception.serverVersion,
+            payload: Self.payload(for: exception)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -804,7 +828,8 @@ final class CloudSyncService: AuthenticationService {
     ) {
         switch entityType {
         case .session, .entry, .course, .note, .studyReview, .attachment,
-             .term, .studyCard, .studyTask, .transcriptCorrection:
+             .term, .studyCard, .studyTask, .transcriptCorrection,
+             .courseSchedule, .scheduleException:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -861,6 +886,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteTaskByID(entityID)
         case .transcriptCorrection:
             try? repository.deleteCorrectionByID(entityID)
+        case .courseSchedule:
+            try? repository.deleteScheduleByID(entityID)
+        case .scheduleException:
+            try? repository.deleteExceptionByID(entityID)
         }
     }
 
@@ -907,6 +936,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteStudyTask(record: record, serverVersion: serverVersion)
         case .transcriptCorrection:
             try? repository.applyRemoteCorrection(record: record, serverVersion: serverVersion)
+        case .courseSchedule:
+            try? repository.applyRemoteSchedule(record: record, serverVersion: serverVersion)
+        case .scheduleException:
+            try? repository.applyRemoteException(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -1167,7 +1200,15 @@ final class CloudSyncService: AuthenticationService {
             // standalone session rides as the explicit-clear sentinel (nil
             // would mean "keep the server value" and never propagate an
             // unassignment). The server treats the sentinel as "no course".
-            courseId: session.courseID ?? .nilSentinel
+            courseId: session.courseID ?? .nilSentinel,
+            // Schedule attribution rides once at creation and never
+            // changes: nil keeps the server value (a manual start after a
+            // synced schedule-launched start keeps its stored attribution
+            // — history is immutable), a value assigns it. The occurrence
+            // key is an opaque grouping string server-side.
+            scheduleId: session.scheduleID,
+            scheduleOccurrenceKey: session.occurrenceKey,
+            schedulePlannedStart: session.plannedStart
         )
     }
 
@@ -1193,6 +1234,57 @@ final class CloudSyncService: AuthenticationService {
             correctionChinese: correction.chineseText,
             correctionModifiedAt: correction.modifiedAt,
             correctionNeedsRetranslation: correction.needsRetranslation
+        )
+    }
+
+    /// Course schedule. Full rule state on every upsert; dates ride as
+    /// "YYYY-MM-DD" day strings in the schedule's own timezone calendar
+    /// (day-level values — never instants). The course reference follows
+    /// the sentinel rule (nil course = 未归类, explicitly cleared).
+    static func payload(for schedule: CourseSchedule) -> SyncPushPayloadDTO {
+        let tz = ScheduleCalculator.zone(schedule)
+        return SyncPushPayloadDTO(
+            scheduleWeekday: schedule.weekday,
+            scheduleStartSecs: schedule.startSecs,
+            scheduleEndSecs: schedule.endSecs,
+            scheduleRecurrence: schedule.recurrenceRaw,
+            scheduleParityAnchor: schedule.weekParityAnchor.map {
+                ScheduleCalculator.formatDay($0)
+            },
+            scheduleFirstWeekIsOdd: schedule.firstWeekIsOdd,
+            scheduleSemesterStart: ScheduleCalculator.formatDay(schedule.semesterStart),
+            scheduleSemesterEnd: ScheduleCalculator.formatDay(schedule.semesterEnd),
+            scheduleTimezone: schedule.timezoneID,
+            scheduleTeacher: schedule.teacherOverride.isEmpty ? nil : schedule.teacherOverride,
+            scheduleLocation: schedule.locationOverride.isEmpty ? nil : schedule.locationOverride,
+            scheduleNote: schedule.note.isEmpty ? nil : schedule.note,
+            scheduleReminderMins: schedule.reminderLeadMins,
+            scheduleEnabled: schedule.isEnabled,
+            scheduleOnceDate: schedule.onceDate.map { ScheduleCalculator.formatDay($0) },
+            courseId: schedule.courseID ?? .nilSentinel
+        )
+    }
+
+    /// Schedule exception. scheduleId is REQUIRED (the owning rule);
+    /// originalDate nil ⇒ ad-hoc extra occurrence (the wire field stays
+    /// absent — the server keeps its stored value, and ad-hoc rows never
+    /// carry one anyway).
+    static func payload(for exception: ScheduleException) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            scheduleId: exception.scheduleID,
+            scheduleOriginalDate: exception.originalDate.map {
+                ScheduleCalculator.formatDay($0)
+            },
+            scheduleExceptionKind: exception.kindRaw,
+            scheduleChangedStart: exception.changedStart,
+            scheduleChangedEnd: exception.changedEnd,
+            scheduleMovedToDate: exception.movedToDate.map {
+                ScheduleCalculator.formatDay($0)
+            },
+            scheduleTeacher: exception.teacherOverride.isEmpty ? nil : exception.teacherOverride,
+            scheduleLocation: exception.locationOverride.isEmpty ? nil : exception.locationOverride,
+            scheduleNote: exception.note.isEmpty ? nil : exception.note,
+            courseId: exception.courseID
         )
     }
 
@@ -1364,6 +1456,12 @@ protocol TranscriptMutationObserving: AnyObject {
     func taskDeleted(id: UUID)
     func correctionUpserted(_ correction: TranscriptCorrection)
     func correctionDeleted(id: UUID)
+    func scheduleCreated(_ schedule: CourseSchedule)
+    func scheduleUpdated(_ schedule: CourseSchedule)
+    func scheduleDeleted(id: UUID)
+    func exceptionCreated(_ exception: ScheduleException)
+    func exceptionUpdated(_ exception: ScheduleException)
+    func exceptionDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -1473,5 +1571,29 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func correctionDeleted(id: UUID) {
         enqueueDelete(entityType: .transcriptCorrection, entityID: id)
+    }
+
+    func scheduleCreated(_ schedule: CourseSchedule) {
+        enqueueScheduleUpsert(schedule)
+    }
+
+    func scheduleUpdated(_ schedule: CourseSchedule) {
+        enqueueScheduleUpsert(schedule)
+    }
+
+    func scheduleDeleted(id: UUID) {
+        enqueueDelete(entityType: .courseSchedule, entityID: id)
+    }
+
+    func exceptionCreated(_ exception: ScheduleException) {
+        enqueueExceptionUpsert(exception)
+    }
+
+    func exceptionUpdated(_ exception: ScheduleException) {
+        enqueueExceptionUpsert(exception)
+    }
+
+    func exceptionDeleted(id: UUID) {
+        enqueueDelete(entityType: .scheduleException, entityID: id)
     }
 }
