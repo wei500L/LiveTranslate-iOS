@@ -225,8 +225,9 @@ enum ExamExporter {
                 )
             }
         )
-        guard let data = try? JSONEncoder(outputFormatting: [.prettyPrinted, .sortedKeys])
-            .encode(payload) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(payload) else { return nil }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("LiveTranslate-学习计划-\(plan.id.uuidString.prefix(8)).json")
         do {

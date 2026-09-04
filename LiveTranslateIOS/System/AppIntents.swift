@@ -1,5 +1,7 @@
 import Foundation
-import AppIntents
+// @preconcurrency: AppShortcut is not Sendable in the SDK (the compiler's
+// own remediation hint); the static shortcuts list is immutable.
+@preconcurrency import AppIntents
 
 /// The app's App Intents — real actions over the ACTIVE profile's data,
 /// performing in the app process (the system launches the app when a
@@ -179,7 +181,7 @@ struct CreateTaskIntent: AppIntent {
     @Parameter(title: "课程")
     var course: CourseEntity?
 
-    @Parameter(title: "截止日期", default: nil)
+    @Parameter(title: "截止日期")
     var dueDate: Date?
 
     init() {}
@@ -214,8 +216,10 @@ struct CreateTaskIntent: AppIntent {
 // MARK: - App Shortcuts (Siri phrases)
 
 struct LiveTranslateShortcuts: AppShortcutsProvider {
-    static var appShortcutsIcon: AppShortcutIcon {
-        AppShortcutIcon(systemImageName: "waveform")
+    // AppShortcutIcon was removed from the SDK; the modern provider knob
+    // is the tile color (the per-shortcut systemImageName stays below).
+    static var shortcutTileColor: ShortcutTileColor {
+        .blue
     }
 
     static let appShortcuts: [AppShortcut] = [

@@ -274,7 +274,9 @@ final class ClassroomPlaybackService {
 /// One shared delegate object (AVAudioPlayer's delegate is not
 /// per-instance retainable the way closures are; a single owner pointer
 /// keeps it simple — only one playback service exists per app).
-private final class PlaybackDelegate: NSObject, AVAudioPlayerDelegate {
+/// @unchecked Sendable: the only mutable state (`owner`) is MainActor-
+/// isolated, and the delegate callbacks hop to the main actor themselves.
+private final class PlaybackDelegate: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     static let shared = PlaybackDelegate()
     @MainActor weak var owner: ClassroomPlaybackService?
 
