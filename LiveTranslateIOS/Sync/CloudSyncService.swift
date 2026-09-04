@@ -635,7 +635,7 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
-    private func enqueueStudyPlanItemUpsert(_ item row: StudyPlanItem) {
+    private func enqueueStudyPlanItemUpsert(_ row: StudyPlanItem) {
         var payload = Self.payload(for: row)
         payload.planId = row.planID
         payload.examId = row.examID ?? .nilSentinel

@@ -87,7 +87,7 @@ struct ScheduleICSExporter {
 
             // Ad-hoc extras: one-off VEVENTs.
             for exception in exceptions where
-                $0.scheduleID == schedule.id && $0.kind == .adHoc {
+                exception.scheduleID == schedule.id && exception.kind == .adHoc {
                 let day = exception.movedToDate ?? exception.originalDate ?? .now
                 let startSecs = exception.changedStart ?? schedule.startSecs
                 let endSecs = exception.changedEnd ?? schedule.endSecs
