@@ -170,6 +170,11 @@ struct ScheduleScreen: View {
         }
     }
 
+    /// 再开一堂 — the extra-start confirmation's controlled restart.
+    private func forceStartOccurrence(_ occurrence: ScheduleCalculator.Occurrence) {
+        Task { _ = await viewModel.startOccurrence(occurrence, force: true) }
+    }
+
     // MARK: - Content
 
     private var content: some View {
@@ -632,8 +637,4 @@ struct ScheduleOccurrenceCard: View {
         return formatter.string(from: date)
     }
 
-    /// 再开一堂 — the extra-start confirmation's controlled restart.
-    private func forceStartOccurrence(_ occurrence: ScheduleCalculator.Occurrence) {
-        Task { _ = await viewModel.startOccurrence(occurrence, force: true) }
-    }
 }

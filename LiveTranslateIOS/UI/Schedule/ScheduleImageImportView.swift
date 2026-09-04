@@ -271,7 +271,10 @@ struct ScheduleImageImportView: View {
     }
 
     /// 2048px JPEG — the same budget image analysis uses.
-    private static func jpegBytes(from image: UIImage) -> Data {
+    // nonisolated: pure offscreen rendering, called from the detached
+    // normalization task (UIImage + UIGraphicsImageRenderer are
+    // documented thread-safe for offscreen work).
+    nonisolated private static func jpegBytes(from image: UIImage) -> Data {
         let longEdge = max(image.size.width, image.size.height)
         var scaled = image
         if longEdge > 2048 {
@@ -300,7 +303,6 @@ struct ScheduleImageImportView: View {
     /// Sync and reminder scheduling follow automatically — the draft
     /// state never touched the store before this point.
     private func save() {
-        guard let environment else { return }
         let tz = TimeZone(identifier: timezoneID) ?? .current
         let anchor = ScheduleCalculator.weekStart(of: weekParityAnchor, timeZone: tz)
 

@@ -83,7 +83,7 @@ final class ScheduleViewModel {
     }
 
     var courseColorIndex: (ScheduleCalculator.Occurrence) -> Int {
-        { occurrence in course(for: occurrence)?.colorIndex ?? 0 }
+        { [weak self] occurrence in self?.course(for: occurrence)?.colorIndex ?? 0 }
     }
 
     /// Whether the schedule row backing an occurrence still exists (a

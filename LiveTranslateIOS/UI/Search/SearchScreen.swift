@@ -553,9 +553,9 @@ struct SearchScreen: View {
                 .first(where: { $0.localizedCaseInsensitiveContains(query) }) {
                 return (hit, .review)
             }
-            let itemHit = content.keyPoints.map(\.text)
-                .appending(content.assignments.map(\.text))
-                .appending(content.uncertainties.map(\.text))
+            let itemHit = (content.keyPoints.map(\.text)
+                + content.assignments.map(\.text)
+                + content.uncertainties.map(\.text))
                 .first { $0.localizedCaseInsensitiveContains(query) }
             if let itemHit {
                 return (itemHit, .review)
