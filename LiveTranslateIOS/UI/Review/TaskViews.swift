@@ -611,7 +611,13 @@ struct TaskDetailView: View {
                 .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity, minHeight: LTSpacing.minTouchTarget)
             }
-            .buttonStyle(doneStyle)
+            // Type-erase: the two styles are distinct ButtonStyle types
+            // and cannot meet in a plain ternary.
+            .buttonStyle(
+                status == .done
+                    ? AnyButtonStyle(LTSecondaryButtonStyle())
+                    : AnyButtonStyle(LTPrimaryButtonStyle())
+            )
 
             if status != .done, task.dueAt != nil {
                 Toggle(isOn: $reminderEnabled) {
@@ -682,15 +688,3 @@ struct TaskDetailView: View {
     }
 }
 
-/// The toggle button's style by state — the two styles are distinct types
-/// and cannot meet in a ternary.
-private extension TaskRowView {
-    @ViewBuilder
-    var doneStyle: some ButtonStyle {
-        if status == .done {
-            LTSecondaryButtonStyle()
-        } else {
-            LTPrimaryButtonStyle()
-        }
-    }
-}

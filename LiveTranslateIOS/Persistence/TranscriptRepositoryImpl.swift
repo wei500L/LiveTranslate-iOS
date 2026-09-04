@@ -2899,11 +2899,11 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 id: recordID,
                 scheduleID: scheduleID,
                 courseID: record.courseId,
-                originalDate: record.scheduleOriginalDate,
+                originalDate: record.scheduleOriginalDate.flatMap(ScheduleCalculator.parseDay),
                 kind: kind,
                 changedStart: record.scheduleChangedStart,
                 changedEnd: record.scheduleChangedEnd,
-                movedToDate: record.scheduleMovedToDate,
+                movedToDate: record.scheduleMovedToDate.flatMap(ScheduleCalculator.parseDay),
                 locationOverride: record.scheduleLocation ?? "",
                 teacherOverride: record.scheduleTeacher ?? "",
                 note: record.scheduleNote ?? "",
@@ -2913,11 +2913,11 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
         }
         exception.scheduleID = scheduleID
         exception.courseID = record.courseId
-        exception.originalDate = record.scheduleOriginalDate
+        exception.originalDate = record.scheduleOriginalDate.flatMap(ScheduleCalculator.parseDay)
         exception.kind = kind
         exception.changedStart = record.scheduleChangedStart
         exception.changedEnd = record.scheduleChangedEnd
-        exception.movedToDate = record.scheduleMovedToDate
+        exception.movedToDate = record.scheduleMovedToDate.flatMap(ScheduleCalculator.parseDay)
         exception.locationOverride = record.scheduleLocation ?? ""
         exception.teacherOverride = record.scheduleTeacher ?? ""
         exception.note = record.scheduleNote ?? ""
