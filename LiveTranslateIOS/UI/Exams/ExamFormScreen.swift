@@ -55,7 +55,7 @@ struct ExamFormScreen: View {
                 Toggle("已知开始时间", isOn: $hasTime.animation())
                 if hasTime {
                     DatePicker("开始时间", selection: $time, displayedComponents: .hourAndMinute)
-                    Toggle("已知结束时间", isOn: $hasEndTime.animation)
+                    Toggle("已知结束时间", isOn: $hasEndTime.animation())
                     if hasEndTime {
                         DatePicker("结束时间", selection: $endTime, displayedComponents: .hourAndMinute)
                     }

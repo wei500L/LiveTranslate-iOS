@@ -207,7 +207,7 @@ final class ExamReminderScheduler {
         guard await requestAuthorizationIfNeeded() else { return false }
         studyReminderMinuteOfDay = minuteOfDay
         persist()
-        scheduleStudyReminder()
+        await scheduleStudyReminder()
         return true
     }
 
@@ -219,7 +219,7 @@ final class ExamReminderScheduler {
         )
     }
 
-    private func scheduleStudyReminder() {
+    private func scheduleStudyReminder() async {
         center.removePendingNotificationRequests(
             withIdentifiers: [Self.studyNotificationID]
         )
