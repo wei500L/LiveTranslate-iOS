@@ -84,7 +84,12 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     /// category carries its route target in userInfo; the landing screen
     /// resolves it against the live store (a deleted row shows 来源已不存在
     /// instead of a dead screen).
-    func userNotificationCenter(
+    ///
+    /// nonisolated (the response parameters are not Sendable, so the
+    /// implementation may not be actor-isolated): the Sendable routing
+    /// values are extracted first, then the routing itself hops to the
+    /// main actor.
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
@@ -93,23 +98,26 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
 
         let classKey = userInfo[ClassReminderScheduler.occurrenceKeyUserInfo] as? String
         let examIDString = userInfo[ExamReminderScheduler.examIDUserInfo] as? String
+        let examID = examIDString.flatMap(UUID.init(uuidString:))
 
-        // Cold start: App.onAppear attaches the flow; if the delegate
-        // fires before that, the box is nil and the tap is a no-op
-        // (the notification stays in Notification Center for re-tap).
-        switch category {
-        case ClassReminderScheduler.categoryID:
-            if let classKey {
-                flowBox?.flow?.openClassReminder(occurrenceKey: classKey)
+        await MainActor.run {
+            // Cold start: App.onAppear attaches the flow; if the delegate
+            // fires before that, the box is nil and the tap is a no-op
+            // (the notification stays in Notification Center for re-tap).
+            switch category {
+            case ClassReminderScheduler.categoryID:
+                if let classKey {
+                    flowBox?.flow?.openClassReminder(occurrenceKey: classKey)
+                }
+            case ExamReminderScheduler.categoryID:
+                if let examID {
+                    flowBox?.flow?.openExamReminder(examID: examID)
+                }
+            case ExamReminderScheduler.studyCategoryID:
+                flowBox?.flow?.openStudyPlanReminder()
+            default:
+                break
             }
-        case ExamReminderScheduler.categoryID:
-            if let examIDString, let examID = UUID(uuidString: examIDString) {
-                flowBox?.flow?.openExamReminder(examID: examID)
-            }
-        case ExamReminderScheduler.studyCategoryID:
-            flowBox?.flow?.openStudyPlanReminder()
-        default:
-            break
         }
     }
 }
