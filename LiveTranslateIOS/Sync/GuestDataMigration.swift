@@ -374,20 +374,20 @@ final class GuestDataMigration {
             guard let scheduleID = exception.scheduleID else { continue }
             let record = SyncServerRecordDTO(
                 id: exception.id,
-                scheduleId: scheduleID,
                 courseId: exception.courseID,
+                scheduleTeacher: exception.teacherOverride.isEmpty ? nil : exception.teacherOverride,
+                scheduleLocation: exception.locationOverride.isEmpty ? nil : exception.locationOverride,
+                scheduleNote: exception.note.isEmpty ? nil : exception.note,
+                scheduleId: scheduleID,
                 scheduleOriginalDate: exception.originalDate.map {
                     ScheduleCalculator.formatDay($0)
-                },
+                    },
                 scheduleExceptionKind: exception.kindRaw,
                 scheduleChangedStart: exception.changedStart,
                 scheduleChangedEnd: exception.changedEnd,
                 scheduleMovedToDate: exception.movedToDate.map {
                     ScheduleCalculator.formatDay($0)
-                },
-                scheduleTeacher: exception.teacherOverride.isEmpty ? nil : exception.teacherOverride,
-                scheduleLocation: exception.locationOverride.isEmpty ? nil : exception.locationOverride,
-                scheduleNote: exception.note.isEmpty ? nil : exception.note,
+                    },
                 serverVersion: 0
             )
             try? repository.applyRemoteException(record: record, serverVersion: 0)
@@ -410,10 +410,10 @@ final class GuestDataMigration {
             let record = SyncServerRecordDTO(
                 id: material.id,
                 title: material.title,
-                courseId: material.courseID,
                 sessionId: material.sessionID,
-                scheduleOccurrenceKey: material.occurrenceKey ?? "",
+                courseId: material.courseID,
                 sourceAttachmentId: material.sourceAttachmentID,
+                scheduleOccurrenceKey: material.occurrenceKey ?? "",
                 materialKind: material.kindRaw,
                 materialMime: material.mimeType.isEmpty ? nil : material.mimeType,
                 materialFileName: material.originalFileName.isEmpty ? nil : material.originalFileName,
@@ -462,10 +462,10 @@ final class GuestDataMigration {
         for annotation in reader.materialAnnotationSnapshots() {
             let record = SyncServerRecordDTO(
                 id: annotation.id,
+                noteText: annotation.text.isEmpty ? nil : annotation.text,
                 materialId: annotation.materialID,
                 materialPageNumber: annotation.pageNumber,
                 materialAnnotationKind: annotation.kindRaw,
-                noteText: annotation.text.isEmpty ? nil : annotation.text,
                 serverVersion: 0
             )
             try? repository.applyRemoteMaterialAnnotation(record: record, serverVersion: 0)
@@ -484,6 +484,8 @@ final class GuestDataMigration {
         for message in reader.assistantMessageSnapshots() {
             let record = SyncServerRecordDTO(
                 id: message.id,
+                sessionId: message.scopeSessionID,
+                materialId: message.scopeMaterialID,
                 threadId: message.threadID,
                 assistantRole: message.roleRaw,
                 assistantText: message.text.isEmpty ? nil : message.text,
@@ -492,8 +494,6 @@ final class GuestDataMigration {
                 assistantEvidence: message.visualEvidenceJSON.isEmpty ? nil : message.visualEvidenceJSON,
                 assistantAnswer: message.answerJSON.isEmpty ? nil : message.answerJSON,
                 assistantModel: message.answerModel.isEmpty ? nil : message.answerModel,
-                materialId: message.scopeMaterialID,
-                sessionId: message.scopeSessionID,
                 serverVersion: 0
             )
             try? repository.applyRemoteAssistantMessage(record: record, serverVersion: 0)
@@ -529,7 +529,6 @@ final class GuestDataMigration {
         for topic in reader.examTopicSnapshots() {
             let record = SyncServerRecordDTO(
                 id: topic.id,
-                examId: topic.examID,
                 title: topic.title,
                 topicDetail: topic.detail.isEmpty ? nil : topic.detail,
                 topicImportance: topic.importanceRaw,
@@ -537,6 +536,7 @@ final class GuestDataMigration {
                 topicStatus: topic.statusRaw,
                 topicSource: topic.sourceJSON.isEmpty ? nil : topic.sourceJSON,
                 topicUserEdited: topic.userEdited,
+                examId: topic.examID,
                 serverVersion: 0
             )
             try? repository.applyRemoteExamTopic(record: record, serverVersion: 0)
@@ -544,7 +544,6 @@ final class GuestDataMigration {
         for plan in reader.studyPlanSnapshots() {
             let record = SyncServerRecordDTO(
                 id: plan.id,
-                examId: plan.examID,
                 title: plan.title,
                 planStartDate: plan.startDateKey,
                 planEndDate: plan.endDateKey,
@@ -559,6 +558,7 @@ final class GuestDataMigration {
                 planFocusTopics: plan.focusTopicsJSON.isEmpty ? nil : plan.focusTopicsJSON,
                 planBlockedTimes: plan.blockedTimesJSON.isEmpty ? nil : plan.blockedTimesJSON,
                 planStatus: plan.statusRaw,
+                examId: plan.examID,
                 serverVersion: 0
             )
             try? repository.applyRemoteStudyPlan(record: record, serverVersion: 0)
@@ -566,8 +566,6 @@ final class GuestDataMigration {
         for item in reader.studyPlanItemSnapshots() {
             let record = SyncServerRecordDTO(
                 id: item.id,
-                planId: item.planID,
-                examId: item.examID,
                 title: item.title,
                 planItemDate: item.itemDateKey,
                 planItemKind: item.kindRaw,
@@ -579,6 +577,8 @@ final class GuestDataMigration {
                 planItemSource: item.sourceJSON.isEmpty ? nil : item.sourceJSON,
                 planItemUserNote: item.userNote.isEmpty ? nil : item.userNote,
                 planItemUserEdited: item.userEdited,
+                examId: item.examID,
+                planId: item.planID,
                 serverVersion: 0
             )
             try? repository.applyRemoteStudyPlanItem(record: record, serverVersion: 0)
@@ -586,15 +586,15 @@ final class GuestDataMigration {
         for activity in reader.studyActivitySnapshots() {
             let record = SyncServerRecordDTO(
                 id: activity.id,
-                planItemId: activity.planItemID,
-                examId: activity.examID,
                 courseId: activity.courseID,
-                topicId: activity.topicID,
+                activityStatus: activity.statusRaw,
                 activityStartedAt: activity.startedAt,
                 activityEndedAt: activity.endedAt,
                 activityDurationSeconds: activity.durationSeconds,
-                activityStatus: activity.statusRaw,
                 activityNote: activity.note.isEmpty ? nil : activity.note,
+                examId: activity.examID,
+                planItemId: activity.planItemID,
+                topicId: activity.topicID,
                 serverVersion: 0
             )
             try? repository.applyRemoteStudyActivity(record: record, serverVersion: 0)
@@ -647,6 +647,9 @@ final class GuestDataMigration {
         for term in reader.termSnapshots() {
             let record = SyncServerRecordDTO(
                 id: term.id,
+                sessionId: term.sessionID,
+                entryId: term.sourceEntryID,
+                courseId: term.courseID,
                 termRussian: term.russian,
                 termChinese: term.chinese,
                 termExplanation: term.explanation.isEmpty ? nil : term.explanation,
@@ -655,9 +658,6 @@ final class GuestDataMigration {
                 termSourceSessions: term.sourceSessionIDsJSON.isEmpty ? nil : term.sourceSessionIDsJSON,
                 termFavorite: term.isFavorite,
                 termStatus: term.statusRaw,
-                courseId: term.courseID,
-                sessionId: term.sessionID,
-                entryId: term.sourceEntryID,
                 sourceAttachmentId: term.sourceAttachmentID,
                 sourceReviewId: term.sourceReviewID,
                 materialId: term.sourceMaterialID,
@@ -669,6 +669,9 @@ final class GuestDataMigration {
         for card in reader.cardSnapshots() {
             let record = SyncServerRecordDTO(
                 id: card.id,
+                sessionId: card.sessionID,
+                entryId: card.sourceEntryID,
+                courseId: card.courseID,
                 cardFront: card.front,
                 cardBack: card.back,
                 cardType: card.typeRaw,
@@ -680,9 +683,6 @@ final class GuestDataMigration {
                 cardDueAt: card.dueAt,
                 cardLastReviewedAt: card.lastReviewedAt,
                 cardLastGrade: card.lastGradeRaw.isEmpty ? nil : card.lastGradeRaw,
-                courseId: card.courseID,
-                sessionId: card.sessionID,
-                entryId: card.sourceEntryID,
                 sourceAttachmentId: card.sourceAttachmentID,
                 sourceTermId: card.sourceTermID,
                 materialId: card.sourceMaterialID,
@@ -695,6 +695,9 @@ final class GuestDataMigration {
             let record = SyncServerRecordDTO(
                 id: task.id,
                 title: task.title,
+                sessionId: task.sessionID,
+                entryId: task.sourceEntryID,
+                courseId: task.courseID,
                 taskDetail: task.detail.isEmpty ? nil : task.detail,
                 taskDueAt: task.dueAt,
                 taskPriority: task.priorityRaw,
@@ -703,9 +706,6 @@ final class GuestDataMigration {
                 taskUncertainty: task.uncertainty.isEmpty ? nil : task.uncertainty,
                 taskUserNote: task.userNote.isEmpty ? nil : task.userNote,
                 taskCompletedAt: task.completedAt,
-                courseId: task.courseID,
-                sessionId: task.sessionID,
-                entryId: task.sourceEntryID,
                 sourceAttachmentId: task.sourceAttachmentID,
                 sourceReviewId: task.sourceReviewID,
                 materialId: task.sourceMaterialID,

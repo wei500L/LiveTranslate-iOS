@@ -21,7 +21,7 @@ struct StudyActivityCard: View {
                             ? LTColors.warning : LTColors.accentGreen)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(environment.studyActivityTracker.isPaused ? "学习已暂停" : "正在学习")
-                            .font(.cardTitle)
+                            .font(LTTypography.cardTitle)
                             .foregroundStyle(LTColors.textPrimary)
                         Text(activityTitle(activity))
                             .font(LTTypography.caption)

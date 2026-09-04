@@ -277,7 +277,7 @@ struct TodayView: View {
                 LTIconBadge(symbol: "rectangle.on.rectangle", tint: LTColors.accentGreen, size: 40)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("今日复习")
-                        .font(.cardTitle)
+                        .font(LTTypography.cardTitle)
                         .foregroundStyle(LTColors.textPrimary)
                     Text(reviewSummaryLine)
                         .font(.footnote)

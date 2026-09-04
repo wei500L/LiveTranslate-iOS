@@ -58,13 +58,7 @@ struct NormalizedRectEditor: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(
-                // Type-erase: the two branches are different opaque
-                // `some Gesture` types and cannot meet in a ?:.
-                isSelecting
-                    ? AnyGesture(selectDrag(in: frame))
-                    : AnyGesture(panDrag(in: frame))
-            )
+            .gesture(modeDrag(in: frame))
             .simultaneousGesture(
                 isSelecting ? nil : MagnificationGesture()
                     .onChanged { value in
@@ -104,6 +98,18 @@ struct NormalizedRectEditor: View {
                 .frame(width: handleRadius * 2, height: handleRadius * 2)
                 .position(handlePoint(corner, window: window))
                 .allowsHitTesting(false)
+        }
+    }
+
+    /// The mode-dependent drag: select/resize in select mode, zoom-pan in
+    /// browse mode. @GestureBuilder (not ?:) — the two gestures are
+    /// distinct opaque types and cannot meet in a ternary.
+    @GestureBuilder
+    private func modeDrag(in frame: CGRect) -> some Gesture {
+        if isSelecting {
+            selectDrag(in: frame)
+        } else {
+            panDrag(in: frame)
         }
     }
 

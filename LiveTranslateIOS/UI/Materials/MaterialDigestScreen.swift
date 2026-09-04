@@ -400,10 +400,10 @@ struct MaterialDigestScreen: View {
             front: formula.text,
             back: formula.detail.isEmpty ? formula.text : formula.detail,
             type: .formula,
-            origin: .ai,
             courseID: material.courseID,
             sourceMaterialID: material.id,
-            sourceMaterialPage: formula.pageRefs.first ?? 0
+            sourceMaterialPage: formula.pageRefs.first ?? 0,
+            origin: .ai
         ))
         savedCardKeys.insert("f-\(formula.id)")
     }
@@ -415,8 +415,8 @@ struct MaterialDigestScreen: View {
         _ = try? environment.repository.addTask(TaskDraft(
             title: assignment.text,
             detail: assignment.detail,
-            origin: .ai,
             status: .pendingConfirm,
+            origin: .ai,
             courseID: material.courseID,
             sourceMaterialID: material.id,
             sourceMaterialPage: assignment.pageRefs.first ?? 0

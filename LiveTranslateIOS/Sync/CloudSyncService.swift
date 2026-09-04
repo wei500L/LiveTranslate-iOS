@@ -1524,9 +1524,9 @@ final class CloudSyncService: AuthenticationService {
             // synced schedule-launched start keeps its stored attribution
             // — history is immutable), a value assigns it. The occurrence
             // key is an opaque grouping string server-side.
-            scheduleId: session.scheduleID,
             scheduleOccurrenceKey: session.occurrenceKey,
-            schedulePlannedStart: session.plannedStart
+            schedulePlannedStart: session.plannedStart,
+            scheduleId: session.scheduleID
         )
     }
 
@@ -1562,6 +1562,7 @@ final class CloudSyncService: AuthenticationService {
     static func payload(for schedule: CourseSchedule) -> SyncPushPayloadDTO {
         let tz = ScheduleCalculator.zone(schedule)
         return SyncPushPayloadDTO(
+            courseId: schedule.courseID ?? .nilSentinel,
             scheduleWeekday: schedule.weekday,
             scheduleStartSecs: schedule.startSecs,
             scheduleEndSecs: schedule.endSecs,
@@ -1578,8 +1579,7 @@ final class CloudSyncService: AuthenticationService {
             scheduleNote: schedule.note.isEmpty ? nil : schedule.note,
             scheduleReminderMins: schedule.reminderLeadMins,
             scheduleEnabled: schedule.isEnabled,
-            scheduleOnceDate: schedule.onceDate.map { ScheduleCalculator.formatDay($0) },
-            courseId: schedule.courseID ?? .nilSentinel
+            scheduleOnceDate: schedule.onceDate.map { ScheduleCalculator.formatDay($0) }
         )
     }
 
@@ -1589,6 +1589,10 @@ final class CloudSyncService: AuthenticationService {
     /// carry one anyway).
     static func payload(for exception: ScheduleException) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
+            courseId: exception.courseID,
+            scheduleTeacher: exception.teacherOverride.isEmpty ? nil : exception.teacherOverride,
+            scheduleLocation: exception.locationOverride.isEmpty ? nil : exception.locationOverride,
+            scheduleNote: exception.note.isEmpty ? nil : exception.note,
             scheduleId: exception.scheduleID,
             scheduleOriginalDate: exception.originalDate.map {
                 ScheduleCalculator.formatDay($0)
@@ -1598,11 +1602,7 @@ final class CloudSyncService: AuthenticationService {
             scheduleChangedEnd: exception.changedEnd,
             scheduleMovedToDate: exception.movedToDate.map {
                 ScheduleCalculator.formatDay($0)
-            },
-            scheduleTeacher: exception.teacherOverride.isEmpty ? nil : exception.teacherOverride,
-            scheduleLocation: exception.locationOverride.isEmpty ? nil : exception.locationOverride,
-            scheduleNote: exception.note.isEmpty ? nil : exception.note,
-            courseId: exception.courseID
+            }
         )
     }
 
@@ -1678,6 +1678,9 @@ final class CloudSyncService: AuthenticationService {
     /// sessions ride as a JSON array string.
     static func payload(for term: GlossaryTerm) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
+            sessionId: term.sessionID ?? .nilSentinel,
+            entryId: term.sourceEntryID ?? .nilSentinel,
+            courseId: term.courseID ?? .nilSentinel,
             termRussian: term.russian,
             termChinese: term.chinese,
             termExplanation: term.explanation.isEmpty ? nil : term.explanation,
@@ -1686,9 +1689,6 @@ final class CloudSyncService: AuthenticationService {
             termSourceSessions: term.sourceSessionIDsJSON.isEmpty ? nil : term.sourceSessionIDsJSON,
             termFavorite: term.isFavorite,
             termStatus: term.statusRaw,
-            courseId: term.courseID ?? .nilSentinel,
-            sessionId: term.sessionID ?? .nilSentinel,
-            entryId: term.sourceEntryID ?? .nilSentinel,
             sourceAttachmentId: term.sourceAttachmentID ?? .nilSentinel,
             sourceReviewId: term.sourceReviewID ?? .nilSentinel,
             materialId: term.sourceMaterialID ?? .nilSentinel,
@@ -1700,6 +1700,9 @@ final class CloudSyncService: AuthenticationService {
     /// upsert; the server merges review fields newest-lastReviewedAt-wins.
     static func payload(for card: StudyCard) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
+            sessionId: card.sessionID ?? .nilSentinel,
+            entryId: card.sourceEntryID ?? .nilSentinel,
+            courseId: card.courseID ?? .nilSentinel,
             cardFront: card.front,
             cardBack: card.back,
             cardType: card.typeRaw,
@@ -1711,9 +1714,6 @@ final class CloudSyncService: AuthenticationService {
             cardDueAt: card.dueAt,
             cardLastReviewedAt: card.lastReviewedAt,
             cardLastGrade: card.lastGradeRaw.isEmpty ? nil : card.lastGradeRaw,
-            courseId: card.courseID ?? .nilSentinel,
-            sessionId: card.sessionID ?? .nilSentinel,
-            entryId: card.sourceEntryID ?? .nilSentinel,
             sourceAttachmentId: card.sourceAttachmentID ?? .nilSentinel,
             sourceTermId: card.sourceTermID ?? .nilSentinel,
             materialId: card.sourceMaterialID ?? .nilSentinel,
@@ -1727,6 +1727,9 @@ final class CloudSyncService: AuthenticationService {
     static func payload(for task: StudyTask) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
             title: task.title,
+            sessionId: task.sessionID ?? .nilSentinel,
+            entryId: task.sourceEntryID ?? .nilSentinel,
+            courseId: task.courseID ?? .nilSentinel,
             taskDetail: task.detail.isEmpty ? nil : task.detail,
             taskDueAt: task.dueAt,
             taskPriority: task.priorityRaw,
@@ -1735,9 +1738,6 @@ final class CloudSyncService: AuthenticationService {
             taskUncertainty: task.uncertainty.isEmpty ? nil : task.uncertainty,
             taskUserNote: task.userNote.isEmpty ? nil : task.userNote,
             taskCompletedAt: task.completedAt,
-            courseId: task.courseID ?? .nilSentinel,
-            sessionId: task.sessionID ?? .nilSentinel,
-            entryId: task.sourceEntryID ?? .nilSentinel,
             sourceAttachmentId: task.sourceAttachmentID ?? .nilSentinel,
             sourceReviewId: task.sourceReviewID ?? .nilSentinel,
             materialId: task.sourceMaterialID ?? .nilSentinel,
@@ -1752,6 +1752,12 @@ final class CloudSyncService: AuthenticationService {
     static func payload(for material: CourseMaterial) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
             title: material.title,
+            sessionId: material.sessionID ?? .nilSentinel,
+            courseId: material.courseID ?? .nilSentinel,
+            sourceAttachmentId: material.sourceAttachmentID ?? .nilSentinel,
+            // Empty string = no occurrence link (the schedule override
+            // convention: clearable fields ride empty, not absent).
+            scheduleOccurrenceKey: material.occurrenceKey ?? "",
             materialKind: material.kindRaw,
             materialMime: material.mimeType.isEmpty ? nil : material.mimeType,
             materialFileName: material.originalFileName.isEmpty ? nil : material.originalFileName,
@@ -1776,13 +1782,7 @@ final class CloudSyncService: AuthenticationService {
             materialDigestSourceHash: material.digestSourceHash.isEmpty
                 ? nil : material.digestSourceHash,
             materialLastReadPage: material.lastReadPage,
-            materialLastOpenedAt: material.lastOpenedAt,
-            courseId: material.courseID ?? .nilSentinel,
-            sessionId: material.sessionID ?? .nilSentinel,
-            // Empty string = no occurrence link (the schedule override
-            // convention: clearable fields ride empty, not absent).
-            scheduleOccurrenceKey: material.occurrenceKey ?? "",
-            sourceAttachmentId: material.sourceAttachmentID ?? .nilSentinel
+            materialLastOpenedAt: material.lastOpenedAt
         )
     }
 
@@ -1804,8 +1804,8 @@ final class CloudSyncService: AuthenticationService {
     /// rides the shared noteText).
     static func payload(for annotation: MaterialAnnotation) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
-            materialAnnotationKind: annotation.kindRaw,
-            noteText: annotation.text.isEmpty ? nil : annotation.text
+            noteText: annotation.text.isEmpty ? nil : annotation.text,
+            materialAnnotationKind: annotation.kindRaw
         )
     }
 
@@ -1824,15 +1824,15 @@ final class CloudSyncService: AuthenticationService {
     /// all JSON strings/metadata, never image bytes.
     static func payload(for message: CourseAssistantMessage) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
+            sessionId: message.scopeSessionID ?? .nilSentinel,
+            materialId: message.scopeMaterialID ?? .nilSentinel,
             assistantRole: message.roleRaw,
             assistantText: message.text.isEmpty ? nil : message.text,
             assistantCitations: message.citationsJSON.isEmpty ? nil : message.citationsJSON,
             assistantMode: message.modeRaw.isEmpty ? nil : message.modeRaw,
             assistantEvidence: message.visualEvidenceJSON.isEmpty ? nil : message.visualEvidenceJSON,
             assistantAnswer: message.answerJSON.isEmpty ? nil : message.answerJSON,
-            assistantModel: message.answerModel.isEmpty ? nil : message.answerModel,
-            materialId: message.scopeMaterialID ?? .nilSentinel,
-            sessionId: message.scopeSessionID ?? .nilSentinel
+            assistantModel: message.answerModel.isEmpty ? nil : message.answerModel
         )
     }
 
