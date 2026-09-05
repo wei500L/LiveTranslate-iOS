@@ -1012,7 +1012,8 @@ final class CloudSyncService: AuthenticationService {
              .courseSchedule, .scheduleException,
              .material, .materialPage, .materialAnnotation,
              .assistantThread, .assistantMessage,
-             .exam, .examTopic, .studyPlan, .studyPlanItem, .studyActivity:
+             .exam, .examTopic, .studyPlan, .studyPlanItem, .studyActivity,
+             .interpreterConversation, .interpreterTurn:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
