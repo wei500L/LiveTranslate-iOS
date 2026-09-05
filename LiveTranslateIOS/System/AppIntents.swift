@@ -115,6 +115,7 @@ struct OpenNextExamIntent: AppIntent {
 
     init() {}
 
+    @MainActor
     func perform() async throws -> some IntentResult {
         if let exam {
             await AppIntentHost.open(.exam(exam.id))

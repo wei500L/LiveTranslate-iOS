@@ -84,7 +84,7 @@ final class AppSession {
         // The scope marker goes out BEFORE the environment build (the
         // coordinator snapshots it at init — a fresh environment must
         // never read a stale scope).
-        publishInboxScope()
+        Self.publishInboxScope(accounts: accounts, isDemoMode: isDemoMode)
         environment = AppEnvironment(profile: accounts.activeProfile)
         // App Intents (Siri / Shortcuts / Spotlight / Action Button)
         // perform in this process; point them at the active profile.
@@ -99,6 +99,14 @@ final class AppSession {
     /// belongs to the profile that was active when it arrived, and
     /// switching profiles never moves existing items.
     private func publishInboxScope() {
+        Self.publishInboxScope(accounts: accounts, isDemoMode: isDemoMode)
+    }
+
+    /// The static form exists because the init path publishes BEFORE the
+    /// environment property is initialized (the coordinator snapshots the
+    /// scope at build time) — an instance method there would use `self`
+    /// before all stored properties are set.
+    private static func publishInboxScope(accounts: AccountStore, isDemoMode: Bool) {
         guard !isDemoMode else { return }
         guard let defaults = UserDefaults(suiteName: SharedInboxStore.appGroupIdentifier) else {
             return
@@ -365,7 +373,7 @@ final class AppSession {
         // The scope marker goes out BEFORE the environment build (the
         // coordinator snapshots it at init — a fresh environment must
         // never read a stale scope).
-        publishInboxScope()
+        Self.publishInboxScope(accounts: accounts, isDemoMode: isDemoMode)
         environment = AppEnvironment(profile: accounts.activeProfile)
         AppIntentHost.attach(environment)
         // Post-sign-in bookkeeping on the NEW service: label fetch, first
