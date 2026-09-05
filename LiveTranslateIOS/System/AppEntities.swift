@@ -85,9 +85,13 @@ struct ExamEntityQuery: EntityQuery {
             }
         }
         guard let exams = results else { return [] }
-        return try await exams.mapAsync { exam in
-            ExamEntity.from(exam, courseName: await courseName(of: exam))
+        var entities: [ExamEntity] = []
+        for exam in exams {
+            entities.append(
+                ExamEntity.from(exam, courseName: await courseName(of: exam))
+            )
         }
+        return entities
     }
 
     @MainActor
@@ -96,12 +100,13 @@ struct ExamEntityQuery: EntityQuery {
             (try? environment.repository.exams(courseID: nil, includeCandidates: false)) ?? []
         }
         guard let exams = results else { return [] }
-        return try await exams
-            .filter { $0.status == .scheduled }
-            .prefix(10)
-            .mapAsync { exam in
+        var entities: [ExamEntity] = []
+        for exam in exams.filter({ $0.status == .scheduled }).prefix(10) {
+            entities.append(
                 ExamEntity.from(exam, courseName: await courseName(of: exam))
-            }
+            )
+        }
+        return entities
     }
 
     func defaultResult() async -> ExamEntity? { nil }
@@ -113,17 +118,6 @@ struct ExamEntityQuery: EntityQuery {
             return (try? environment.repository.course(id: courseID)).flatMap { $0 }?.name ?? ""
         }
         return name ?? ""
-    }
-}
-
-private extension Sequence {
-    /// Async map over a sequence (entity queries resolve course names).
-    func mapAsync<T>(_ transform: (Element) async throws -> T) async throws -> [T] {
-        var result: [T] = []
-        for element in self {
-            result.append(try await transform(element))
-        }
-        return result
     }
 }
 
