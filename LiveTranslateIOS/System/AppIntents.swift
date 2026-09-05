@@ -122,7 +122,9 @@ struct OpenNextExamIntent: AppIntent {
         }
         // No parameter: resolve the nearest scheduled exam from the real
         // repository (nil = honest empty dialog, never a fabricated one).
-        let next = await AppIntentHost.withEnvironment { environment -> Exam? in
+        // Note the double optional: withEnvironment returns T? and the
+        // closure itself yields Exam? — two bindings flatten it.
+        let next = (await AppIntentHost.withEnvironment { environment -> Exam? in
             let exams = (try? environment.repository.exams(
                 courseID: nil, includeCandidates: false
             )) ?? []
@@ -131,7 +133,7 @@ struct OpenNextExamIntent: AppIntent {
                 .min {
                     ($0.examDate ?? .distantFuture) < ($1.examDate ?? .distantFuture)
                 }
-        }
+        }) ?? nil
         guard let next else {
             return .result(dialog: "近期没有安排的考试。")
         }

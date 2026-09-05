@@ -41,7 +41,9 @@ enum AppIntentHost {
 
     /// Navigate through the unified system-route coordinator.
     static func open(_ route: SystemRouteRequest) async {
-        guard let environment = await withEnvironment({ $0 }) else { return }
+        // Double optional: withEnvironment returns T? and the closure
+        // yields AppEnvironment? itself — flatten with ?? nil.
+        guard let environment = (await withEnvironment({ $0 })) ?? nil else { return }
         await MainActor.run {
             SystemRouteCoordinator(
                 environment: environment,
