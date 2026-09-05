@@ -123,8 +123,9 @@ final class InterpreterViewModel {
 
     /// 是否存在可恢复的草稿（进入页面时的"继续上次翻译"提示）。
     var hasResumableDraft: Bool {
-        guard let draft = repository.interpreterDraft else { return false }
-        return ((try? repository.interpreterDraftTurnCount()) ?? 0) ?? 0 > 0
+        guard repository.interpreterDraft != nil else { return false }
+        let count = (try? repository.interpreterDraftTurnCount()) ?? nil ?? 0
+        return count > 0
     }
 
     // MARK: - 会话建立

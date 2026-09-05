@@ -19,7 +19,6 @@ struct InterpreterScreen: View {
     @State private var showScenePicker = false
     @State private var showHistory = false
     @State private var showEndConfirmation = false
-    @State private var showSettingsHint = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
