@@ -84,7 +84,7 @@ final class AttachmentAnalysisGenerator {
     /// and cancellation stops at the next image boundary.
     func analyze(
         _ attachments: [SessionAttachment], mode: Mode,
-        context: AttachmentAnalysisContextProvider
+        context: @escaping AttachmentAnalysisContextProvider
     ) {
         let ids = attachments.map(\.id)
         guard !ids.isEmpty else { return }

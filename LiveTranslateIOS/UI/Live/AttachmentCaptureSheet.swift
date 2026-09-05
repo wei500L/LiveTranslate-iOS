@@ -104,7 +104,9 @@ struct AttachmentCaptureSheet: View {
         .preferredColorScheme(.dark)
     }
 
-    private func captureButtonLabel(symbol: String, title: String, subtitle: String) -> some View {
+    // nonisolated: the PhotosPicker label closure is nonisolated (the
+    // button label above it too); this view touches no instance state.
+    nonisolated private func captureButtonLabel(symbol: String, title: String, subtitle: String) -> some View {
         HStack(spacing: LTSpacing.m) {
             Image(systemName: symbol)
                 .font(.system(size: 22, weight: .medium))
