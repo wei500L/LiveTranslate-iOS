@@ -278,18 +278,6 @@ final class SettingsStore {
         lockScreenPrivacy = LockScreenPrivacy(
             rawValue: defaults.string(forKey: Keys.lockScreenPrivacy) ?? ""
         ) ?? .statusAndTitle
-        // Round 17: derive the unified level from the legacy classroom
-        // preference on first run (nothing the user had chosen is lost).
-        if let stored = defaults.string(forKey: Keys.systemSurfacePrivacy),
-           let parsed = SystemSurfacePrivacy(rawValue: stored) {
-            systemSurfacePrivacy = parsed
-        } else {
-            switch lockScreenPrivacy {
-            case .statusOnly: systemSurfacePrivacy = .hideSensitiveContent
-            case .statusAndTitle: systemSurfacePrivacy = .showTitlesOnly
-            case .statusTitleAndLatestText: systemSurfacePrivacy = .showFullContent
-            }
-        }
         privacyLockEnabled = defaults.bool(forKey: Keys.privacyLockEnabled)
         let grace = defaults.object(forKey: Keys.privacyLockGraceSeconds) as? Int
         privacyLockGraceSeconds = grace ?? 0
@@ -310,6 +298,20 @@ final class SettingsStore {
         interpreterAutoSpeak = interpreterSpeak ?? false
         let interpreterSave = defaults.object(forKey: Keys.interpreterAskToSave) as? Bool
         interpreterAskToSave = interpreterSave ?? true
+        // Round 17 (last: reads another stored property, so every other
+        // property must be initialized first): derive the unified level
+        // from the legacy classroom preference on first run — nothing the
+        // user had chosen is lost.
+        if let stored = defaults.string(forKey: Keys.systemSurfacePrivacy),
+           let parsed = SystemSurfacePrivacy(rawValue: stored) {
+            systemSurfacePrivacy = parsed
+        } else {
+            switch lockScreenPrivacy {
+            case .statusOnly: systemSurfacePrivacy = .hideSensitiveContent
+            case .statusAndTitle: systemSurfacePrivacy = .showTitlesOnly
+            case .statusTitleAndLatestText: systemSurfacePrivacy = .showFullContent
+            }
+        }
     }
 }
 
