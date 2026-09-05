@@ -293,8 +293,8 @@ final class InterpreterDocumentTests: XCTestCase {
                     plainRussian: "Скажите", stressedRussian: "", chineseText: "请解释文件",
                     backTranslation: "", createdAt: .now,
                     details: InterpreterTurnDetails(
-                        keywords: ["登记表 · 第1页"],
-                        intentSummary: "宿舍登记表"
+                        intentSummary: "宿舍登记表",
+                        keywords: ["登记表 · 第1页"]
                     )
                 )
             ]
