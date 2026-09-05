@@ -90,7 +90,7 @@ final class StudyActivityController {
             updatedAt: .now
         )
         let session = activity
-        Task {
+        Task { @MainActor in
             await session.update(ActivityContent(state: state, staleDate: nil))
         }
     }
@@ -100,7 +100,7 @@ final class StudyActivityController {
     func endActivity(activityID: UUID) {
         guard let activity, self.activityID == activityID else { return }
         let session = activity
-        Task {
+        Task { @MainActor in
             await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
@@ -110,7 +110,7 @@ final class StudyActivityController {
     func endOwnedActivity() {
         guard let activity else { return }
         let session = activity
-        Task {
+        Task { @MainActor in
             await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
@@ -126,7 +126,7 @@ final class StudyActivityController {
                     || activity.attributes.scopeKey != scopeKey
             }
         for activity in mismatched {
-            Task {
+            Task { @MainActor in
                 await activity.end(dismissalPolicy: .immediate)
             }
         }

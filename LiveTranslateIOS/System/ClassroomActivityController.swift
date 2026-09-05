@@ -116,7 +116,7 @@ final class ClassroomActivityController {
             updatedAt: .now
         )
         let staleDate = staleAfter
-        Task {
+        Task { @MainActor in
             await activity.update(
                 ActivityContent(state: state, staleDate: staleDate)
             )
@@ -141,7 +141,7 @@ final class ClassroomActivityController {
             updatedAt: .now
         )
         let session = activity
-        Task {
+        Task { @MainActor in
             await session.update(ActivityContent(
                 state: state,
                 staleDate: .now.addingTimeInterval(15)
@@ -178,7 +178,7 @@ final class ClassroomActivityController {
                     || activity.attributes.scopeKey != scopeKey
             }
         for activity in mismatched {
-            Task {
+            Task { @MainActor in
                 await activity.end(dismissalPolicy: .immediate)
             }
         }
@@ -190,7 +190,7 @@ final class ClassroomActivityController {
     func endOwnedActivity() {
         guard let activity else { return }
         let session = activity
-        Task {
+        Task { @MainActor in
             await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
@@ -206,7 +206,7 @@ final class ClassroomActivityController {
     private func endStaleActivity() {
         guard let activity else { return }
         let session = activity
-        Task {
+        Task { @MainActor in
             await session.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
