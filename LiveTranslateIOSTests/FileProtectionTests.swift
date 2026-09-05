@@ -29,8 +29,10 @@ final class FileProtectionTests: XCTestCase {
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.complete], ofItemAtPath: probe.path
         )
-        let value = (try? FileManager.default.attributesOfItem(atPath: probe.path))?
-            [.protectionKey] as? FileProtectionType
+        let probeAttributes = (try? FileManager.default
+            .attributesOfItem(atPath: probe.path)) as [FileAttributeKey: Any]?
+        let value = probeAttributes?[FileAttributeKey.protectionKey]
+            as? FileProtectionType
         try? FileManager.default.removeItem(at: probe)
         return value == .complete
     }()
@@ -58,8 +60,10 @@ final class FileProtectionTests: XCTestCase {
     }
 
     private func protection(of url: URL) -> FileProtectionType? {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        return attributes?[.protectionKey] as? FileProtectionType
+        guard let attributes = (try? FileManager.default
+            .attributesOfItem(atPath: url.path)) as [FileAttributeKey: Any]?
+        else { return nil }
+        return attributes[FileAttributeKey.protectionKey] as? FileProtectionType
     }
 
 
