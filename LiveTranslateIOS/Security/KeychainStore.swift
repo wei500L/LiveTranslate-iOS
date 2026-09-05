@@ -115,7 +115,8 @@ struct KeychainStore: Sendable {
         guard status == errSecSuccess, let attrs = result as? [String: Any] else {
             return status == errSecItemNotFound // absent = nothing to do
         }
-        if attrs[kSecAttrAccessible as String] as? String == Self.accessibility {
+        if attrs[kSecAttrAccessible as String] as? String
+            == (Self.accessibility as String) {
             return true
         }
         let update: [String: Any] = [
