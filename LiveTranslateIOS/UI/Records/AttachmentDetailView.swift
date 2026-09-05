@@ -20,6 +20,7 @@ struct AttachmentDetailView: View {
     @State private var analysisMode: AttachmentAnalysisGenerator.Mode?
     @State private var originalLoaded = false
     @State private var downloadingOriginal = false
+    @State private var termDraftBox: TermDraftBox?
 
     var body: some View {
         NavigationStack {

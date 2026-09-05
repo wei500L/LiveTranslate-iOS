@@ -171,7 +171,7 @@ final class AttachmentAnalysisGenerator {
             )
             let raw = try await service.complete(
                 systemPrompt: AttachmentAnalysisPrompt.systemPrompt(),
-                userPrompt: AttachmentAnalysisPrompt.userPrompt(context: promptContext),
+                userPrompt: AttachmentAnalysisPrompt.userPrompt(context: promptContext.promptContext),
                 imageData: imageData,
                 imageMIME: "image/jpeg",
                 maxTokens: 2_400

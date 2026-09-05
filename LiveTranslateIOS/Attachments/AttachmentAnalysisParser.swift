@@ -102,7 +102,7 @@ enum AttachmentAnalysisParser {
             || !(result.formulas ?? []).isEmpty
             || !(result.codeBlocks ?? []).isEmpty
             || !(result.keyPoints ?? []).isEmpty
-            || !(result.explanation ?? []).isEmpty
+            || !(result.explanation ?? "").isEmpty
         guard hasContent else { throw ParseError.empty }
         return result
     }
