@@ -136,7 +136,11 @@ enum StudyPlanGenerator {
             for index in days.indices {
                 let weekday = calendar.component(.weekday, from: days[index].date)
                 let applicable = blocked.filter { $0.weekdays.isEmpty || $0.weekdays.contains(weekday) }
-                let blockedMinutes = applicable.reduce(0) { $0 + ($0.endSecs - $0.startSecs) / 60 }
+                // Split: the one-liner exceeds the type-checker's budget.
+                var blockedMinutes = 0
+                for block in applicable {
+                    blockedMinutes += (block.endSecs - block.startSecs) / 60
+                }
                 days[index].capacityMinutes = max(0, days[index].capacityMinutes - blockedMinutes)
             }
         }

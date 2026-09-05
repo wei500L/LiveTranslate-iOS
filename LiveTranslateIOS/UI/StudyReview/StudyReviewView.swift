@@ -16,7 +16,12 @@ struct StudyReviewView: View {
     @State private var shareItem: SharedFile?
     @State private var exportError = false
     @State private var pendingRegenerate = false
-    @State private var viewedAttachmentID: UUID?
+    @State private var viewedAttachment: AttachmentIDBox?
+    /// Identifiable wrapper (sheet(item:) needs Identifiable; UUID isn't).
+    private struct AttachmentIDBox: Identifiable {
+        let id: UUID
+        init(_ id: UUID) { self.id = id }
+    }
     // Learning-material save flows (term book / cards / tasks). The draft
     // wrappers make the sheets item-driven.
     @State private var termDraftBox: TermDraftBox?
@@ -87,11 +92,11 @@ struct StudyReviewView: View {
             ReviewItemEditor(context: context)
                 .onDisappear { viewModel.reload() }
         }
-        .sheet(item: $viewedAttachmentID) { attachmentID in
+        .sheet(item: $viewedAttachment) { viewed in
             if let session = viewModel.session {
                 AttachmentDetailView(
                     session: session,
-                    attachmentID: attachmentID,
+                    attachmentID: viewed.id,
                     onChanged: { viewModel.reload() }
                 )
             }
@@ -643,7 +648,7 @@ struct StudyReviewView: View {
         HStack(spacing: LTSpacing.s) {
             ForEach(attachmentIDs.prefix(3), id: \.self) { attachmentID in
                 Button {
-                    viewedAttachmentID = attachmentID
+                    viewedAttachment = AttachmentIDBox(attachmentID)
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: "photo")
@@ -715,14 +720,14 @@ struct StudyReviewView: View {
                             Divider()
                             Button {
                                 cardDraftBox = CardDraftBox(draft: cardDraft(
-                                    front: note.text, back: "", entryID: nil
+                                    front: note.text, back: "", entryID: nil, attachmentID: nil
                                 ))
                             } label: {
                                 Label("制作卡片", systemImage: "rectangle.on.rectangle")
                             }
                             Button {
                                 taskDraftBox = TaskDraftBox(draft: taskDraft(
-                                    title: note.text, entryID: nil
+                                    title: note.text, entryID: nil, attachmentID: nil
                                 ))
                             } label: {
                                 Label("创建任务", systemImage: "checklist")
