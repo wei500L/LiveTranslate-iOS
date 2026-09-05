@@ -190,7 +190,6 @@ final class SpotlightIndexer {
         let attributes = CSSearchableItemAttributeSet(contentType: UTType.item)
         attributes.title = summary.title
         attributes.contentCreationDate = summary.startTime
-        attributes.itemContentType = UTType.item.identifier
         return CSSearchableItem(
             uniqueIdentifier: SpotlightEntityKind.identifier(kind: .session, id: id),
             domainIdentifier: SpotlightEntityKind.session.domain,
@@ -203,7 +202,6 @@ final class SpotlightIndexer {
         attributes.title = course.name
         attributes.contentDescription = courseDescription(course)
         attributes.keywords = nonEmpty([course.teacherName, course.location])
-        attributes.itemContentType = UTType.item.identifier
         return CSSearchableItem(
             uniqueIdentifier: SpotlightEntityKind.identifier(kind: kind, id: course.id),
             domainIdentifier: kind.domain,
@@ -215,7 +213,6 @@ final class SpotlightIndexer {
         let attributes = CSSearchableItemAttributeSet(contentType: UTType.item)
         attributes.title = material.title
         attributes.contentDescription = materialDescription(material)
-        attributes.itemContentType = UTType.item.identifier
         return CSSearchableItem(
             uniqueIdentifier: SpotlightEntityKind.identifier(kind: kind, id: material.id),
             domainIdentifier: kind.domain,
@@ -230,7 +227,6 @@ final class SpotlightIndexer {
         let attributes = CSSearchableItemAttributeSet(contentType: UTType.item)
         attributes.title = exam.title
         attributes.contentDescription = examDescription(exam, repository: repository)
-        attributes.itemContentType = UTType.item.identifier
         return CSSearchableItem(
             uniqueIdentifier: SpotlightEntityKind.identifier(kind: kind, id: exam.id),
             domainIdentifier: kind.domain,
@@ -246,13 +242,16 @@ final class SpotlightIndexer {
         let attributes = CSSearchableItemAttributeSet(contentType: UTType.item)
         attributes.title = task.title
         attributes.contentDescription = taskDescription(task)
-        if let dueAt = task.dueAt { attributes.contentExpirationDate = dueAt }
-        attributes.itemContentType = UTType.item.identifier
-        return CSSearchableItem(
+        let item = CSSearchableItem(
             uniqueIdentifier: SpotlightEntityKind.identifier(kind: kind, id: task.id),
             domainIdentifier: kind.domain,
             attributeSet: attributes
         )
+        // A due task stops surfacing in Spotlight once it is over due —
+        // the item-level expiration (the attribute-set date was removed
+        // from the SDK).
+        if let dueAt = task.dueAt { item.expirationDate = dueAt }
+        return item
     }
 
     // MARK: - Descriptions (short, non-sensitive)
