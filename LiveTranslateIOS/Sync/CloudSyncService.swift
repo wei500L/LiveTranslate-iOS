@@ -1206,7 +1206,7 @@ final class CloudSyncService: AuthenticationService {
 
     private func saveAttachmentUploadRecord(_ record: [String: AttachmentFileState]) {
         defaults.set(
-            Dictionary(uniqueKeysWithValues: record.map { ($0.key, $1.rawValue) }),
+            Dictionary(uniqueKeysWithValues: record.map { (key, state) in (key, state.rawValue) }),
             forKey: attachmentUploadKey
         )
     }
@@ -1249,13 +1249,17 @@ final class CloudSyncService: AuthenticationService {
                     : store.originalData(
                         for: attachment.id, sessionID: attachment.sessionID
                     ) else { continue }
+                // Hoisted Sendable values: the authorize closure is
+                // @Sendable and may not capture SwiftData models.
+                let attachmentID = attachment.id
+                let contentHash = attachment.contentHash
                 do {
                     try await authSession.authorize { [api] token in
                         try await api.uploadAttachmentFile(
-                            attachmentID: attachment.id,
+                            attachmentID: attachmentID,
                             variant: variant.rawValue,
                             data: data,
-                            contentHash: attachment.contentHash,
+                            contentHash: contentHash,
                             accessToken: token
                         )
                     }
@@ -1296,10 +1300,12 @@ final class CloudSyncService: AuthenticationService {
         if store.fileExists(
             for: attachment.id, sessionID: attachment.sessionID, variant: variant
         ) { return true }
+        // Hoisted Sendable values (the authorize closure is @Sendable).
+        let attachmentID = attachment.id
         do {
             let data = try await authSession.authorize { [api] token in
                 try await api.downloadAttachmentFile(
-                    attachmentID: attachment.id,
+                    attachmentID: attachmentID,
                     variant: variant.rawValue,
                     accessToken: token
                 )
@@ -1387,12 +1393,15 @@ final class CloudSyncService: AuthenticationService {
                 continue // reclaimed originals skip
             }
             let fileURL = store.originalURL(materialID: material.id, fileExtension: ext)
+            // Hoisted Sendable values (the authorize closure is @Sendable).
+            let materialID = material.id
+            let contentHash = material.contentHash
             do {
                 try await authSession.authorize { [api] token in
                     try await api.uploadMaterialFile(
-                        materialID: material.id,
+                        materialID: materialID,
                         fileURL: fileURL,
-                        contentHash: material.contentHash,
+                        contentHash: contentHash,
                         accessToken: token
                     )
                 }
@@ -1417,12 +1426,14 @@ final class CloudSyncService: AuthenticationService {
             fileName: material.originalFileName, mime: material.mimeType
         )
         if store.originalExists(materialID: material.id, fileExtension: ext) { return true }
+        // Hoisted Sendable values (the authorize closure is @Sendable).
+        let materialID = material.id
         do {
             let data = try await authSession.authorize { [api] token in
-                try await api.downloadMaterialFile(materialID: material.id, accessToken: token)
+                try await api.downloadMaterialFile(materialID: materialID, accessToken: token)
             }
             try store.writeSyncedOriginal(
-                data, materialID: material.id, fileExtension: ext
+                data, materialID: materialID, fileExtension: ext
             )
             return true
         } catch {
