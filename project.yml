@@ -83,6 +83,12 @@ targets:
           LiveTranslate can add exams and study-plan blocks to a calendar
           you choose. The app only writes events you ask for; it never
           reads your calendars.
+        # Biometric privacy lock (round 17): only prompted when the user
+        # turns the lock on in 隐私与数据.
+        NSFaceIDUsageDescription: >-
+          LiveTranslate uses Face ID to unlock the app when you enable the
+          privacy lock. The lock setting and its timing stay on this
+          device.
         UIBackgroundModes:
           - audio
         ITSAppUsesNonExemptEncryption: false

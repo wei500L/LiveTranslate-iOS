@@ -360,13 +360,14 @@ final class SessionDetailViewModel {
                 targetLanguage: session.targetLanguage,
                 history: history
             )
+            let service = environment.translationService
             let outcome = await AICallScope.with(
                 AICallContext(
                     feature: .classroomTranslation, textCategory: .transcript,
                     masked: false, userTriggered: true
                 )
             ) {
-                await environment.translationService.translate(request)
+                await service.translate(request)
             }
             if let text = outcome.text, !text.isEmpty {
                 try? environment.repository.updateTranslation(

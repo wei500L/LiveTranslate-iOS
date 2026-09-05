@@ -189,7 +189,7 @@ final class PrivacyHardeningTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
         XCTAssertEqual(store.entryCount, 1)
         // 受控目录内的文件带 .complete 保护 + 排除备份。
-        let values = try url.resourceValues(forKeys: [.protectionKey, .isExcludedFromBackupKey])
+        let values = try url.resourceValues(forKeys: [.fileProtectionKey, .isExcludedFromBackupKey])
         XCTAssertEqual(values.protectionKey, .complete)
         XCTAssertEqual(values.isExcludedFromBackup, true)
         XCTAssertGreaterThan(store.totalBytes(), 0)

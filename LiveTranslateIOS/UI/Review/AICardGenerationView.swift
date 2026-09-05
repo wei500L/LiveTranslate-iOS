@@ -376,12 +376,14 @@ struct AICardGenerationView: View {
         let chosen = items.filter { selected.contains($0.id) }
         do {
             let service = environment.studyReviewService
+            let systemPrompt = LearningCardGenerator.systemPrompt()
+            let userPrompt = LearningCardGenerator.userPrompt(items: chosen)
             let response = try await AICallScope.with(
                 AICallContext(feature: .learningCard, textCategory: .mixed)
             ) {
                 try await service.complete(
-                    systemPrompt: LearningCardGenerator.systemPrompt(),
-                    userPrompt: LearningCardGenerator.userPrompt(items: chosen),
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
                     maxTokens: 3000
                 )
             }

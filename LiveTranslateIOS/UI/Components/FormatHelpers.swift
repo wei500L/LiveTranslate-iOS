@@ -9,6 +9,14 @@ enum Format {
         return formatter.string(fromByteCount: Int64(value))
     }
 
+    /// Byte counts from file stores are Int64 (round 17 storage stats).
+    static func bytes(_ value: Int64) -> String {
+        guard value > 0 else { return "0 MB" }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: value)
+    }
+
     /// mm:ss, or h:mm:ss past the hour mark.
     static func clock(_ interval: TimeInterval) -> String {
         let total = Int(interval.rounded())

@@ -29,8 +29,18 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>LiveTranslate can add exams and study-plan blocks to a calendar you choose. The app only writes events you ask for; it never reads your calendars.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>LiveTranslate uses the camera to photograph blackboards and slides during class. Photos stay on your device unless you enable cloud sync.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>LiveTranslate uses Face ID to unlock the app when you enable the privacy lock. The lock setting and its timing stay on this device.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>LiveTranslate uses the microphone to recognize Russian speech on device with GigaAM-v3 and show a Chinese translation. Audio is processed locally and is not saved unless you enable it in Settings.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

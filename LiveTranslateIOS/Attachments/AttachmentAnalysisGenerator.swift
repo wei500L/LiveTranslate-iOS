@@ -169,12 +169,13 @@ final class AttachmentAnalysisGenerator {
             let promptContext = context(
                 attachment, mode == .withClassContext
             )
+            let promptContextString = promptContext.promptContext
             let raw = try await AICallScope.with(
                 AICallContext(feature: .attachmentAnalysis, textCategory: .transcript)
             ) {
                 try await service.complete(
                     systemPrompt: AttachmentAnalysisPrompt.systemPrompt(),
-                    userPrompt: AttachmentAnalysisPrompt.userPrompt(context: promptContext.promptContext),
+                    userPrompt: AttachmentAnalysisPrompt.userPrompt(context: promptContextString),
                     imageData: imageData,
                     imageMIME: "image/jpeg",
                     maxTokens: 2_400

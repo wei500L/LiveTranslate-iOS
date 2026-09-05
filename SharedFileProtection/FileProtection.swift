@@ -199,7 +199,7 @@ enum FileProtection {
             let enumerator = fileManager.enumerator(
                 at: root, includingPropertiesForKeys: [
                     .isDirectoryKey, .isRegularFileKey,
-                    .protectionKey, .isExcludedFromBackupKey,
+                    .fileProtectionKey, .isExcludedFromBackupKey,
                 ]
             )
         else { return (0, []) }
@@ -210,7 +210,7 @@ enum FileProtection {
             guard
                 let values = try? url.resourceValues(
                     forKeys: [.isDirectoryKey, .isRegularFileKey,
-                              .protectionKey, .isExcludedFromBackupKey]
+                              .fileProtectionKey, .isExcludedFromBackupKey]
                 )
             else { continue }
             if let matching, !matching(url) {

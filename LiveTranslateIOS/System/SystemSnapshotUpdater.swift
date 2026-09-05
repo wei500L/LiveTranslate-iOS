@@ -69,15 +69,6 @@ final class SystemSnapshotUpdater {
         return snapshot
     }
 
-    /// The unified surface policy the snapshot is generated under (round
-    /// 17 — single source; the legacy LockScreenPrivacy keeps driving the
-    /// classroom LA dimension).
-    var surfacePrivacy: SystemSurfacePrivacy {
-        SystemSurfacePrivacy(
-            lockScreenPrivacy: privacy
-        )
-    }
-
     /// Account switch / profile teardown: the old profile's data leaves
     /// the App Group before the new profile's snapshot ever lands.
     func clear() {
@@ -92,7 +83,9 @@ final class SystemSnapshotUpdater {
         inboxPendingCount: Int,
         privacy: LockScreenPrivacy
     ) -> WidgetSnapshot {
-        let surface = surfacePrivacy
+        // Round 17: the unified surface policy the snapshot is generated
+        // under (derived from the classroom dimension — one source).
+        let surface = SystemSurfacePrivacy(lockScreenPrivacy: privacy)
         var classroom: WidgetClassroom?
         if let coordinator, coordinator.isRunning,
            let sessionID = coordinator.activeSessionID {

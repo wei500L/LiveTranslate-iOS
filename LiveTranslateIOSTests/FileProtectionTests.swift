@@ -28,7 +28,7 @@ final class FileProtectionTests: XCTestCase {
     }
 
     private func protection(of url: URL) -> FileProtectionType? {
-        try? url.resourceValues(forKeys: [.protectionKey]).protectionKey
+        try? url.resourceValues(forKeys: [.fileProtectionKey]).protectionKey
     }
 
     private func backupExcluded(_ url: URL) -> Bool {

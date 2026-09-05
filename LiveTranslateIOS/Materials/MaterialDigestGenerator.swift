@@ -319,13 +319,14 @@ final class MaterialDigestGenerator {
                 // One representative scanned page per digest run (bounded
                 // payload); the remaining empty pages stay honestly
                 // uncertain in the digest.
+                let pageNumber = first.pageNumber
                 if let raw = try? await AICallScope.with(
                     AICallContext(feature: .materialDigest, textCategory: .none)
                 ) {
                     try await imageService.complete(
                         systemPrompt: MaterialDigestPrompt.imagePageSystemPrompt(),
                         userPrompt: MaterialDigestPrompt.imagePageUserPrompt(
-                            pageNumber: first.pageNumber
+                            pageNumber: pageNumber
                         ),
                         imageData: imageData,
                         imageMIME: "image/jpeg",
