@@ -376,11 +376,15 @@ struct AICardGenerationView: View {
         let chosen = items.filter { selected.contains($0.id) }
         do {
             let service = environment.studyReviewService
-            let response = try await service.complete(
-                systemPrompt: LearningCardGenerator.systemPrompt(),
-                userPrompt: LearningCardGenerator.userPrompt(items: chosen),
-                maxTokens: 3000
-            )
+            let response = try await AICallScope.with(
+                AICallContext(feature: .learningCard, textCategory: .mixed)
+            ) {
+                try await service.complete(
+                    systemPrompt: LearningCardGenerator.systemPrompt(),
+                    userPrompt: LearningCardGenerator.userPrompt(items: chosen),
+                    maxTokens: 3000
+                )
+            }
             guard let cards = LearningCardGenerator.parse(response), !cards.isEmpty else {
                 phase = .failed("模型没有返回可用的卡片，请换一批素材重试。")
                 return

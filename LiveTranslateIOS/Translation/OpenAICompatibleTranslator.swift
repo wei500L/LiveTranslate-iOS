@@ -62,14 +62,29 @@ struct OpenAICompatibleTranslator: TranslationService {
                 errorDescription: TranslationError.notConfigured.errorDescription
             )
         }
+        // Round 17: the local AI activity ledger — metadata only (the
+        // utterance + context character volume, host, outcome; never the
+        // text itself).
+        let activityHost = URL(string: Self.normalizeAPIBase(config.apiBase) ?? "")?.host ?? ""
+        let activityChars = request.text.count
+            + request.history.reduce(0) { $0 + $1.source.count + $1.translation.count }
         do {
             let text = try await translateWithRetry(request)
+            await AIActivityLog.recordTransport(
+                characterCount: activityChars, imageCount: 0,
+                outcome: .success, host: activityHost
+            )
             return TranslationOutcome(
                 sequenceID: request.sequenceID, text: text,
                 latency: Date().timeIntervalSince(started),
                 isRetryable: false, errorDescription: nil
             )
         } catch let error as TranslationError {
+            await AIActivityLog.recordTransport(
+                characterCount: activityChars, imageCount: 0,
+                outcome: error == .cancelled ? .cancelled : .failed,
+                host: activityHost
+            )
             return TranslationOutcome(
                 sequenceID: request.sequenceID, text: nil,
                 latency: Date().timeIntervalSince(started),
@@ -147,7 +162,9 @@ struct OpenAICompatibleTranslator: TranslationService {
             // and the UI retry affordances treat them correctly.
             throw TranslationRetryPolicy.classify(error)
         } catch is CancellationError {
-            throw TranslationError.retryable("Translation cancelled.")
+            // Round 17: cancellation is its own state — never retried,
+            // never recorded as a model failure.
+            throw TranslationError.cancelled
         }
     }
 

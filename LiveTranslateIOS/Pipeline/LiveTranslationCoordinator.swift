@@ -589,7 +589,16 @@ final class LiveTranslationCoordinator {
             history: historySnapshot
         )
 
-        let outcome = await service.translate(request)
+        // Round 17: the classroom pipeline's AI calls ride the activity
+        // ledger with their true nature (background, not user-triggered).
+        let outcome = await AICallScope.with(
+            AICallContext(
+                feature: .classroomTranslation, textCategory: .transcript,
+                masked: false, userTriggered: false
+            )
+        ) {
+            await service.translate(request)
+        }
 
         // One immediate retry for transient failures only (network, timeout,
         // 429, 5xx). Fatal errors (401/403/400) go straight to the user.

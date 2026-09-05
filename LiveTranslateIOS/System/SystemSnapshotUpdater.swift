@@ -69,6 +69,15 @@ final class SystemSnapshotUpdater {
         return snapshot
     }
 
+    /// The unified surface policy the snapshot is generated under (round
+    /// 17 — single source; the legacy LockScreenPrivacy keeps driving the
+    /// classroom LA dimension).
+    var surfacePrivacy: SystemSurfacePrivacy {
+        SystemSurfacePrivacy(
+            lockScreenPrivacy: privacy
+        )
+    }
+
     /// Account switch / profile teardown: the old profile's data leaves
     /// the App Group before the new profile's snapshot ever lands.
     func clear() {
@@ -83,6 +92,7 @@ final class SystemSnapshotUpdater {
         inboxPendingCount: Int,
         privacy: LockScreenPrivacy
     ) -> WidgetSnapshot {
+        let surface = surfacePrivacy
         var classroom: WidgetClassroom?
         if let coordinator, coordinator.isRunning,
            let sessionID = coordinator.activeSessionID {
@@ -98,7 +108,12 @@ final class SystemSnapshotUpdater {
             }
             classroom = WidgetClassroom(
                 sessionID: sessionID,
-                title: coordinator.activeSessionTitle ?? "课堂",
+                // Round 17: hideSensitiveContent gates the classroom NAME
+                // too (the widget's lock-screen surface, same promise as
+                // the Live Activity).
+                title: surface.showsTitles
+                    ? (coordinator.activeSessionTitle ?? "课堂")
+                    : "课堂",
                 startedAt: Date().addingTimeInterval(-TimeInterval(accumulated)),
                 accumulatedSeconds: accumulated,
                 isPaused: coordinator.isPaused,
@@ -116,8 +131,10 @@ final class SystemSnapshotUpdater {
             study = WidgetStudyActivity(
                 activityID: activity.id,
                 planItemID: activity.planItemID,
-                title: studyTitle(activity),
-                courseName: studyCourseName(activity),
+                // Round 17: study titles/course names are gated by the
+                // same policy (they were previously ungated).
+                title: surface.showsTitles ? studyTitle(activity) : "学习中",
+                courseName: surface.showsTitles ? studyCourseName(activity) : "",
                 startedAt: activity.startedAt,
                 accumulatedSeconds: activity.durationSeconds,
                 activeSince: studyTracker.isPaused ? nil : .now,
@@ -132,9 +149,9 @@ final class SystemSnapshotUpdater {
             generatedAt: .now,
             classroom: classroom,
             study: study,
-            nextClass: nextClassOccurrence(),
-            nextExam: nextScheduledExam(),
-            today: todayPlanAggregate(),
+            nextClass: nextClassOccurrence(surface: surface),
+            nextExam: nextScheduledExam(surface: surface),
+            today: todayPlanAggregate(surface: surface),
             inboxPendingCount: inboxPendingCount,
             privacy: privacy
         )
@@ -144,7 +161,7 @@ final class SystemSnapshotUpdater {
 
     /// Next class: the same first non-cancelled occurrence with a future
     /// end the app's schedule layer computes. 8-day window, ascending.
-    private func nextClassOccurrence() -> WidgetNextClass? {
+    private func nextClassOccurrence(surface: SystemSurfacePrivacy) -> WidgetNextClass? {
         guard let schedules = try? repository.schedules(courseID: nil),
               let exceptions = try? repository.allExceptions() else { return nil }
         let courses = (try? repository.courses()) ?? []
@@ -161,10 +178,13 @@ final class SystemSnapshotUpdater {
                 let courseName = occurrence.courseID.flatMap { names[$0] } ?? "课程"
                 let candidate = WidgetNextClass(
                     occurrenceKey: occurrence.occurrenceKey,
-                    courseName: courseName,
+                    // Round 17: hideSensitiveContent strips names/rooms
+                    // from the widget's next-class card (timing stays —
+                    // it is not identifying content).
+                    courseName: surface.showsTitles ? courseName : "课程",
                     start: occurrence.start,
                     end: occurrence.end,
-                    location: occurrence.location ?? "",
+                    location: surface.showsTitles ? (occurrence.location ?? "") : "",
                     isCancelled: occurrence.isCancelled,
                     isTimeChanged: occurrence.isTimeChanged
                 )
@@ -177,7 +197,7 @@ final class SystemSnapshotUpdater {
     }
 
     /// Next scheduled exam within 14 days (same semantics as home).
-    private func nextScheduledExam() -> WidgetNextExam? {
+    private func nextScheduledExam(surface: SystemSurfacePrivacy) -> WidgetNextExam? {
         guard let exams = try? repository.exams(courseID: nil, includeCandidates: false) else {
             return nil
         }
@@ -193,15 +213,15 @@ final class SystemSnapshotUpdater {
         } ?? ""
         return WidgetNextExam(
             examID: exam.id,
-            title: exam.title,
-            courseName: courseName,
+            title: surface.showsTitles ? exam.title : "考试",
+            courseName: surface.showsTitles ? courseName : "",
             examDate: exam.examDate ?? .now,
             daysUntil: exam.daysUntilExam ?? 0
         )
     }
 
     /// Today's plan aggregate (same shape the review center computes).
-    private func todayPlanAggregate() -> WidgetTodayStudy {
+    private func todayPlanAggregate(surface: SystemSurfacePrivacy) -> WidgetTodayStudy {
         let todayKey = Exam.dateKey(.now)
         guard let plans = try? repository.studyPlans(examID: nil) else {
             return WidgetTodayStudy(
@@ -220,7 +240,7 @@ final class SystemSnapshotUpdater {
         return WidgetTodayStudy(
             planTotal: todayItems.count,
             planDone: done,
-            nextItemTitle: next?.title ?? "",
+            nextItemTitle: surface.showsTitles ? (next?.title ?? "") : "",
             nextItemEstimatedMinutes: next?.estimatedMinutes ?? 0
         )
     }

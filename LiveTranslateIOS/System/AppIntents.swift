@@ -227,7 +227,15 @@ struct CreateTaskIntent: AppIntent {
         guard created == true else {
             return .result(dialog: "暂时无法创建任务，请打开 App 后重试。")
         }
-        return .result(dialog: "已创建任务「\(trimmed)」。")
+        // Round 17: at the strictest surface level Siri does not read the
+        // task title back aloud (the user just dictated it — no value in
+        // echoing; the policy keeps spoken surfaces title-free).
+        let showsTitles = await MainActor.run {
+            SettingsStore.shared.systemSurfacePrivacy.showsTitles
+        }
+        return .result(dialog: showsTitles
+            ? "已创建任务「\(trimmed)」。"
+            : "已创建任务。")
     }
 }
 

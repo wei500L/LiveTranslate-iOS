@@ -693,6 +693,13 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     /// re-notifies sync for the rewritten turns. Idempotent.
     @discardableResult
     func migrateInterpreterCitationDetails() throws -> Int
+    /// Round 17 retention: deletes SAVED conversations' interpreter
+    /// documents older than `days` (0 = keep everything). Row + file
+    /// reconciled; active drafts never touched.
+    @discardableResult
+    func applyInterpreterDocumentRetention(
+        days: Int, store: InterpreterDocumentStore?, asOf now: Date
+    ) throws -> Int
 
     // MARK: Interpreter document context (现场文件 · device-local)
 

@@ -34,6 +34,10 @@ struct InterpreterScreen: View {
                     Color.clear
                 }
             }
+            // Round 17: 随身翻译 carries the most sensitive on-screen
+            // content (证件文件、OCR、对话) — mask while the screen is
+            // being recorded or mirrored.
+            .screenCaptureMask()
             .navigationTitle("随身翻译")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -448,7 +448,7 @@ struct StudyReviewView: View {
                 Spacer()
                 if let copyText {
                     Button {
-                        UIPasteboard.general.string = copyText
+                        ClipboardService.shared.copySensitive(copyText)
                         LTHaptics.tap()
                     } label: {
                         Image(systemName: "doc.on.doc")

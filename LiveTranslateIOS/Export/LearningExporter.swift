@@ -426,14 +426,11 @@ enum LearningExporter {
             content = fullJSON(course: course, terms: terms, cards: cards, tasks: tasks)
             fileName = "\(safeName)-学习资料.json"
         }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent(fileName)
-        do {
-            try content.data(using: .utf8)?.write(to: url, options: .atomic)
-            return url
-        } catch {
-            return nil
-        }
+        // Round 17: the controlled export store (protected, excluded
+        // from backup, reaped on expiry — these used to be un-prefixed
+        // files no cleanup ever touched).
+        guard let data = content.data(using: .utf8) else { return nil }
+        return try? TemporaryExportStore().stage(fileName: fileName, data: data)
     }
 
     // MARK: Escaping

@@ -37,6 +37,9 @@ struct LiveScreen: View {
                 controlsBar
             }
         }
+        // Round 17: the live classroom is its own presentation layer —
+        // its copies need their own honest hint toast.
+        .clipboardToast()
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(viewModel.isRunning)
         .sheet(isPresented: $showAttachmentCapture) {

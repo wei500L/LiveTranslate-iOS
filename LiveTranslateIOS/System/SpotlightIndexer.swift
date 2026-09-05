@@ -66,10 +66,20 @@ final class SpotlightIndexer {
 
     // MARK: - Indexing (single entity)
 
+    /// Round 17: the unified surface policy at its strictest level
+    /// removes titles from every system surface — Spotlight included
+    /// (lock-screen search would otherwise surface course/session/exam
+    /// names). Indexing no-ops there; the domain is deactivated by the
+    /// coordinator on policy changes.
+    static var indexingPermitted: Bool {
+        SettingsStore.shared.systemSurfacePrivacy.showsTitles
+    }
+
     func index(
         id: UUID, kind: SpotlightEntityKind,
         repository: any ClassroomRepositoryProtocol, scopeKey: String
     ) {
+        guard Self.indexingPermitted else { return }
         guard let item = buildItem(id: id, kind: kind, repository: repository) else { return }
         CSSearchableIndex.default().indexSearchableItems([item]) { error in
             if let error {
@@ -106,6 +116,7 @@ final class SpotlightIndexer {
         repository: any ClassroomRepositoryProtocol, scopeKey: String
     ) {
         deactivate()
+        guard Self.indexingPermitted else { return }
         Task { [weak self] in
             guard let self else { return }
             // Batches of ~50 items per index call, one kind at a time —

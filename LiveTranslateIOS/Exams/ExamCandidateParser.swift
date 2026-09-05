@@ -69,13 +69,17 @@ struct ExamCandidateParser {
         guard let imageService else {
             throw ParseError.modelNotConfigured
         }
-        let text = try await imageService.complete(
-            systemPrompt: Self.systemPrompt,
-            userPrompt: Self.userPrompt(sourceTimestamp: sourceTimestamp),
-            imageData: imageData,
-            imageMIME: imageMIME,
-            maxTokens: 3000
-        )
+        let text = try await AICallScope.with(
+            AICallContext(feature: .examParsing, textCategory: .none)
+        ) {
+            try await imageService.complete(
+                systemPrompt: Self.systemPrompt,
+                userPrompt: Self.userPrompt(sourceTimestamp: sourceTimestamp),
+                imageData: imageData,
+                imageMIME: imageMIME,
+                maxTokens: 3000
+            )
+        }
         return Self.decode(
             text,
             sourceKind: sourceKind,
@@ -96,11 +100,15 @@ struct ExamCandidateParser {
         }
         let prompt = Self.userPrompt(sourceTimestamp: sourceTimestamp)
             + "\n\n来源内容：\n" + sourceText
-        let text = try await textService.complete(
-            systemPrompt: Self.systemPrompt,
-            userPrompt: prompt,
-            maxTokens: 3000
-        )
+        let text = try await AICallScope.with(
+            AICallContext(feature: .examParsing, textCategory: .mixed)
+        ) {
+            try await textService.complete(
+                systemPrompt: Self.systemPrompt,
+                userPrompt: prompt,
+                maxTokens: 3000
+            )
+        }
         return Self.decode(
             text,
             sourceKind: sourceKind,

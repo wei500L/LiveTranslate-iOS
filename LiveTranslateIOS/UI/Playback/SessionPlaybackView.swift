@@ -442,13 +442,13 @@ private struct PlaybackEntryRow: View {
                 Label("校正这段文字", systemImage: "pencil.line")
             }
             Button {
-                UIPasteboard.general.string = russian
+                ClipboardService.shared.copySensitive(russian)
             } label: {
                 Label("复制俄语", systemImage: "doc.on.doc")
             }
             if let chinese, !chinese.isEmpty {
                 Button {
-                    UIPasteboard.general.string = chinese
+                    ClipboardService.shared.copySensitive(chinese)
                 } label: {
                     Label("复制中文", systemImage: "doc.on.doc")
                 }

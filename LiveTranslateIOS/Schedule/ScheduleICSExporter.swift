@@ -15,15 +15,13 @@ struct ScheduleICSExporter {
     /// nothing exportable exists.
     func writeTemporaryFile() -> URL? {
         let text = render()
-        guard !text.isEmpty else { return nil }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LiveTranslate-课程表-\(Int(Date().timeIntervalSince1970)).ics")
-        do {
-            try text.data(using: .utf8)?.write(to: url, options: .atomic)
-            return url
-        } catch {
+        guard !text.isEmpty, let data = text.data(using: .utf8) else {
             return nil
         }
+        return try? TemporaryExportStore().stage(
+            fileName: "LiveTranslate-课程表-\(Int(Date().timeIntervalSince1970)).ics",
+            data: data
+        )
     }
 
     func render() -> String {

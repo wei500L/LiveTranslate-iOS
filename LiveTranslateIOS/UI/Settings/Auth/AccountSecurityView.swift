@@ -24,6 +24,7 @@ struct AccountSecurityView: View {
             if let errorText = form.errorText {
                 Section { AuthErrorText(message: errorText) }
             }
+            .screenCaptureMask()
             if let profile {
                 identitySection(profile)
                 signInMethodsSection(profile)

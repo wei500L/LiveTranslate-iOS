@@ -553,7 +553,8 @@ final class InterpreterViewModel {
                 sources: sources,
                 scene: scene,
                 contextNote: contextNote,
-                recentTurns: projections
+                recentTurns: projections,
+                masked: documentContext.previewIsMasked
             )
             // Scope 校验：会话已切换/删除 → 丢弃迟到结果。
             guard self.conversation?.id == conversationID,
@@ -624,7 +625,8 @@ final class InterpreterViewModel {
         let scene = self.scene
         do {
             let analysis = try await service.analyzeDocument(
-                sources: sources, scene: scene
+                sources: sources, scene: scene,
+                masked: documentContext.previewIsMasked
             )
             guard self.conversation?.id == conversationID,
                   repository.interpreterConversation(id: conversationID) != nil else { return }
@@ -916,7 +918,10 @@ final class InterpreterViewModel {
 
     private static func describeTranslationError(_ error: Error) -> String {
         if let translationError = error as? TranslationError {
-            return translationError.localizedDescription
+            // Runtime surface: the stable actionable summary — the
+            // provider's raw response text stays out of the UI (it rides
+            // only the settings test-connection flow).
+            return translationError.userActionableSummary
         }
         return error.localizedDescription
     }

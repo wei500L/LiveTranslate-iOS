@@ -238,16 +238,17 @@ enum TranscriptExporter {
         return "LiveTranslate-\(base)-\(stamp).\(format.fileExtension)"
     }
 
-    /// Write the export to a temporary file for the share sheet.
+    /// Write the export to the controlled temporary-export store for the
+    /// share sheet (round 17: protected, excluded from backup, reaped on
+    /// expiry — never a loose file in tmp/).
     static func writeTemporaryFile(
         data: TranscriptExportData,
-        format: ExportFormat,
-        fileManager: FileManager = .default
+        format: ExportFormat
     ) throws -> URL {
-        let url = fileManager.temporaryDirectory
-            .appendingPathComponent(suggestedFileName(title: data.title, format: format))
-        try exportData(data, format: format).write(to: url, options: .atomic)
-        return url
+        try TemporaryExportStore().stage(
+            fileName: suggestedFileName(title: data.title, format: format),
+            data: exportData(data, format: format)
+        )
     }
 
     // MARK: - Markdown

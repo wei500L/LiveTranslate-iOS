@@ -132,7 +132,13 @@ final class SystemIntegrationCoordinator {
         classroomActivity.startActivity(
             sessionID: sessionID,
             courseID: coordinator.activeSessionCourseID,
-            title: coordinator.activeSessionTitle ?? "课堂",
+            // Round 17: the unified surface policy gates the IMMUTABLE
+            // activity title too — hideSensitiveContent means no classroom
+            // name on the lock screen (the promise the old statusOnly
+            // level made but never kept).
+            title: surfacePrivacy.showsTitles
+                ? (coordinator.activeSessionTitle ?? "课堂")
+                : "",
             scopeKey: scopeKey,
             accumulatedSeconds: Int(coordinator.state.elapsed),
             isPaused: coordinator.isPaused,
@@ -140,6 +146,37 @@ final class SystemIntegrationCoordinator {
             latestChinese: latestChinese(for: coordinator)
         )
         startPipelineObservation()
+        refreshSnapshotAndWidgets(force: true)
+    }
+
+    /// The unified system-surface content policy (single source).
+    var surfacePrivacy: SystemSurfacePrivacy {
+        environment.settings.systemSurfacePrivacy
+    }
+
+    /// Round 17: the surface policy changed — the classroom activity's
+    /// ATTRIBUTES (title) are immutable, so hiding the name mid-class
+    /// requires ending the old activity and requesting a fresh one under
+    /// the new policy. Everything else (snapshot, widgets) follows on the
+    /// next refresh.
+    func handleSurfacePrivacyChange() {
+        let coordinator = environment.coordinator
+        if coordinator.isRunning, let sessionID = coordinator.activeSessionID,
+           classroomActivity.currentActivitySessionID == sessionID {
+            classroomActivity.endOwnedActivity()
+            handleClassroomStarted()
+        } else {
+            classroomActivity.endOwnedActivity()
+        }
+        // The study activity's title lives in its attributes too.
+        if studyActivity.ownedActivityID != nil {
+            studyActivity.endOwnedActivity()
+            syncStudyActivity(startIfMissing: true)
+        }
+        // Spotlight indexing is off entirely at the strictest level.
+        if surfacePrivacy == .hideSensitiveContent {
+            spotlight.deactivate()
+        }
         refreshSnapshotAndWidgets(force: true)
     }
 
@@ -485,6 +522,11 @@ final class SystemIntegrationCoordinator {
         if let courseID = activity.courseID,
            let course = try? repository.course(id: courseID) {
             courseName = course.name
+        }
+        // Round 17: the unified surface policy gates study titles too
+        // (they ride the lock-screen Live Activity / Dynamic Island).
+        guard surfacePrivacy.showsTitles else {
+            return ("学习中", "", estimatedMinutes)
         }
         return (title, courseName, estimatedMinutes)
     }

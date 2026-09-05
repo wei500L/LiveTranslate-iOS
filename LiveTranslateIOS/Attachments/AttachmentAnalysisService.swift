@@ -120,6 +120,41 @@ struct OpenAICompatibleAttachmentService: AttachmentAnalysisModelService {
         images: [ModelImagePayload], maxTokens: Int
     ) async throws -> String {
         guard config.isConfigured else { throw TranslationError.notConfigured }
+        // Round 17: the local AI activity ledger — metadata only (image
+        // count + text volume + host + outcome; never image bytes or
+        // prompts).
+        let activityHost = URL(string: OpenAICompatibleTranslator.normalizeAPIBase(config.apiBase) ?? "")?.host ?? ""
+        let activityChars = systemPrompt.count + userPrompt.count
+        let imageCount = images.count
+        do {
+            let result = try await completeWithRetry(
+                systemPrompt: systemPrompt, userPrompt: userPrompt,
+                images: images, maxTokens: maxTokens
+            )
+            await AIActivityLog.recordTransport(
+                characterCount: activityChars, imageCount: imageCount,
+                outcome: .success, host: activityHost
+            )
+            return result
+        } catch is CancellationError {
+            await AIActivityLog.recordTransport(
+                characterCount: activityChars, imageCount: imageCount,
+                outcome: .cancelled, host: activityHost
+            )
+            throw CancellationError()
+        } catch {
+            await AIActivityLog.recordTransport(
+                characterCount: activityChars, imageCount: imageCount,
+                outcome: .failed, host: activityHost
+            )
+            throw error
+        }
+    }
+
+    private func completeWithRetry(
+        systemPrompt: String, userPrompt: String,
+        images: [ModelImagePayload], maxTokens: Int
+    ) async throws -> String {
         do {
             return try await completeOnce(
                 systemPrompt: systemPrompt, userPrompt: userPrompt,

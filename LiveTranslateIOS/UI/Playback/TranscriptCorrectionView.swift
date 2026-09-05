@@ -335,7 +335,14 @@ struct TranscriptCorrectionView: View {
             targetLanguage: session.targetLanguage,
             history: []
         )
-        let outcome = await environment.translationService.translate(request)
+        let outcome = await AICallScope.with(
+            AICallContext(
+                feature: .classroomTranslation, textCategory: .transcript,
+                masked: false, userTriggered: true
+            )
+        ) {
+            await environment.translationService.translate(request)
+        }
         if let text = outcome.text, !text.isEmpty {
             try? environment.repository.updateTranslation(
                 entryID: entry.id, text: text,

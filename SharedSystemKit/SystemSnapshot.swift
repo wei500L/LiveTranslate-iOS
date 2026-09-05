@@ -31,6 +31,53 @@ enum LockScreenPrivacy: String, Codable, Sendable, CaseIterable, Equatable {
     case statusTitleAndLatestText
 }
 
+/// The SINGLE content policy for every system surface (round 17): Live
+/// Activities, Dynamic Island, widgets, notification bodies, Spotlight
+/// and App-Entity suggestions all ask this one enum — no surface decides
+/// on its own. Device-level (SettingsStore), never per-account, never
+/// synced.
+///
+/// Semantics per level:
+///   - showFullContent: titles + the single latest classroom Chinese
+///     line (explicit user opt-in);
+///   - showTitlesOnly (DEFAULT): titles and timing, never content
+///     bodies — course/exam/task names are fine, transcripts never;
+///   - hideSensitiveContent: status only — NO titles anywhere (classroom
+///     name, course name, exam title, next-class location, study item),
+///     generic notification bodies, Spotlight off.
+///
+/// The classroom Live Activity dimension maps onto the pre-round-17
+/// `LockScreenPrivacy` (the internal representation the existing LA /
+/// snapshot machinery consumes).
+enum SystemSurfacePrivacy: String, Codable, Sendable, CaseIterable, Equatable {
+    case showFullContent
+    case showTitlesOnly
+    case hideSensitiveContent
+
+    /// The classroom-LA dimension (internal representation).
+    var classroomLockScreenPrivacy: LockScreenPrivacy {
+        switch self {
+        case .showFullContent: return .statusTitleAndLatestText
+        case .showTitlesOnly: return .statusAndTitle
+        case .hideSensitiveContent: return .statusOnly
+        }
+    }
+
+    /// Inverse mapping — the legacy classroom dimension encodes the same
+    /// three levels losslessly.
+    init(lockScreenPrivacy: LockScreenPrivacy) {
+        switch lockScreenPrivacy {
+        case .statusOnly: self = .hideSensitiveContent
+        case .statusAndTitle: self = .showTitlesOnly
+        case .statusTitleAndLatestText: self = .showFullContent
+        }
+    }
+
+    /// Whether titles (course/classroom/exam/task names) may appear on
+    /// system surfaces at all.
+    var showsTitles: Bool { self != .hideSensitiveContent }
+}
+
 /// The account scope a snapshot (or command, or route) belongs to.
 /// Same non-sensitive marker vocabulary the shared inbox uses ("guest" or
 /// an account UUID string). System surfaces render only for the active

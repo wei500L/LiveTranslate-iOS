@@ -44,7 +44,10 @@ struct ClassroomLiveActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(context.attributes.title)
+                        // Round 17: empty title = hidden by the surface
+                        // policy → generic label, never blank.
+                        Text(context.attributes.title.isEmpty
+                             ? "课堂" : context.attributes.title)
                             .font(.caption2.weight(.semibold))
                             .lineLimit(1)
                         if !context.state.latestChinese.isEmpty {

@@ -25,7 +25,6 @@ enum SessionExport {
     /// Temp files older than this are pruned on the next export (the
     /// system also evicts tmp/ under storage pressure; this bounds the
     /// common case ourselves).
-    private static let staleFileLifetime: TimeInterval = 24 * 60 * 60
 
     /// Build the export payload from persisted data. The scope selects
     /// which parts ride along; `review` is the classroom's current review
@@ -179,13 +178,17 @@ enum SessionExport {
             }
             guard fileOption != .none, !requests.isEmpty else { return urls }
             // Image copies into one export directory, numbered by timeline
-            // order so any receiver sees them in class order.
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "LiveTranslate-Images-\(Int(Date().timeIntervalSince1970))",
-                    isDirectory: true
-                )
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            // order so any receiver sees them in class order. Round 17:
+            // the directory rides the controlled export store (protected
+            // + reaped), no longer a loose tmp/ folder.
+            let dir: URL
+            do {
+                dir = try TemporaryExportStore().stageDirectory(
+                    fileName: "LiveTranslate-Images-\(Int(Date().timeIntervalSince1970))"
+                ) { _ in }
+            } catch {
+                return urls
+            }
             for (index, request) in requests.enumerated() {
                 let store = AttachmentFileStoreShared.store
                 let bytes: Data?
@@ -285,41 +288,21 @@ enum SessionExport {
     /// counter instead. The file name itself stays sanitized and content
     /// formatting stays entirely inside `TranscriptExporter`.
     private static func writeUnique(data: TranscriptExportData, format: ExportFormat) -> URL? {
-        let directory = FileManager.default.temporaryDirectory
-        let baseName = TranscriptExporter.suggestedFileName(title: data.title, format: format)
-        var url = directory.appendingPathComponent(baseName)
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-            let stem = (baseName as NSString).deletingPathExtension
-            let ext = (baseName as NSString).pathExtension
-            url = directory.appendingPathComponent("\(stem)-\(suffix).\(ext)")
-            suffix += 1
-        }
-        do {
-            try TranscriptExporter.exportData(data, format: format).write(to: url, options: .atomic)
-            return url
-        } catch {
+        // Round 17: the controlled export store — same-unique-name rule,
+        // plus protection + backup exclusion + expiry reaping.
+        guard let content = try? TranscriptExporter.exportData(data, format: format) else {
             return nil
         }
+        return try? TemporaryExportStore().stage(
+            fileName: TranscriptExporter.suggestedFileName(title: data.title, format: format),
+            data: content
+        )
     }
 
-    /// Remove our own stale exports from tmp/ (best effort; never fatal).
+    /// Round 17: legacy loose exports from pre-round-17 builds (files in
+    /// plain tmp/ with the LiveTranslate- prefix). The controlled store
+    /// reaps its OWN entries; this sweep only touches the old layout.
     private static func pruneStaleTemporaryFiles() {
-        let fileManager = FileManager.default
-        let directory = fileManager.temporaryDirectory
-        guard
-            let contents = try? fileManager.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
-            )
-        else { return }
-        let cutoff = Date().addingTimeInterval(-staleFileLifetime)
-        for url in contents where url.lastPathComponent.hasPrefix("LiveTranslate-") {
-            let modified = try? url.resourceValues(
-                forKeys: [.contentModificationDateKey]
-            ).contentModificationDate
-            if let modified, modified < cutoff {
-                try? fileManager.removeItem(at: url)
-            }
-        }
+        TemporaryExportStore.reapLegacyLooseFiles()
     }
 }

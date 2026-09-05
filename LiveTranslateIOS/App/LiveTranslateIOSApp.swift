@@ -128,6 +128,13 @@ final class AppEnvironment {
     /// The profile's interpreter (随身翻译) document file store — the
     /// on-site file context. Device-local files, never synced.
     let interpreterDocumentStore: InterpreterDocumentStore
+    /// Device-local biometric privacy lock (round 17). Owned per profile:
+    /// a rebuilt environment starts LOCKED, so a profile switch can never
+    /// inherit the previous profile's unlock authorization.
+    let privacyLock: PrivacyLockController
+    /// The profile's local AI activity ledger (round 17 — metadata only).
+    /// Also registered as AIActivityLog.shared for the transport layer.
+    let aiActivityLog: AIActivityLog
     /// 智能收件箱 — the App Group shared inbox (reconcile, inspect,
     /// counts). Items are device-local until confirmed into formal
     /// entities; the store is shared with the Share Extension but the
@@ -364,6 +371,11 @@ final class AppEnvironment {
                 store: $0
             )
         }
+        let privacyLock = PrivacyLockController(settings: settings)
+        // Round 17: the profile's local AI activity ledger (metadata
+        // only — 30-day retention, never synced). Registered globally so
+        // the transport services can record; rebuilt per profile.
+        AIActivityLog.shared = AIActivityLog(accountID: accountID)
         self.init(
             capabilities: Capabilities(),
             modelContainer: modelContainer,
@@ -402,6 +414,8 @@ final class AppEnvironment {
             waveformStore: waveformStore,
             inbox: inbox,
             inboxExecutor: inboxExecutor,
+            privacyLock: privacyLock,
+            aiActivityLog: AIActivityLog.shared,
             systemIntegrationScopeKey: accountID.map { $0.uuidString }
                 ?? SharedInboxScopeStore.guestScope
         )
@@ -454,6 +468,8 @@ final class AppEnvironment {
         waveformStore: RecordingWaveformStore? = nil,
         inbox: InboxCoordinator? = nil,
         inboxExecutor: InboxActionExecutor? = nil,
+        privacyLock: PrivacyLockController? = nil,
+        aiActivityLog: AIActivityLog? = nil,
         systemIntegrationScopeKey: String? = nil
     ) {
         self.capabilities = capabilities
@@ -579,6 +595,14 @@ final class AppEnvironment {
         // the real one from the profile init.
         self.inbox = inbox ?? InboxCoordinator(store: nil)
         self.inboxExecutor = inboxExecutor
+        self.privacyLock = privacyLock ?? PrivacyLockController(settings: settings)
+        // DI compositions without a log (tests, the Debug demo) keep
+        // their own throwaway file — the demo never touches the real
+        // ledger and never records (its fake services bypass the
+        // transport hooks).
+        self.aiActivityLog = aiActivityLog ?? AIActivityLog(fileURL: FileManager
+            .default.temporaryDirectory
+            .appendingPathComponent("ui-ai-activity-\(UUID().uuidString).json"))
         // System integration (Live Activities, widgets, commands, system
         // routes, Spotlight): armed only when the profile init passes a
         // scope key (production); demo/tests keep it off entirely.
@@ -811,6 +835,12 @@ final class AppEnvironment {
         InterpreterDocumentStoreShared.store?.removeStaleTempFiles()
         if let documentStore = InterpreterDocumentStoreShared.store {
             repository.reconcileInterpreterDocuments(store: documentStore)
+            // Round 17: the user-chosen retention window for saved
+            // conversations' documents (default: keep everything).
+            _ = try? repository.applyInterpreterDocumentRetention(
+                days: settings.interpreterDocumentRetentionDays,
+                store: documentStore, asOf: .now
+            )
         }
         // Recording rows ↔ disk: legacy raw.wav files gain metadata rows,
         // removed files flip isDeleted, orphan rows are reaped.
@@ -818,6 +848,10 @@ final class AppEnvironment {
         // File-protection attributes for files written by earlier builds
         // (idempotent in-place upgrade, off the main actor).
         DataProtectionReconciler.reconcileActiveProfile(accountID: accountID)
+        // Round 17: reap expired share-sheet exports (the controlled
+        // store) + the legacy loose files from pre-round-17 builds.
+        TemporaryExportStore().reap()
+        TemporaryExportStore.reapLegacyLooseFiles()
     }
 
     /// Re-arms the class-reminder rolling window (launch, foreground

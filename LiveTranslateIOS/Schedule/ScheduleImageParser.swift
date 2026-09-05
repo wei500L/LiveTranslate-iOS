@@ -51,13 +51,17 @@ struct ScheduleImageParser {
     let service: any AttachmentAnalysisModelService
 
     func parse(imageData: Data, imageMIME: String) async throws -> Parsed {
-        let text = try await service.complete(
-            systemPrompt: Self.systemPrompt,
-            userPrompt: Self.userPrompt,
-            imageData: imageData,
-            imageMIME: imageMIME,
-            maxTokens: 4000
-        )
+        let text = try await AICallScope.with(
+            AICallContext(feature: .scheduleImport, textCategory: .none)
+        ) {
+            try await service.complete(
+                systemPrompt: Self.systemPrompt,
+                userPrompt: Self.userPrompt,
+                imageData: imageData,
+                imageMIME: imageMIME,
+                maxTokens: 4000
+            )
+        }
         return Self.decode(text)
     }
 

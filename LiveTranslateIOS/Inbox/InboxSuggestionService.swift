@@ -93,19 +93,27 @@ struct InboxSuggestionService {
 
         let raw: String
         if let imageData, let imageService {
-            raw = try await imageService.complete(
-                systemPrompt: Self.systemPrompt,
-                userPrompt: prompt + "\n\n来源内容（图片）：",
-                imageData: imageData,
-                imageMIME: imageMIME,
-                maxTokens: Self.maxTokens
-            )
+            raw = try await AICallScope.with(
+                AICallContext(feature: .inboxSuggestion, textCategory: .userInput)
+            ) {
+                try await imageService.complete(
+                    systemPrompt: Self.systemPrompt,
+                    userPrompt: prompt + "\n\n来源内容（图片）：",
+                    imageData: imageData,
+                    imageMIME: imageMIME,
+                    maxTokens: Self.maxTokens
+                )
+            }
         } else if let textService, !sourceText.isEmpty {
-            raw = try await textService.complete(
-                systemPrompt: Self.systemPrompt,
-                userPrompt: prompt + "\n\n来源内容：\n" + sourceText,
-                maxTokens: Self.maxTokens
-            )
+            raw = try await AICallScope.with(
+                AICallContext(feature: .inboxSuggestion, textCategory: .mixed)
+            ) {
+                try await textService.complete(
+                    systemPrompt: Self.systemPrompt,
+                    userPrompt: prompt + "\n\n来源内容：\n" + sourceText,
+                    maxTokens: Self.maxTokens
+                )
+            }
         } else {
             // Image without a configured multimodal service, or text
             // without a configured text service.

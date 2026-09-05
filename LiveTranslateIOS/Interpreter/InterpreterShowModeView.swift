@@ -28,6 +28,7 @@ struct InterpreterShowModeView: View {
     var body: some View {
         ZStack {
             LTColors.backgroundPrimary.ignoresSafeArea()
+                .screenCaptureMask()
             VStack(spacing: LTSpacing.l) {
                 // 主阅读区：大字号俄语，长文本滚动。
                 ScrollView {
@@ -88,7 +89,7 @@ struct InterpreterShowModeView: View {
                     .accessibilityLabel(isSpeaking ? "停止朗读" : "朗读俄语")
 
                     Button {
-                        UIPasteboard.general.string = turn.plainRussian
+                        ClipboardService.shared.copySensitive(turn.plainRussian)
                     } label: {
                         Image(systemName: "doc.on.doc.fill")
                             .font(.system(size: 30))

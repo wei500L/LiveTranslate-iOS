@@ -308,12 +308,16 @@ final class CourseAssistantService {
                 guard let imageService = imageServiceProvider() else {
                     throw AskError.imageModelNotConfigured
                 }
-                let raw = try await imageService.complete(
-                    systemPrompt: VisualAskPrompt.systemPrompt(),
-                    userPrompt: prompt,
-                    images: preparedImages.map(\.payload),
-                    maxTokens: 2_400
-                )
+                let raw = try await AICallScope.with(
+                    AICallContext(feature: .courseAssistant, textCategory: .userInput)
+                ) {
+                    try await imageService.complete(
+                        systemPrompt: VisualAskPrompt.systemPrompt(),
+                        userPrompt: prompt,
+                        images: preparedImages.map(\.payload),
+                        maxTokens: 2_400
+                    )
+                }
                 // [n] markers validate against the retrieval snapshot;
                 // 图片 citations validate against the evidence list.
                 let cleaned: String
@@ -350,11 +354,15 @@ final class CourseAssistantService {
                 guard let service = textServiceProvider() else {
                     throw AskError.notConfigured
                 }
-                let raw = try await service.complete(
-                    systemPrompt: CourseAssistantPrompt.systemPrompt(),
-                    userPrompt: prompt,
-                    maxTokens: 2_000
-                )
+                let raw = try await AICallScope.with(
+                    AICallContext(feature: .courseAssistant, textCategory: .mixed)
+                ) {
+                    try await service.complete(
+                        systemPrompt: CourseAssistantPrompt.systemPrompt(),
+                        userPrompt: prompt,
+                        maxTokens: 2_000
+                    )
+                }
                 let (text, parsedCitations) = Self.resolveCitations(raw, hits: hits)
                 answerText = text
                 citations = parsedCitations

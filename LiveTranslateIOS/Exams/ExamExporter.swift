@@ -73,12 +73,12 @@ enum ExamExporter {
         lines.append("END:VEVENT")
         lines.append("END:VCALENDAR")
 
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LiveTranslate-考试-\(exam.title)-\(Int(Date().timeIntervalSince1970)).ics")
+        let fileName = "LiveTranslate-考试-\(safeNameFragment(exam.title))-\(Int(Date().timeIntervalSince1970)).ics"
+        guard let data = (lines.joined(separator: "\r\n") + "\r\n").data(using: .utf8) else {
+            return nil
+        }
         do {
-            try (lines.joined(separator: "\r\n") + "\r\n").data(using: .utf8)?
-                .write(to: url, options: .atomic)
-            return url
+            return try TemporaryExportStore().stage(fileName: fileName, data: data)
         } catch {
             return nil
         }
@@ -228,11 +228,13 @@ enum ExamExporter {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(payload) else { return nil }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LiveTranslate-学习计划-\(plan.id.uuidString.prefix(8)).json")
+        // Round 17: a receiver-meaningful date stamp instead of an
+        // internal UUID fragment; the export rides the controlled store.
+        let stamp = Self.planFileStamp.string(from: .now)
         do {
-            try data.write(to: url, options: .atomic)
-            return url
+            return try TemporaryExportStore().stage(
+                fileName: "LiveTranslate-学习计划-\(stamp).json", data: data
+            )
         } catch {
             return nil
         }
@@ -252,14 +254,23 @@ enum ExamExporter {
     }
 
     private static func writeMarkdown(_ lines: [String], fileName: String) -> URL? {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(fileName).md")
-        do {
-            try lines.joined(separator: "\n").data(using: .utf8)?
-                .write(to: url, options: .atomic)
-            return url
-        } catch {
+        guard let data = lines.joined(separator: "\n").data(using: .utf8) else {
             return nil
         }
+        return try? TemporaryExportStore().stage(fileName: fileName + ".md", data: data)
+    }
+
+    private static let planFileStamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmm"
+        return formatter
+    }()
+
+    /// File-system-safe export name fragment (round 17: exam titles with
+    /// "/" used to silently break the export by naming a phantom
+    /// subdirectory).
+    static func safeNameFragment(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "[\\/:*?\"<>|\s]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 }

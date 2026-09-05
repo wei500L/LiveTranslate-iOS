@@ -150,9 +150,15 @@ final class ExamReminderScheduler {
 
         let content = UNMutableNotificationContent()
         content.title = "考试提醒"
-        var body = exam.title
-        if !exam.location.isEmpty { body += " · \(exam.location)" }
-        content.body = body
+        // Round 17: hideSensitiveContent strips exam title + room from
+        // the body.
+        if SettingsStore.shared.systemSurfacePrivacy.showsTitles {
+            var body = exam.title
+            if !exam.location.isEmpty { body += " · \(exam.location)" }
+            content.body = body
+        } else {
+            content.body = "有一场考试临近"
+        }
         content.sound = .default
         content.categoryIdentifier = Self.categoryID
         content.userInfo = [Self.examIDUserInfo: exam.id.uuidString]

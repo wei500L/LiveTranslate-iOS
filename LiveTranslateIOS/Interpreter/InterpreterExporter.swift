@@ -167,11 +167,13 @@ enum InterpreterExporter {
         return "LiveTranslate-随身翻译-\(sanitized)-\(formatter.string(from: date)).\(ext)"
     }
 
-    /// 写临时文件供系统分享（TranscriptExporter 惯例）。
+    /// 写入受控临时导出存储供系统分享（第十七轮：保护属性 + 备份
+    /// 排除 + 到期收割 —— 绝不再散落 tmp/）。
     static func writeTemporaryFile(content: String, fileName: String) throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-        try content.data(using: .utf8)?.write(to: url, options: .atomic)
-        return url
+        guard let data = content.data(using: .utf8) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        return try TemporaryExportStore().stage(fileName: fileName, data: data)
     }
 
     private static let timeFormatter: DateFormatter = {

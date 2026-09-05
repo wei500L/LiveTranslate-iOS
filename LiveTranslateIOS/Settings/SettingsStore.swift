@@ -41,6 +41,26 @@ final class SettingsStore {
         /// globally, not per-account): status-only, status + name (the
         /// restrained default), or additionally one latest Chinese line.
         static let lockScreenPrivacy = "ui.lockScreenPrivacy"
+        /// Round 17: the SINGLE content policy for every system surface
+        /// (Live Activities / widgets / notification bodies / Spotlight /
+        /// App-Entity suggestions). nil on first run → derived from the
+        /// legacy lockScreenPrivacy value.
+        static let systemSurfacePrivacy = "ui.systemSurfacePrivacy"
+        /// Round 17: device-local biometric privacy lock (off by default;
+        /// the config never syncs and never crosses profiles).
+        static let privacyLockEnabled = "privacy.lock.enabled"
+        /// Grace period before the lock re-arms after leaving the app:
+        /// 0 (immediately) / 60 / 300 / 900 seconds.
+        static let privacyLockGraceSeconds = "privacy.lock.graceSeconds"
+        /// Round 17: brand placeholder over the UI in the task switcher
+        /// snapshot (on by default — it hides content, costs nothing).
+        static let backgroundMaskingEnabled = "privacy.backgroundMasking"
+        /// Round 17: mask sensitive screens while the system screen is
+        /// being captured or mirrored (on by default).
+        static let screenCaptureMaskingEnabled = "privacy.screenCaptureMasking"
+        /// Round 17: 随身翻译 document retention (days; 0 = keep forever,
+        /// the default — nothing is ever auto-deleted without consent).
+        static let interpreterDocumentRetentionDays = "privacy.interpreterDocumentRetentionDays"
         // 随身翻译 (interpreter) preferences.
         /// Default errand scene for a new interpreter conversation.
         static let interpreterDefaultScene = "interpreter.defaultScene"
@@ -68,6 +88,48 @@ final class SettingsStore {
     /// system coordinator); saved classroom data is unaffected.
     var lockScreenPrivacy: LockScreenPrivacy {
         didSet { defaults.set(lockScreenPrivacy.rawValue, forKey: Keys.lockScreenPrivacy) }
+    }
+
+    /// The unified system-surface content policy (round 17). Setter keeps
+    /// the legacy classroom dimension in sync so the existing LA /
+    /// snapshot machinery follows the single source.
+    var systemSurfacePrivacy: SystemSurfacePrivacy {
+        didSet {
+            defaults.set(systemSurfacePrivacy.rawValue, forKey: Keys.systemSurfacePrivacy)
+            lockScreenPrivacy = systemSurfacePrivacy.classroomLockScreenPrivacy
+        }
+    }
+
+    /// Whether the device-local privacy lock is armed (default off).
+    var privacyLockEnabled: Bool {
+        didSet { defaults.set(privacyLockEnabled, forKey: Keys.privacyLockEnabled) }
+    }
+
+    /// Grace seconds before the privacy lock re-arms (0/60/300/900).
+    var privacyLockGraceSeconds: Int {
+        didSet { defaults.set(privacyLockGraceSeconds, forKey: Keys.privacyLockGraceSeconds) }
+    }
+
+    /// Task-switcher snapshot masking (default on).
+    var backgroundMaskingEnabled: Bool {
+        didSet { defaults.set(backgroundMaskingEnabled, forKey: Keys.backgroundMaskingEnabled) }
+    }
+
+    /// Screen-capture/mirror masking for sensitive screens (default on).
+    var screenCaptureMaskingEnabled: Bool {
+        didSet { defaults.set(screenCaptureMaskingEnabled, forKey: Keys.screenCaptureMaskingEnabled) }
+    }
+
+    /// 随身翻译 document retention in days (0 = keep forever — the
+    /// default: round 16's "保存会话时保留原件" behavior is unchanged
+    /// until the user explicitly chooses a window).
+    var interpreterDocumentRetentionDays: Int {
+        didSet {
+            defaults.set(
+                interpreterDocumentRetentionDays,
+                forKey: Keys.interpreterDocumentRetentionDays
+            )
+        }
     }
 
     var preferredBackend: ASRBackendKind {
@@ -216,6 +278,27 @@ final class SettingsStore {
         lockScreenPrivacy = LockScreenPrivacy(
             rawValue: defaults.string(forKey: Keys.lockScreenPrivacy) ?? ""
         ) ?? .statusAndTitle
+        // Round 17: derive the unified level from the legacy classroom
+        // preference on first run (nothing the user had chosen is lost).
+        if let stored = defaults.string(forKey: Keys.systemSurfacePrivacy),
+           let parsed = SystemSurfacePrivacy(rawValue: stored) {
+            systemSurfacePrivacy = parsed
+        } else {
+            switch lockScreenPrivacy {
+            case .statusOnly: systemSurfacePrivacy = .hideSensitiveContent
+            case .statusAndTitle: systemSurfacePrivacy = .showTitlesOnly
+            case .statusTitleAndLatestText: systemSurfacePrivacy = .showFullContent
+            }
+        }
+        privacyLockEnabled = defaults.bool(forKey: Keys.privacyLockEnabled)
+        let grace = defaults.object(forKey: Keys.privacyLockGraceSeconds) as? Int
+        privacyLockGraceSeconds = grace ?? 0
+        let masking = defaults.object(forKey: Keys.backgroundMaskingEnabled) as? Bool
+        backgroundMaskingEnabled = masking ?? true
+        let captureMasking = defaults.object(forKey: Keys.screenCaptureMaskingEnabled) as? Bool
+        screenCaptureMaskingEnabled = captureMasking ?? true
+        let retention = defaults.object(forKey: Keys.interpreterDocumentRetentionDays) as? Int
+        interpreterDocumentRetentionDays = retention ?? 0
         interpreterDefaultScene = InterpreterScene(
             rawValue: defaults.string(forKey: Keys.interpreterDefaultScene) ?? ""
         ) ?? .general

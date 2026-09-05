@@ -77,8 +77,12 @@ struct InterpreterTranslationService: Sendable {
     // MARK: - Transport
 
     private func complete(system: String, user: String) async throws -> String {
-        try await model.complete(
-            systemPrompt: system, userPrompt: user, maxTokens: 1024
-        )
+        try await AICallScope.with(
+            AICallContext(feature: .interpreterReply, textCategory: .userInput)
+        ) {
+            try await model.complete(
+                systemPrompt: system, userPrompt: user, maxTokens: 1024
+            )
+        }
     }
 }

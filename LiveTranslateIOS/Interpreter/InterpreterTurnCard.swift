@@ -52,7 +52,7 @@ struct InterpreterTurnCard: View {
         .onTapGesture(perform: onToggleExpanded)
         .contextMenu {
             Button {
-                UIPasteboard.general.string = primaryCopyText
+                ClipboardService.shared.copySensitive(primaryCopyText)
             } label: {
                 Label("复制", systemImage: "doc.on.doc")
             }
@@ -172,7 +172,7 @@ struct InterpreterTurnCard: View {
                 }
             }
             Button {
-                UIPasteboard.general.string = primaryCopyText
+                ClipboardService.shared.copySensitive(primaryCopyText)
             } label: {
                 Label("复制", systemImage: "doc.on.doc")
                     .font(LTTypography.caption)

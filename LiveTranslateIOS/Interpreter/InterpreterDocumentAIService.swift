@@ -51,7 +51,8 @@ struct InterpreterDocumentAIService: Sendable {
     /// （默认的）敏感遮盖 —— 本层不再修改发送内容。
     func analyzeDocument(
         sources: [InterpreterDocumentChunker.RequestSource],
-        scene: InterpreterScene
+        scene: InterpreterScene,
+        masked: Bool = false
     ) async throws -> InterpreterDocumentAnalysis {
         let sourceLines = sources.map { source in
             InterpreterDocumentPrompt.sourceLine(
@@ -64,7 +65,8 @@ struct InterpreterDocumentAIService: Sendable {
         let raw = try await complete(
             system: InterpreterDocumentPrompt.analysisSystemPrompt(scene: scene),
             user: InterpreterDocumentPrompt.analysisUserPrompt(sources: sourceLines),
-            maxTokens: 2400
+            maxTokens: 2400,
+            feature: .interpreterDocumentAnalysis, masked: masked
         )
         guard var analysis = InterpreterDocumentParser.parseAnalysis(raw) else {
             throw TranslationError.emptyResponse
@@ -85,7 +87,8 @@ struct InterpreterDocumentAIService: Sendable {
         sources: [InterpreterDocumentChunker.RequestSource],
         scene: InterpreterScene,
         contextNote: String,
-        recentTurns: [InterpreterContextBuilder.TurnProjection]
+        recentTurns: [InterpreterContextBuilder.TurnProjection],
+        masked: Bool = false
     ) async throws -> InterpreterDocumentAnswer {
         let sourceLines = sources.map { source in
             InterpreterDocumentPrompt.sourceLine(
@@ -103,7 +106,8 @@ struct InterpreterDocumentAIService: Sendable {
             user: InterpreterDocumentPrompt.answerUserPrompt(
                 question: question, sources: sourceLines, recentContext: context
             ),
-            maxTokens: 1600
+            maxTokens: 1600,
+            feature: .interpreterDocumentQA, masked: masked
         )
         guard var answer = InterpreterDocumentParser.parseAnswer(raw) else {
             throw TranslationError.emptyResponse
@@ -128,7 +132,8 @@ struct InterpreterDocumentAIService: Sendable {
                 userValue: userValue,
                 exampleFormat: field.exampleFormat
             ),
-            maxTokens: 800
+            maxTokens: 800,
+            feature: .interpreterFieldCheck, masked: false
         )
         guard var answer = InterpreterDocumentParser.parseAnswer(raw) else {
             throw TranslationError.emptyResponse
@@ -150,16 +155,20 @@ struct InterpreterDocumentAIService: Sendable {
         scene: InterpreterScene,
         imageService: any AttachmentAnalysisModelService
     ) async throws -> InterpreterDocumentAnalysis {
-        let raw = try await imageService.complete(
-            systemPrompt: InterpreterDocumentPrompt.analysisSystemPrompt(scene: scene),
-            userPrompt: """
-            页面图像见附件（用户已确认发送这些页面）。用户的问题：\(question.isEmpty ? "请分析这份文件" : question)
+        let raw = try await AICallScope.with(
+            AICallContext(feature: .interpreterPagesAnalysis, textCategory: .userInput)
+        ) {
+            try await imageService.complete(
+                systemPrompt: InterpreterDocumentPrompt.analysisSystemPrompt(scene: scene),
+                userPrompt: """
+                页面图像见附件（用户已确认发送这些页面）。用户的问题：\(question.isEmpty ? "请分析这份文件" : question)
 
-            请分析并返回 JSON。citations 用 [{"source": "图片 1", "page": 1, "snippet": "..."}] 的形式引用图片编号。
-            """,
-            images: images,
-            maxTokens: 2400
-        )
+                请分析并返回 JSON。citations 用 [{"source": "图片 1", "page": 1, "snippet": "..."}] 的形式引用图片编号。
+                """,
+                images: images,
+                maxTokens: 2400
+            )
+        }
         guard var analysis = InterpreterDocumentParser.parseAnalysis(raw) else {
             throw TranslationError.emptyResponse
         }
@@ -250,10 +259,17 @@ struct InterpreterDocumentAIService: Sendable {
 
     // MARK: - Helpers
 
-    private func complete(system: String, user: String, maxTokens: Int) async throws -> String {
-        try await model.complete(
-            systemPrompt: system, userPrompt: user, maxTokens: maxTokens
-        )
+    private func complete(
+        system: String, user: String, maxTokens: Int,
+        feature: AIFeature, masked: Bool
+    ) async throws -> String {
+        try await AICallScope.with(
+            AICallContext(feature: feature, textCategory: .documentText, masked: masked)
+        ) {
+            try await model.complete(
+                systemPrompt: system, userPrompt: user, maxTokens: maxTokens
+            )
+        }
     }
 
     /// Citation validation shared by every path.

@@ -68,7 +68,9 @@ struct ClassroomLiveActivityView: View {
     }
 
     private var titleText: String {
-        context.attributes.title
+        // Round 17: an empty title means the surface policy hid the
+        // classroom name — show the generic label, never a blank card.
+        context.attributes.title.isEmpty ? "课堂" : context.attributes.title
     }
 
     private var statusLabel: String {

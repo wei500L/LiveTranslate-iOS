@@ -82,7 +82,7 @@ struct VisualAnswerCard: View {
                                     .textSelection(.enabled)
                                 Spacer(minLength: LTSpacing.xs)
                                 Button {
-                                    UIPasteboard.general.string = formula
+                                    ClipboardService.shared.copy(formula, policy: .plain)
                                 } label: {
                                     Image(systemName: "doc.on.doc")
                                         .font(.system(size: 11))
@@ -237,7 +237,7 @@ struct VisualAnswerCard: View {
     private var actionBar: some View {
         HStack(spacing: LTSpacing.s) {
             Button {
-                UIPasteboard.general.string = answer.searchableText
+                ClipboardService.shared.copySensitive(answer.searchableText)
             } label: {
                 Label("复制", systemImage: "doc.on.doc")
             }
@@ -482,9 +482,11 @@ struct VisualAnswerCard: View {
         if !citations.isEmpty {
             text += "\n\n来源：" + citations.map(\.label).joined(separator: "；")
         }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("图片问答回答.md")
-        try? text.data(using: .utf8)?.write(to: url)
+        let url = try? TemporaryExportStore().stage(
+            fileName: "图片问答回答.md",
+            data: Data(text.utf8)
+        )
+        guard let url else { return }
         shareItem = SharedFile(url: url)
     }
 

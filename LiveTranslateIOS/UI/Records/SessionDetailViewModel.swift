@@ -339,7 +339,7 @@ final class SessionDetailViewModel {
             return line
         }
         .joined(separator: "\n\n")
-        UIPasteboard.general.string = text.isEmpty ? nil : text
+        if !text.isEmpty { ClipboardService.shared.copySensitive(text) }
     }
 
     /// Retranslate failed entries using the real translation service and
@@ -360,7 +360,14 @@ final class SessionDetailViewModel {
                 targetLanguage: session.targetLanguage,
                 history: history
             )
-            let outcome = await environment.translationService.translate(request)
+            let outcome = await AICallScope.with(
+                AICallContext(
+                    feature: .classroomTranslation, textCategory: .transcript,
+                    masked: false, userTriggered: true
+                )
+            ) {
+                await environment.translationService.translate(request)
+            }
             if let text = outcome.text, !text.isEmpty {
                 try? environment.repository.updateTranslation(
                     entryID: entry.id, text: text,

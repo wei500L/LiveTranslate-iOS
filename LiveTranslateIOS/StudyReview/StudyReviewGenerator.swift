@@ -226,11 +226,15 @@ final class StudyReviewGenerator {
                     attachments: attachments
                 )
                 do {
-                    let raw = try await service.complete(
-                        systemPrompt: StudyReviewPrompt.extractionSystemPrompt(),
-                        userPrompt: userPrompt,
-                        maxTokens: 2_400
-                    )
+                    let raw = try await AICallScope.with(
+                        AICallContext(feature: .studyReview, textCategory: .mixed)
+                    ) {
+                        try await service.complete(
+                            systemPrompt: StudyReviewPrompt.extractionSystemPrompt(),
+                            userPrompt: userPrompt,
+                            maxTokens: 2_400
+                        )
+                    }
                     let normalized = try StudyReviewParser.normalizeExtraction(raw)
                     chunkState.chunks[chunkIndex].extractionJSON = normalized
                     chunkState.chunks[chunkIndex].status = .done
@@ -280,11 +284,15 @@ final class StudyReviewGenerator {
             )
             let mergedRaw: String
             do {
-                mergedRaw = try await service.complete(
-                    systemPrompt: StudyReviewPrompt.mergeSystemPrompt(),
-                    userPrompt: mergePrompt,
-                    maxTokens: 4_096
-                )
+                mergedRaw = try await AICallScope.with(
+                    AICallContext(feature: .studyReview, textCategory: .mixed)
+                ) {
+                    try await service.complete(
+                        systemPrompt: StudyReviewPrompt.mergeSystemPrompt(),
+                        userPrompt: mergePrompt,
+                        maxTokens: 4_096
+                    )
+                }
             } catch is CancellationError {
                 try? persistProgress(review, chunkState: chunkState, terminal: .partial)
                 try? repository.markStudyReviewInterrupted(review)

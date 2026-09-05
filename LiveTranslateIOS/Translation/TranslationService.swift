@@ -28,6 +28,9 @@ enum TranslationError: LocalizedError, Sendable, Equatable {
     case fatal(String)
     case notConfigured
     case emptyResponse
+    /// The request was cancelled (round 17: distinct from failure so
+    /// cancellation is never recorded as a model failure).
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +38,7 @@ enum TranslationError: LocalizedError, Sendable, Equatable {
         case .fatal(let reason): return reason
         case .notConfigured: return String(localized: "Translation API is not configured.")
         case .emptyResponse: return String(localized: "The translation model returned an empty response.")
+        case .cancelled: return String(localized: "Request cancelled.")
         }
     }
 
@@ -42,6 +46,26 @@ enum TranslationError: LocalizedError, Sendable, Equatable {
         switch self {
         case .retryable: return true
         default: return false
+        }
+    }
+
+    /// Stable, actionable summary for RUNTIME surfaces (interpreter,
+    /// analysis failures — round 17). The provider's raw message text
+    /// never reaches these screens; it remains visible only in the
+    /// settings "test connection" flow, where the user is debugging
+    /// their own endpoint.
+    var userActionableSummary: String {
+        switch self {
+        case .retryable:
+            return String(localized: "网络不稳定，请稍后重试或检查网络连接")
+        case .fatal:
+            return String(localized: "请求被服务方拒绝，请在设置中检查 API 地址、密钥与模型名")
+        case .notConfigured:
+            return errorDescription ?? ""
+        case .emptyResponse:
+            return String(localized: "模型返回了空结果，请重试")
+        case .cancelled:
+            return errorDescription ?? ""
         }
     }
 }

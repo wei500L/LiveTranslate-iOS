@@ -90,7 +90,11 @@ final class TaskReminderScheduler {
         guard fireDate > .now else { return } // a past due date never fires
         let content = UNMutableNotificationContent()
         content.title = "作业提醒"
-        content.body = task.title
+        // Round 17: hideSensitiveContent strips task titles from the
+        // lock-screen-visible body (the in-app list is unaffected).
+        content.body = SettingsStore.shared.systemSurfacePrivacy.showsTitles
+            ? task.title
+            : "有一项作业即将到期"
         content.sound = .default
         let components = Calendar.current.dateComponents(
             [.year, .month, .day, .hour, .minute], from: fireDate

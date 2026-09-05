@@ -1017,11 +1017,11 @@ private struct DetailEntryRow: View {
             }
             Button("复制中文") {
                 if let translated = shownChinese {
-                    UIPasteboard.general.string = translated
+                    ClipboardService.shared.copySensitive(translated)
                 }
             }
             Button("复制俄语") {
-                UIPasteboard.general.string = shownRussian
+                ClipboardService.shared.copySensitive(shownRussian)
             }
             Button(isBookmarked ? "取消书签" : "标记书签") {
                 onToggleBookmark()

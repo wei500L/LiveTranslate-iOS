@@ -266,11 +266,15 @@ final class MaterialDigestGenerator {
                     context: context, pages: chunkPages
                 )
                 do {
-                    let raw = try await textService.complete(
-                        systemPrompt: MaterialDigestPrompt.extractionSystemPrompt(),
-                        userPrompt: userPrompt,
-                        maxTokens: 2_400
-                    )
+                    let raw = try await AICallScope.with(
+                        AICallContext(feature: .materialDigest, textCategory: .ocr)
+                    ) {
+                        try await textService.complete(
+                            systemPrompt: MaterialDigestPrompt.extractionSystemPrompt(),
+                            userPrompt: userPrompt,
+                            maxTokens: 2_400
+                        )
+                    }
                     let normalized = try MaterialDigestParser.normalizeExtraction(raw)
                     chunkState.chunks[chunkIndex].extractionJSON = normalized
                     chunkState.chunks[chunkIndex].status = .done
@@ -315,15 +319,19 @@ final class MaterialDigestGenerator {
                 // One representative scanned page per digest run (bounded
                 // payload); the remaining empty pages stay honestly
                 // uncertain in the digest.
-                if let raw = try? await imageService.complete(
-                    systemPrompt: MaterialDigestPrompt.imagePageSystemPrompt(),
-                    userPrompt: MaterialDigestPrompt.imagePageUserPrompt(
-                        pageNumber: first.pageNumber
-                    ),
-                    imageData: imageData,
-                    imageMIME: "image/jpeg",
-                    maxTokens: 1_200
-                ), let parsed = MaterialDigestParser.parseImagePage(text: raw) {
+                if let raw = try? await AICallScope.with(
+                    AICallContext(feature: .materialDigest, textCategory: .none)
+                ) {
+                    try await imageService.complete(
+                        systemPrompt: MaterialDigestPrompt.imagePageSystemPrompt(),
+                        userPrompt: MaterialDigestPrompt.imagePageUserPrompt(
+                            pageNumber: first.pageNumber
+                        ),
+                        imageData: imageData,
+                        imageMIME: "image/jpeg",
+                        maxTokens: 1_200
+                    )
+                }, let parsed = MaterialDigestParser.parseImagePage(text: raw) {
                     imageObservations.append((first.pageNumber, Self.imageObservationJSON(parsed)))
                 }
             }
@@ -341,11 +349,15 @@ final class MaterialDigestGenerator {
             )
             let mergedRaw: String
             do {
-                mergedRaw = try await textService.complete(
-                    systemPrompt: MaterialDigestPrompt.mergeSystemPrompt(),
-                    userPrompt: mergePrompt,
-                    maxTokens: 4_096
-                )
+                mergedRaw = try await AICallScope.with(
+                    AICallContext(feature: .materialDigest, textCategory: .ocr)
+                ) {
+                    try await textService.complete(
+                        systemPrompt: MaterialDigestPrompt.mergeSystemPrompt(),
+                        userPrompt: mergePrompt,
+                        maxTokens: 4_096
+                    )
+                }
             } catch is CancellationError {
                 try? persistProgress(material, chunkState: chunkState, terminal: .partial)
                 try? repository.markMaterialDigestInterrupted(material)

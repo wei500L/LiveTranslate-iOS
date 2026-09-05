@@ -220,6 +220,33 @@ extension TranscriptRepository {
         store?.removeFiles(for: id)
     }
 
+    /// Round 17 retention pass: deletes SAVED conversations' documents
+    /// older than `days` (row + files reconciled through the normal
+    /// delete path — never a bare directory sweep by file mtime). The
+    /// ACTIVE draft's documents and the extraction-only rows are left
+    /// alone; days <= 0 keeps everything. Returns the number removed.
+    @discardableResult
+    func applyInterpreterDocumentRetention(
+        days: Int, store: InterpreterDocumentStore?, asOf now: Date = .now
+    ) throws -> Int {
+        guard days > 0 else { return 0 }
+        let cutoff = now.addingTimeInterval(-TimeInterval(days) * 86_400)
+        let descriptor = FetchDescriptor<InterpreterDocument>()
+        let all = (try? context.fetch(descriptor)) ?? []
+        var removed = 0
+        for document in all {
+            // Anchor on the ROW's creation time, not the file's mtime.
+            guard document.createdAt < cutoff else { continue }
+            // Only saved conversations — an active draft's documents are
+            // in live use; unprocessed scope never auto-deletes.
+            guard let conversation = interpreterConversation(id: document.conversationID),
+                  conversation.status == .saved else { continue }
+            try deleteInterpreterDocument(document, store: store)
+            removed += 1
+        }
+        return removed
+    }
+
     /// Deletes every document of one conversation (conversation delete
     /// / discard). Files go with the rows.
     func deleteInterpreterDocuments(

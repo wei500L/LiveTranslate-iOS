@@ -160,11 +160,11 @@ struct BenchmarkScreen: View {
     }
 
     private func export(named: String, content: String, ext: String) {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(named)-\(Int(Date.now.timeIntervalSince1970)).\(ext)")
-        if (try? content.data(using: .utf8)?.write(to: url, options: .atomic)) != nil {
-            shareItem = SharedFile(url: url)
-        }
+        guard let url = try? TemporaryExportStore().stage(
+            fileName: "\(named)-\(Int(Date.now.timeIntervalSince1970)).\(ext)",
+            data: Data(content.utf8)
+        ) else { return }
+        shareItem = SharedFile(url: url)
     }
 }
 

@@ -66,6 +66,12 @@ final class InterpreterDocumentContextModel {
     }
 
     var pendingPreview: SendPreview?
+
+    /// Whether the current preview's text had sensitive content masked
+    /// (round 17: rides the AI activity record as the masked flag).
+    var previewIsMasked: Bool {
+        pendingPreview?.maskedSensitive ?? false
+    }
     /// 预览时暂存的（可能已遮盖的）source 集合 —— 确认后才发送。
     private var previewSources: [InterpreterDocumentChunker.RequestSource] = []
     private var previewAction: PreviewAction = .ask

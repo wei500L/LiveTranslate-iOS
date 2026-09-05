@@ -178,16 +178,22 @@ final class ClassReminderScheduler {
     ) -> Bool {
         let content = UNMutableNotificationContent()
         content.title = "上课提醒"
-        var body = courseName
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.timeZone = ScheduleCalculator.zone(schedule)
-        formatter.dateFormat = "HH:mm"
-        body += " · " + formatter.string(from: occurrence.start)
-        if let location = occurrence.location, !location.isEmpty {
-            body += " · " + location
+        // Round 17: hideSensitiveContent strips course name + room from
+        // the body; the time stays (routing rides userInfo, not the body).
+        if SettingsStore.shared.systemSurfacePrivacy.showsTitles {
+            var body = courseName
+            let formatter = DateFormatter()
+            formatter.locale = .current
+            formatter.timeZone = ScheduleCalculator.zone(schedule)
+            formatter.dateFormat = "HH:mm"
+            body += " · " + formatter.string(from: occurrence.start)
+            if let location = occurrence.location, !location.isEmpty {
+                body += " · " + location
+            }
+            content.body = body
+        } else {
+            content.body = "有一堂课即将开始"
         }
-        content.body = body
         content.sound = .default
         content.categoryIdentifier = Self.categoryID
         // Route target: the occurrence key + fire context.
