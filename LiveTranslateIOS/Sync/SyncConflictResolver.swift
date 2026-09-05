@@ -397,6 +397,33 @@ enum SyncConflictResolver {
             if merged.activityStartedAt == nil, let serverStarted = server.activityStartedAt {
                 merged.activityStartedAt = serverStarted
             }
+        case .interpreterConversation:
+            // Conversation merges by update-time server-side (title/scene
+            // newer-wins): locally the user just saved, so local intent
+            // wins with an empty title falling back to the server's.
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+        case .interpreterTurn:
+            // Turn user edits resolve by modified_at newer-wins server-side
+            // (the correction convention); the local payload carries the
+            // user's current text, so local wins with empty-field
+            // fallbacks to the server's stored values.
+            if (merged.turnSourceText ?? "").isEmpty, let serverSource = server.turnSourceText {
+                merged.turnSourceText = serverSource
+            }
+            if (merged.turnPlainRussian ?? "").isEmpty, let serverPlain = server.turnPlainRussian {
+                merged.turnPlainRussian = serverPlain
+            }
+            if (merged.turnStressedRussian ?? "").isEmpty, let serverStressed = server.turnStressedRussian {
+                merged.turnStressedRussian = serverStressed
+            }
+            if (merged.turnChineseText ?? "").isEmpty, let serverChinese = server.turnChineseText {
+                merged.turnChineseText = serverChinese
+            }
+            if (merged.turnBackTranslation ?? "").isEmpty, let serverBack = server.turnBackTranslation {
+                merged.turnBackTranslation = serverBack
+            }
         }
         return merged
     }
