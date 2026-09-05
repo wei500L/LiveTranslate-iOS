@@ -308,13 +308,16 @@ final class CourseAssistantService {
                 guard let imageService = imageServiceProvider() else {
                     throw AskError.imageModelNotConfigured
                 }
+                // Snapshot the mutable accumulator into an immutable
+                // value — @Sendable closures cannot capture vars.
+                let requestImages = preparedImages.map(\.payload)
                 let raw = try await AICallScope.with(
                     AICallContext(feature: .courseAssistant, textCategory: .userInput)
                 ) {
                     try await imageService.complete(
                         systemPrompt: VisualAskPrompt.systemPrompt(),
                         userPrompt: prompt,
-                        images: preparedImages.map(\.payload),
+                        images: requestImages,
                         maxTokens: 2_400
                     )
                 }
