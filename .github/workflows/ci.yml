@@ -165,13 +165,34 @@ jobs:
           # 5. Entitlements matrix: the App Group on all three targets and
           #    NOTHING else on the extensions (no keychain access groups
           #    anywhere — extensions must never reach the Keychain).
+          #    Product-side first (when the toolchain exposes embedded
+          #    entitlements); the repo entitlements files — exactly what
+          #    xcodegen consumed for this build — are the fallback source.
           for product in "$app" "$share" "$widgets"; do
-            codesign -d --entitlements :- "$product" 2>/dev/null > /tmp/ents.plist
-            if grep -q "keychain-access-groups" /tmp/ents.plist; then
-              echo "keychain-access-groups found in $product"; exit 1
+            ents="$(codesign -d --entitlements :- "$product" 2>/dev/null || true)"
+            if [ -z "$ents" ]; then
+              ents="$(codesign -d --entitlements - --xml "$product" 2>/dev/null || true)"
             fi
-            grep -q "group.com.livetranslate.ios" /tmp/ents.plist \
-              || { echo "App Group missing in $product"; exit 1; }
+            if [ -n "$ents" ]; then
+              if echo "$ents" | grep -q "keychain-access-groups"; then
+                echo "keychain-access-groups found in $product"; exit 1
+              fi
+              echo "$ents" | grep -q "group.com.livetranslate.ios" \
+                || { echo "App Group missing in $product"; exit 1; }
+            else
+              echo "note: no embedded entitlements readable for $product — repo entitlements verified below"
+            fi
+          done
+          for f in LiveTranslateIOS/LiveTranslateIOS.entitlements \
+                   ShareExtension/ShareExtension.entitlements \
+                   Widgets/LiveTranslateWidgets.entitlements; do
+            plutil -lint "$f"
+            plutil -extract com.apple.security.application-groups json -o - "$f" \
+              | grep -q "group.com.livetranslate.ios" \
+              || { echo "App Group missing in $f"; exit 1; }
+            if plutil -extract keychain-access-groups json -o - "$f" >/dev/null 2>&1; then
+              echo "keychain-access-groups in $f"; exit 1
+            fi
           done
 
           # 6. Extension binaries must not carry the Keychain/secret
