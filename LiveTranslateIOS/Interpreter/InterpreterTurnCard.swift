@@ -16,6 +16,10 @@ struct InterpreterTurnCard: View {
     let isExpanded: Bool
     var showStress: Bool
     var isTranslating: Bool
+    /// 本会话仍存在的本地文件来源 documentID 集合（nil = 调用方未
+    /// 提供，来源一律按存在渲染）。用于"本机删除文件后 local
+    /// citation 如实变为不可用"。
+    var availableDocumentIDs: Set<UUID>? = nil
     var onToggleExpanded: () -> Void
     var onRetry: () -> Void
     var onSpeak: () -> Void
@@ -193,6 +197,55 @@ struct InterpreterTurnCard: View {
 
     // MARK: - Expanded details
 
+    /// 本地文件来源（设备本地字段）—— 本机有标签时逐条呈现；文件
+    /// 已被删除的来源如实标灰；只有标记（其他设备的回合）时说明
+    /// 来源不在本机。
+    @ViewBuilder
+    private var localSourcesSection: some View {
+        if let localSources = turn.localSources, !localSources.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("来源（仅保存在本设备）")
+                    .font(LTTypography.statusChip)
+                    .foregroundStyle(LTColors.textTertiary)
+                ForEach(Array(localSources.enumerated()), id: \.offset) { _, source in
+                    let isAvailable = source.documentID.map { id in
+                        availableDocumentIDs?.contains(id) ?? true
+                    } ?? true
+                    HStack(spacing: LTSpacing.xs) {
+                        Image(systemName: isAvailable ? "doc.text" : "doc.slash")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(
+                                isAvailable ? LTColors.textTertiary : LTColors.destructive
+                            )
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(source.displayLabel)
+                                .font(LTTypography.caption)
+                                .foregroundStyle(
+                                    isAvailable ? LTColors.textSecondary : LTColors.textTertiary
+                                )
+                                .strikethrough(!isAvailable, color: LTColors.textTertiary)
+                            if !source.snippet.isEmpty {
+                                Text(source.snippet)
+                                    .font(LTTypography.caption)
+                                    .foregroundStyle(LTColors.textTertiary)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+                    if !isAvailable {
+                        Text("该来源文件已从本机删除")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textTertiary)
+                    }
+                }
+            }
+        } else if turn.details?.hasLocalSources == true {
+            Text("来源文件仅保存在原设备；本设备未保存该文件。")
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textTertiary)
+        }
+    }
+
     @ViewBuilder
     private var expandedDetails: some View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
@@ -219,16 +272,14 @@ struct InterpreterTurnCard: View {
                 detailList(title: "不确定项", items: details.uncertainties)
                 detailRow(title: "更礼貌的表达", value: details.politeAlternative)
                 detailRow(title: "更简单的表达", value: details.simpleAlternative)
-                // 文件上下文回合：关键词行呈现来源（文件名 · 第n页）。
-                // 引用的来源文件只在本机 —— 其他设备打开时明确说明，
-                // 绝不渲染一个打不开的假链接。
-                if let keywords = details.keywords,
-                   keywords.contains(where: { $0.contains(" · 第") }) {
-                    Text("来源文件仅保存在原设备；本设备未保存该文件。")
-                        .font(LTTypography.caption)
-                        .foregroundStyle(LTColors.textTertiary)
-                }
             }
+
+            // 文件上下文回合的来源。真实标签只存在本机
+            // （localSourcesJSON —— 从不上传）；details 只携带无内容的
+            // hasLocalSources 标记。其他设备打开同一会话时看到的是
+            // 标记而非标签 —— 显示"来源文件仅保存在原设备"，绝不渲染
+            // 一个打不开的假链接。
+            localSourcesSection
 
             // 编辑原文（stamp modifiedAt — 合并裁决基准）。
             Button {

@@ -156,16 +156,20 @@ extension TranscriptRepository {
 
     /// 翻译完成：写入结构化结果。重音已在上游通过
     /// RussianStressValidator 校验（失败传 nil，界面显示"暂未生成重音标注"）。
+    /// localSources 是文件上下文回合的设备本地来源（不进 wire ——
+    /// payload(for:) 只读 detailsJSON，从不读 localSourcesJSON）。
     func completeInterpreterTurnTranslation(
         _ turn: InterpreterTurn,
         chinese: String?, russian: String?, stressedRussian: String?,
-        backTranslation: String?, details: InterpreterTurnDetails?
+        backTranslation: String?, details: InterpreterTurnDetails?,
+        localSources: [InterpreterLocalSource]? = nil
     ) throws {
         if let chinese { turn.chineseText = chinese }
         if let russian { turn.plainRussian = russian }
         if let stressedRussian { turn.stressedRussian = stressedRussian }
         if let backTranslation { turn.backTranslation = backTranslation }
         if let details { turn.storeDetails(details) }
+        if let localSources { turn.storeLocalSources(localSources) }
         turn.translationStatusRaw = InterpreterTurnTranslationStatus.completed.rawValue
         turn.updatedAt = .now
         try context.save()
@@ -273,6 +277,65 @@ extension TranscriptRepository {
 
     // MARK: - Remote apply (pull)
 
+    /// 一次性迁移（第十七轮）：把旧版本写进 detailsJSON 的文件来源
+    /// 标签（"文件名 · 第N页"）搬进设备本地的 localSourcesJSON，并把
+    /// 可同步 details 清洗为无来源形态。
+    ///
+    /// 幂等：已清洗的行不含来源标签，再跑一遍是 no-op。每个已保存
+    /// 会话中被改写的回合都会通知 mutation observer —— 清洗后的
+    /// details 随正常 turn 更新写回服务器（modifiedAt 不动，绝不
+    /// 触发文本的 newer-wins 裁决）。返回被改写的回合数。
+    @discardableResult
+    func migrateInterpreterCitationDetails() throws -> Int {
+        let descriptor = FetchDescriptor<InterpreterTurn>()
+        let turns = (try? context.fetch(descriptor)) ?? []
+        var migratedTurns: [InterpreterTurn] = []
+        for turn in turns {
+            guard let details = turn.details else { continue }
+            guard let keywords = details.keywords,
+                  keywords.contains(where: InterpreterDetailsSanitizer.isCitationLabel)
+            else { continue }
+
+            // 1. 来源标签 → 本地来源列表（旧标签没有 documentID/
+            //    snippet —— 如实缺省，绝不伪造）。
+            let labels = keywords.filter { InterpreterDetailsSanitizer.isCitationLabel($0) }
+            var existing = turn.localSources ?? []
+            for label in labels {
+                guard !existing.contains(where: { $0.displayLabel == label }) else {
+                    continue
+                }
+                let parts = label.components(separatedBy: " · 第")
+                let name = parts.first.map { String($0) } ?? label
+                let page = parts.count > 1
+                    ? Int(parts[1].replacingOccurrences(of: "页", with: "")
+                        .trimmingCharacters(in: .whitespaces)) ?? 1
+                    : 1
+                existing.append(InterpreterLocalSource(
+                    documentID: nil, documentName: name, pageNumber: page, snippet: ""
+                ))
+            }
+            turn.storeLocalSources(existing)
+
+            // 2. 清洗可同步 details（去标签 + hasLocalSources 标记）。
+            var cleaned = details
+            let remaining = keywords.filter { !InterpreterDetailsSanitizer.isCitationLabel($0) }
+            cleaned.keywords = remaining.isEmpty ? nil : remaining
+            cleaned.hasLocalSources = true
+            turn.storeDetails(cleaned)
+
+            migratedTurns.append(turn)
+        }
+        guard !migratedTurns.isEmpty else { return 0 }
+        try context.save()
+        // 通知 observer：让清洗后的 details 走正常 turn 更新上船
+        // （baseServerVersion 不变；服务器端 apply 后 details 被清洗值
+        // 覆盖）。草稿回合的更新本来就不上 wire，与既有规则一致。
+        for turn in migratedTurns where turnBelongsToSavedConversation(turn) {
+            mutationObserver?.interpreterTurnUpdated(turn)
+        }
+        return migratedTurns.count
+    }
+
     func applyRemoteInterpreterConversation(
         record: SyncServerRecordDTO, serverVersion: Int
     ) throws {
@@ -368,7 +431,13 @@ extension TranscriptRepository {
         if let stressed = record.turnStressedRussian { turn.stressedRussian = stressed }
         if let chinese = record.turnChineseText { turn.chineseText = chinese }
         if let back = record.turnBackTranslation { turn.backTranslation = back }
-        if let details = record.turnDetails { turn.detailsJSON = details }
+        if let details = record.turnDetails {
+            // 防御性清洗：远端值可能来自旧客户端（details.keywords 里
+            // 还带着"文件名 · 第N页"来源标签）或清洗前的服务器存量。
+            // 清洗后的 details 才落库；本机 localSourcesJSON 不受远端
+            // 覆盖（wire 上根本没有这个字段）。
+            turn.detailsJSON = InterpreterDetailsSanitizer.sanitizedDetailsJSON(details)
+        }
         turn.modifiedAt = record.turnModifiedAt
         turn.translationStatusRaw = InterpreterTurnTranslationStatus.completed.rawValue
         turn.serverVersion = serverVersion

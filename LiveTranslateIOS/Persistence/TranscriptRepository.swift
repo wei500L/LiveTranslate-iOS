@@ -642,11 +642,13 @@ protocol ClassroomRepositoryProtocol: AnyObject {
         conversationID: UUID, chinese: String, inputMethod: InterpreterInputMethod
     ) throws -> InterpreterTurn
     /// Writes a completed structured translation onto a turn. Draft rows
-    /// never notify sync.
+    /// never notify sync. localSources (文件上下文回合的设备本地来源)
+    /// 只落本地 —— wire 上没有它的位置。
     func completeInterpreterTurnTranslation(
         _ turn: InterpreterTurn,
         chinese: String?, russian: String?, stressedRussian: String?,
-        backTranslation: String?, details: InterpreterTurnDetails?
+        backTranslation: String?, details: InterpreterTurnDetails?,
+        localSources: [InterpreterLocalSource]?
     ) throws
     /// Marks a turn's translation failed (the source text stays).
     func failInterpreterTurnTranslation(_ turn: InterpreterTurn) throws
@@ -686,6 +688,11 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func applyRemoteInterpreterTurn(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteInterpreterConversationByID(_ id: UUID) throws
     func deleteInterpreterTurnByID(_ id: UUID) throws
+    /// One-time migration (round 17): moves file-source labels from the
+    /// syncable detailsJSON into the device-local localSourcesJSON and
+    /// re-notifies sync for the rewritten turns. Idempotent.
+    @discardableResult
+    func migrateInterpreterCitationDetails() throws -> Int
 
     // MARK: Interpreter document context (现场文件 · device-local)
 

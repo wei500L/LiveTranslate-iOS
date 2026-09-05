@@ -83,6 +83,32 @@ actor SyncOutboxStore {
     var pendingCount: Int { items.count }
     var oldestCreatedAt: Date? { items.map(\.createdAt).min() }
 
+    /// One-time migration pass (round 17): strips file-source labels from
+    /// the details of every pending interpreter-turn upsert. Items built
+    /// after the fix never carry them; this cleans whatever was already
+    /// queued. Idempotent — sanitized items pass through unchanged.
+    /// Returns the number of items rewritten.
+    @discardableResult
+    func sanitizeInterpreterTurnDetails() -> Int {
+        var rewritten = 0
+        for index in items.indices {
+            let item = items[index]
+            guard item.entityType == .interpreterTurn,
+                  item.operation == .upsert,
+                  let details = item.payload.turnDetails,
+                  !details.isEmpty
+            else { continue }
+            let cleaned = InterpreterDetailsSanitizer.sanitizedDetailsJSON(details)
+            guard cleaned != details else { continue }
+            items[index].payload.turnDetails = cleaned
+            rewritten += 1
+        }
+        if rewritten > 0 {
+            persist()
+        }
+        return rewritten
+    }
+
     /// Items eligible for upload now (retry time passed), oldest first.
     func dueItems(limit: Int, asOf now: Date = .now) -> [SyncOutboxItem] {
         Array(

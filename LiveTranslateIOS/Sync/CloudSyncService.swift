@@ -314,10 +314,46 @@ final class CloudSyncService: AuthenticationService {
 
     // MARK: - Lifecycle triggers
 
+    /// One-time flag for the interpreter-citation migration (round 17).
+    private static let citationMigrationKey = "sync.interpreterCitationMigration.v1"
+
     /// Called once at app launch.
     func start() {
+        runCitationMigrationIfNeeded()
         scheduleSync(after: 2)
         startPeriodicSync()
+    }
+
+    /// Round-17 one-time migration: interpreter turn details used to carry
+    /// file-source labels (文件名 · 第N页) onto the wire. The labels move
+    /// into the device-local localSourcesJSON, the syncable details are
+    /// cleaned in place (and re-pushed through the normal observer path —
+    /// modifiedAt untouched, so the text newer-wins semantics never
+    /// fire), and any pending outbox item is cleaned before it can ship.
+    /// Idempotent: rows without source labels are no-ops; the flag only
+    /// flips after the pass ran.
+    private func runCitationMigrationIfNeeded() {
+        guard !defaults.bool(forKey: Self.citationMigrationKey) else { return }
+        do {
+            let migrated = try repository.migrateInterpreterCitationDetails()
+            Task { [outbox] in
+                _ = await outbox.sanitizeInterpreterTurnDetails()
+            }
+            if migrated > 0 {
+                Self.logger.info(
+                    "citation details migration rewrote \(migrated) turns"
+                )
+            }
+        } catch {
+            // Keep the flag OFF: a failed pass retries next launch. The
+            // context may still hold the in-memory edits (they are
+            // idempotent and would land on a later save), but no observer
+            // notification fired — meanwhile the outbound sanitizer in
+            // payload(for:) blocks the labels from shipping regardless.
+            Self.logger.error("citation details migration failed: \(String(describing: error), privacy: .public)")
+            return
+        }
+        defaults.set(true, forKey: Self.citationMigrationKey)
     }
 
     private func startPeriodicSync() {
@@ -1996,6 +2032,12 @@ final class CloudSyncService: AuthenticationService {
     /// one; details is the user-kept structured snapshot as a JSON string
     /// (never raw model responses). modified_at is the user-edit
     /// tiebreak. Draft turns (pending translation) never enqueue.
+    ///
+    /// 出站防御（第十七轮）：detailsJSON 经过
+    /// InterpreterDetailsSanitizer —— 文件来源标签（文件名/页码）绝不
+    /// 上传。正常路径的 details 本来就不含来源标签；这个清洗兜底
+    /// 旧数据、旧 outbox 项与任何回归。localSourcesJSON（设备本地
+    /// 来源）从不读取 —— wire 上没有它的位置。
     static func payload(for turn: InterpreterTurn) -> SyncPushPayloadDTO {
         SyncPushPayloadDTO(
             turnSpeaker: turn.speakerRaw,
@@ -2007,7 +2049,9 @@ final class CloudSyncService: AuthenticationService {
             turnStressedRussian: turn.stressedRussian.isEmpty ? nil : turn.stressedRussian,
             turnChineseText: turn.chineseText.isEmpty ? nil : turn.chineseText,
             turnBackTranslation: turn.backTranslation.isEmpty ? nil : turn.backTranslation,
-            turnDetails: turn.detailsJSON.isEmpty ? nil : turn.detailsJSON,
+            turnDetails: turn.detailsJSON.isEmpty
+                ? nil
+                : InterpreterDetailsSanitizer.sanitizedDetailsJSON(turn.detailsJSON),
             turnModifiedAt: turn.modifiedAt
         )
     }

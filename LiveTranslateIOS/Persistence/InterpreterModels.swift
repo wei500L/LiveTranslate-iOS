@@ -91,8 +91,15 @@ final class InterpreterTurn {
     /// 中文回译（zh2ru 回合，供用户核对）。
     var backTranslation: String
     /// InterpreterTurnDetails JSON（结构化详情快照；用户选择保留的
-    /// 内容，绝不含 prompt 或原始模型响应）。空串 = 无。
+    /// 内容，绝不含 prompt 或原始模型响应）。空串 = 无。可随 turn
+    /// 同步 —— 但第十七轮起只允许非来源型结构信息（来源标签走
+    /// localSourcesJSON）。
     var detailsJSON: String
+    /// [InterpreterLocalSource] JSON —— 文件上下文回合的本地来源
+    /// （文件名/页码/documentID/短引文）。设备本地字段：不进 wire、
+    /// 不进 outbox、其他设备永远收不到。旧数据由一次性迁移回填。
+    /// 空串 = 无本地来源。
+    var localSourcesJSON: String
     /// 翻译状态：pending | completed | failed（failed 时原文仍保留）。
     var translationStatusRaw: String
     /// 用户编辑裁决时间戳（同版本合并 newer wins；从未编辑为 nil）。
@@ -114,6 +121,7 @@ final class InterpreterTurn {
         chineseText: String = "",
         backTranslation: String = "",
         detailsJSON: String = "",
+        localSourcesJSON: String = "",
         translationStatusRaw: String = "pending",
         modifiedAt: Date? = nil,
         createdAt: Date = .now,
@@ -132,6 +140,7 @@ final class InterpreterTurn {
         self.chineseText = chineseText
         self.backTranslation = backTranslation
         self.detailsJSON = detailsJSON
+        self.localSourcesJSON = localSourcesJSON
         self.translationStatusRaw = translationStatusRaw
         self.modifiedAt = modifiedAt
         self.createdAt = createdAt
@@ -168,6 +177,20 @@ final class InterpreterTurn {
     func storeDetails(_ details: InterpreterTurnDetails) {
         guard let data = try? JSONEncoder().encode(details) else { return }
         detailsJSON = String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// 解码后的本地来源列表（坏 JSON / 空串 → nil）。
+    var localSources: [InterpreterLocalSource]? {
+        guard !localSourcesJSON.isEmpty else { return nil }
+        return try? JSONDecoder().decode(
+            [InterpreterLocalSource].self, from: Data(localSourcesJSON.utf8)
+        )
+    }
+
+    /// 保存本地来源（设备本地字段 —— 出站 wire 从不读取它）。
+    func storeLocalSources(_ sources: [InterpreterLocalSource]) {
+        guard let data = try? JSONEncoder().encode(sources) else { return }
+        localSourcesJSON = String(data: data, encoding: .utf8) ?? ""
     }
 }
 

@@ -8,6 +8,7 @@ struct InterpreterConversationDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var turns: [InterpreterTurn] = []
+    @State private var availableDocumentIDs: Set<UUID> = []
     @State private var shareURL: URL?
 
     private var conversation: InterpreterConversation? {
@@ -25,6 +26,7 @@ struct InterpreterConversationDetailView: View {
                                 turn: turn,
                                 isExpanded: false,
                                 showStress: environment.settings.interpreterShowStress,
+                                availableDocumentIDs: availableDocumentIDs,
                                 isTranslating: false,
                                 onToggleExpanded: {},
                                 onRetry: {},
@@ -71,6 +73,11 @@ struct InterpreterConversationDetailView: View {
             turns = (try? environment.repository.interpreterTurns(
                 conversationID: conversationID
             )) ?? []
+            availableDocumentIDs = Set(
+                ((try? environment.repository.interpreterDocuments(
+                    conversationID: conversationID
+                )) ?? []).map(\.id)
+            )
         }
         .sheet(item: Binding(
             get: { shareURL.map { ShareURL(url: $0) } },

@@ -26,6 +26,9 @@ enum InterpreterExporter {
         var backTranslation: String
         var createdAt: Date
         var details: InterpreterTurnDetails?
+        /// 设备本地的文件来源（第十七轮起真实标签只在这里 ——
+        /// details 不再携带；其他设备的回合为 nil）。
+        var localSources: [InterpreterLocalSource]?
     }
 
     struct ConversationExport: Sendable {
@@ -69,7 +72,7 @@ enum InterpreterExporter {
             }
             if options.includeDocumentSources,
                let sources = documentSourceLabels(for: turn), !sources.isEmpty {
-                lines.append("来源: \(sources.joined(separator: "；"))")
+                lines.append("来源: \(sources.joined(separator: "；"))（来源文件仅保存在本设备）")
             }
         }
         return lines.joined(separator: "\n")
@@ -123,10 +126,9 @@ enum InterpreterExporter {
                 }
                 if options.includeDocumentSources,
                    let sources = documentSourceLabels(for: turn), !sources.isEmpty {
-                    lines.append("- 来源：\(sources.joined(separator: "；"))（来源文件仅保存在原设备）")
+                    lines.append("- 来源：\(sources.joined(separator: "；"))（来源文件仅保存在本设备）")
                 }
-                if let keywords = details.keywords, !keywords.isEmpty,
-                   options.includeDocumentSources || !hasDocumentSources(for: turn) {
+                if let keywords = details.keywords, !keywords.isEmpty {
                     lines.append("- 关键词：\(keywords.joined(separator: "、"))")
                 }
                 if let polite = details.politeAlternative, !polite.isEmpty {
@@ -144,13 +146,13 @@ enum InterpreterExporter {
         return lines.joined(separator: "\n")
     }
 
-    /// 文件上下文回合的来源标签（文件名 · 第n页 形态的关键词行）。
+    /// 文件上下文回合的来源标签（设备本地字段 —— 本机有标签时逐条
+    /// 给出；其他设备的回合没有本地来源）。
     private static func documentSourceLabels(for turn: TurnExport) -> [String]? {
-        turn.details?.keywords?.filter { $0.contains(" · 第") }
-    }
-
-    private static func hasDocumentSources(for turn: TurnExport) -> Bool {
-        !(documentSourceLabels(for: turn) ?? []).isEmpty
+        guard let localSources = turn.localSources, !localSources.isEmpty else {
+            return nil
+        }
+        return localSources.map(\.displayLabel)
     }
 
     // MARK: - File
@@ -198,7 +200,8 @@ enum InterpreterExporter {
                     chineseText: turn.chineseText,
                     backTranslation: turn.backTranslation,
                     createdAt: turn.createdAt,
-                    details: turn.details
+                    details: turn.details,
+                    localSources: turn.localSources
                 )
             }
         )

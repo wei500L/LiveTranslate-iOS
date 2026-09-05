@@ -249,6 +249,7 @@ struct InterpreterScreen: View {
                             turn: turn,
                             isExpanded: viewModel.expandedTurnIDs.contains(turn.id),
                             showStress: environment.settings.interpreterShowStress,
+                            availableDocumentIDs: viewModel.availableDocumentIDs,
                             isTranslating: viewModel.translatingTurnIDs.contains(turn.id)
                                 || (turn.direction == .zh2ru && viewModel.isTranslatingReply
                                     && viewModel.turns.last?.id == turn.id),

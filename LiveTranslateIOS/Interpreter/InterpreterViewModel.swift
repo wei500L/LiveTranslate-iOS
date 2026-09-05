@@ -84,6 +84,12 @@ final class InterpreterViewModel {
     /// 文件上下文模型（导入/提取/选择/预览/ AI 动作的编排层）。
     private(set) var documentContext: InterpreterDocumentContextModel?
 
+    /// 本会话仍存在的本地来源文件 ID（来源可用性渲染 —— 文件被删除
+    /// 后，回合里的本地来源如实变为不可用）。
+    var availableDocumentIDs: Set<UUID> {
+        Set((documentContext?.documents ?? []).map(\.id))
+    }
+
     // MARK: - Presentation state (UI-only, never synced)
 
     /// 展开的回合卡片（展开状态属于 UI 状态，不上传）。
@@ -377,7 +383,8 @@ final class InterpreterViewModel {
                     russian: nil,
                     stressedRussian: result.stressedRussian,
                     backTranslation: nil,
-                    details: result.details
+                    details: result.details,
+                    localSources: nil
                 )
                 reloadTurns()
             } catch is CancellationError {
@@ -438,7 +445,8 @@ final class InterpreterViewModel {
                 russian: result.mainText,
                 stressedRussian: result.stressedRussian,
                 backTranslation: result.backTranslation,
-                details: result.details
+                details: result.details,
+                localSources: nil
             )
             reloadTurns()
             // 保留用户输入原文在回合里；清空输入框。
@@ -479,7 +487,8 @@ final class InterpreterViewModel {
                 russian: result.mainText,
                 stressedRussian: result.stressedRussian,
                 backTranslation: result.backTranslation,
-                details: result.details
+                details: result.details,
+                localSources: nil
             )
             reloadTurns()
         } catch is CancellationError {
@@ -555,7 +564,10 @@ final class InterpreterViewModel {
                 russian: answer.suggestedRussian,
                 stressedRussian: answer.stressedRussian,
                 backTranslation: answer.backTranslation,
-                details: Self.documentAnswerDetails(answer)
+                details: Self.documentAnswerDetails(answer),
+                localSources: Self.localSources(
+                    citations: answer.citations, sources: sources
+                )
             )
             reloadTurns()
         } catch is CancellationError {
@@ -622,7 +634,10 @@ final class InterpreterViewModel {
                 russian: nil,
                 stressedRussian: nil,
                 backTranslation: nil,
-                details: Self.documentAnalysisDetails(analysis)
+                details: Self.documentAnalysisDetails(analysis),
+                localSources: Self.localSources(
+                    citations: analysis.citations, sources: sources
+                )
             )
             // 分析结果写入来源文档（字段助手数据源；设备本地）。
             let sourceDocumentIDs = Set(sources.map { $0.chunk.documentID })
@@ -678,7 +693,9 @@ final class InterpreterViewModel {
                 russian: answer.suggestedRussian,
                 stressedRussian: answer.stressedRussian,
                 backTranslation: answer.backTranslation,
-                details: Self.documentAnswerDetails(answer)
+                details: Self.documentAnswerDetails(answer),
+                // 字段核对没有文件 chunk —— 引文一律为空。
+                localSources: nil
             )
             reloadTurns()
         } catch is CancellationError {
@@ -744,7 +761,10 @@ final class InterpreterViewModel {
                 russian: nil,
                 stressedRussian: nil,
                 backTranslation: nil,
-                details: Self.documentAnalysisDetails(analysis)
+                details: Self.documentAnalysisDetails(analysis),
+                // 多模态兜底不携带可校验的 source ID —— 引文一律为空
+                // （analyzePages 已置 citations = nil）。
+                localSources: nil
             )
             // 多模态分析结果同样写入来源文档（字段助手数据源）。
             for document in documents {
@@ -903,37 +923,58 @@ final class InterpreterViewModel {
 
     // MARK: - 文件上下文 details 构造（同步边界的关键）
 
-    /// 问答详情：只存 citation 元数据（来源名/页码/短引文）与结构化
-    /// 字段 —— 绝不存原始文件、OCR 全文或本机路径。其他设备看到
-    /// citation 时显示"来源文件仅保存在原设备"（InterpreterTurnCard
-    /// 依据 detailsAvailable + citations 渲染）。
+    /// 问答详情：只存非来源型结构信息 —— 文件名/页码/引文绝不进入
+    /// 可同步 details，它们走 localSources（设备本地）。其他设备看到
+    /// hasLocalSources 时显示"来源文件仅保存在原设备"。
     private static func documentAnswerDetails(
         _ answer: InterpreterDocumentAnswer
     ) -> InterpreterTurnDetails {
         var details = InterpreterTurnDetails(detailsAvailable: answer.detailsAvailable)
-        details.keywords = answer.citations?.map(\.displayLabel)
         details.uncertainties = answer.uncertainties
         details.politeAlternative = answer.politeAlternative
         details.simpleAlternative = answer.simpleAlternative
+        details.hasLocalSources = answer.citations?.isEmpty == false
         return details
     }
 
-    /// 文件分析详情：分析结构（事项/材料/期限/费用/字段助手） +
-    /// citation 元数据。短引文（≤300 字符）随 turn 同步 —— 用户明确
-    /// 提交的内容；完整 OCR 文本永远留在本机。
+    /// 文件分析详情：分析结构（类型/关键事实/建议/警告）+ 无内容的
+    /// 本地来源标记。关键事实与中文摘要同为用户选择保留的分析内容
+    /// （摘要作为回合主文本同步）；完整 OCR 文本与来源标签永远留在
+    /// 本机。
     private static func documentAnalysisDetails(
         _ analysis: InterpreterDocumentAnalysis
     ) -> InterpreterTurnDetails {
         var details = InterpreterTurnDetails(detailsAvailable: analysis.detailsAvailable)
         details.intentSummary = analysis.documentType
-        var keywords: [String] = analysis.keyFacts ?? []
-        if let citations = analysis.citations {
-            keywords.append(contentsOf: citations.map(\.displayLabel))
+        if let keyFacts = analysis.keyFacts, !keyFacts.isEmpty {
+            details.keywords = keyFacts
         }
-        if !keywords.isEmpty { details.keywords = keywords }
         details.uncertainties = analysis.uncertainties
         details.suggestedReplies = analysis.questionsToAsk
         details.ambiguity = analysis.warnings?.joined(separator: "；")
+        details.hasLocalSources = analysis.citations?.isEmpty == false
         return details
+    }
+
+    /// 校验通过的 citation → 设备本地来源列表。documentID 从请求
+    /// sources 反解（citation 只带 source ID）；snippet 就是模型引用
+    /// 的短引文 —— 与实际发送给模型的那份文本（默认遮盖后）一致，
+    /// 因为引文校验要求 snippet 出现在发送文本中。绝不上传。
+    private static func localSources(
+        citations: [InterpreterCitation]?,
+        sources: [InterpreterDocumentChunker.RequestSource]
+    ) -> [InterpreterLocalSource]? {
+        guard let citations, !citations.isEmpty else { return nil }
+        return citations.map { citation in
+            let documentID = sources
+                .first { $0.sourceID == citation.sourceID }?
+                .chunk.documentID
+            return InterpreterLocalSource(
+                documentID: documentID,
+                documentName: citation.documentName,
+                pageNumber: citation.pageNumber,
+                snippet: citation.snippet
+            )
+        }
     }
 }
