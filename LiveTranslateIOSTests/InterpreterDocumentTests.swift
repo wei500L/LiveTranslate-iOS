@@ -285,6 +285,8 @@ final class InterpreterDocumentTests: XCTestCase {
     // MARK: - 导出选项（文件来源默认不包含）
 
     func testExportDefaultsExcludeDocumentSources() {
+        // Round 17 契约：文件来源标签只存在于设备本地 localSources
+        // （details.keywords 不再携带 —— 那是会同步的旧形态）。
         let conversation = InterpreterExporter.ConversationExport(
             title: "宿舍办理", scene: .dorm, startedAt: .now,
             turns: [
@@ -294,19 +296,28 @@ final class InterpreterDocumentTests: XCTestCase {
                     backTranslation: "", createdAt: .now,
                     details: InterpreterTurnDetails(
                         intentSummary: "宿舍登记表",
-                        keywords: ["登记表 · 第1页"]
-                    )
+                        keywords: ["вселение 入住"]
+                    ),
+                    localSources: [
+                        InterpreterLocalSource(
+                            documentID: UUID(),
+                            documentName: "登记表.pdf",
+                            pageNumber: 1,
+                            snippet: "Дата вселения"
+                        )
+                    ]
                 )
             ]
         )
         let defaultText = InterpreterExporter.markdown(conversation)
-        XCTAssertFalse(defaultText.contains("登记表 · 第1页"), "默认导出不包含文件来源")
+        XCTAssertFalse(defaultText.contains("登记表.pdf · 第1页"), "默认导出不包含文件来源")
+        XCTAssertTrue(defaultText.contains("вселение 入住"), "普通关键词照常导出")
         let withSources = InterpreterExporter.markdown(
             conversation,
             options: .init(includeDocumentSources: true)
         )
-        XCTAssertTrue(withSources.contains("登记表 · 第1页"))
-        XCTAssertTrue(withSources.contains("来源文件仅保存在原设备"))
+        XCTAssertTrue(withSources.contains("登记表.pdf · 第1页"))
+        XCTAssertTrue(withSources.contains("来源文件仅保存在本设备"))
         // 绝不导出内部 UUID、模型名、API 地址。
         XCTAssertFalse(withSources.contains("api"))
         XCTAssertFalse(withSources.contains("http"))
