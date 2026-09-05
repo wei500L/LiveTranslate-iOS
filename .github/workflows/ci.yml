@@ -122,25 +122,25 @@ jobs:
       - name: Demo smoke (UI demo launch on Simulator)
         run: |
           set -euo pipefail
-          # Pick the first available iOS simulator device.
-          set -- $(xcrun simctl list devices available | grep -o "iPhone 17" | head -1)
-          device="$1"; [ -n "$device" ] || { xcrun simctl list devices available; echo "no iPhone simulator available"; exit 1; }
+          # First AVAILABLE iPhone (any model — runner images vary).
           udid=$(xcrun simctl list devices -j | python3 -c "
           import json,sys
           data=json.load(sys.stdin)['devices']
           for runtime, devices in data.items():
               for d in devices:
-                  if d['name'] == '$device' and d['isAvailable']:
-                      print(d['udid']); break
+                  if d['isAvailable'] and d['name'].startswith('iPhone'):
+                      print(d['udid']); sys.exit(0)
           ")
+          [ -n "$udid" ] || { xcrun simctl list devices available; echo "no iPhone simulator available"; exit 1; }
           xcrun simctl boot "$udid" || true
           xcrun simctl bootstatus "$udid" -b
           xcrun simctl install "$udid" build/DerivedData/Build/Products/Debug-iphonesimulator/LiveTranslateIOS.app
-          xcrun simctl launch "$udid" com.livetranslate.ios --ui-demo
-          sleep 20
-          # The process must still be alive after 20 seconds.
+          launch_out=$(xcrun simctl launch "$udid" com.livetranslate.ios --ui-demo)
+          echo "launched: $launch_out"
+          sleep 25
+          # The process must still be alive after 25 seconds.
           xcrun simctl spawn "$udid" launchctl list | grep -q com.livetranslate.ios
-          echo "Demo smoke OK: process alive after 20s"
+          echo "Demo smoke OK: process alive after 25s"
           xcrun simctl shutdown "$udid" || true
 
       - name: No model files committed
