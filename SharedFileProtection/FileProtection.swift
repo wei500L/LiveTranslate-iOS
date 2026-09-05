@@ -220,9 +220,8 @@ enum FileProtection {
             }
             // File protection is READ via FileManager attributes
             // (URLResourceValues exposes no property for it).
-            let currentProtection = (try? fileManager.attributesOfItem(
-                atPath: url.path
-            )?[.protectionKey]) as? FileProtectionType
+            let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+            let currentProtection = attributes?[.protectionKey] as? FileProtectionType
             let currentExcluded = values.isExcludedFromBackup ?? false
             let protectionMatches =
                 currentProtection == cls.fileProtection
