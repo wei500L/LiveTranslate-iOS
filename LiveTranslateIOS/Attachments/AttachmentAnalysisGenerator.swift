@@ -211,7 +211,10 @@ final class AttachmentAnalysisGenerator {
         } catch {
             Self.logger.error("attachment analysis failed: \(String(describing: error), privacy: .public)")
             try? repository.failAttachmentAnalysis(attachment)
-            let message = (error as? LocalizedError)?.errorDescription
+            // Runtime surface: the stable actionable summary — the
+            // provider's raw response text never reaches the row.
+            let message = (error as? TranslationError)?.userActionableSummary
+                ?? (error as? LocalizedError)?.errorDescription
                 ?? String(localized: "分析失败")
             progressByID[attachmentID] = .failed(message)
         }

@@ -386,8 +386,10 @@ final class CourseAssistantService {
             return
         } catch {
             // The failure is saved as a visible answer row — never a
-            // silent disappearance of the question.
-            let message = (error as? LocalizedError)?.errorDescription
+            // silent disappearance of the question. Runtime surface: the
+            // stable actionable summary (provider raw text stays out).
+            let message = (error as? TranslationError)?.userActionableSummary
+                ?? (error as? LocalizedError)?.errorDescription
                 ?? String(localized: "回答生成失败，请稍后再试。")
             _ = try? repository.addAssistantMessage(AssistantMessageDraft(
                 threadID: threadID,
