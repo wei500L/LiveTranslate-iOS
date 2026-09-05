@@ -247,6 +247,10 @@ final class LiveTranslationCoordinator {
         if settings.saveRawAudio, let session, let repository {
             let directory = Self.sessionsDirectory().appendingPathComponent(session.id.uuidString)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            // classroomWorking: raw.wav is written while the classroom
+            // keeps recording in the locked background — `.complete` would
+            // silently drop the audio.
+            FileProtection.apply(.classroomWorking, to: directory)
             wavWriter = try? WAVFileWriter(url: directory.appendingPathComponent("raw.wav"))
             if wavWriter != nil {
                 try? repository.beginRecording(sessionID: session.id)

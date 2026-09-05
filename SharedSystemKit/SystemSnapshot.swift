@@ -171,6 +171,12 @@ struct WidgetSnapshot: Codable, Sendable, Equatable {
 struct SystemSnapshotStore {
     static let appGroupIdentifier = "group.com.livetranslate.ios"
 
+    /// The snapshot file's canonical location (one place derives it —
+    /// the store's own save/load AND the app-layer protection pass).
+    static func snapshotFileURL() -> URL? {
+        containerURL?.appendingPathComponent("SystemSnapshot.json")
+    }
+
     /// The App Group container root (nil when the group is unavailable —
     /// callers treat that as "system integration off", honestly).
     static var containerURL: URL? {
@@ -186,8 +192,7 @@ struct SystemSnapshotStore {
     private let fileURL: URL?
 
     init() {
-        fileURL = Self.containerURL?
-            .appendingPathComponent("SystemSnapshot.json")
+        fileURL = Self.snapshotFileURL()
     }
 
     /// Atomic write: encode → tmp path → replace. Never throws outward

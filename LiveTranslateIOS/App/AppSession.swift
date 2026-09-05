@@ -81,6 +81,11 @@ final class AppSession {
         // One-time: fold the legacy single-account state (Apple/dev login
         // era) into the multi-account layout.
         LegacyAccountMigrator.runIfNeeded(accountStore: accounts, keychain: keychain)
+        // One-time keychain accessibility migration (round 17): every
+        // existing item moves to AfterFirstUnlockThisDeviceOnly. Items
+        // are never deleted here; a locked-device failure simply retries
+        // on the next launch. New writes already carry the class.
+        Self.upgradeKeychainAccessibility(accounts: accounts, keychain: keychain)
         // The scope marker goes out BEFORE the environment build (the
         // coordinator snapshots it at init — a fresh environment must
         // never read a stale scope).
@@ -89,6 +94,29 @@ final class AppSession {
         // App Intents (Siri / Shortcuts / Spotlight / Action Button)
         // perform in this process; point them at the active profile.
         AppIntentHost.attach(environment)
+    }
+
+    // MARK: - Keychain accessibility migration
+
+    /// Bumps every known secret's accessibility to
+    /// AfterFirstUnlockThisDeviceOnly (see KeychainStore's contract).
+    /// Reads no values; failures are non-fatal and retried next launch.
+    private static func upgradeKeychainAccessibility(
+        accounts: AccountStore, keychain: KeychainStore
+    ) {
+        keychain.upgradeAccessibility(forKey: AppEnvironment.apiKeychainKey)
+        for account in accounts.accounts {
+            for mapping in ServerAuthSession.scopedKeyMapping(accountID: account.id) {
+                keychain.upgradeAccessibility(forKey: mapping.scoped)
+            }
+        }
+        // Transient unscoped sign-in keys (a sign-in interrupted between
+        // server acceptance and the handoff).
+        for legacy in [
+            ServerAuthSession.accessTokenKey, ServerAuthSession.refreshTokenKey,
+        ] {
+            keychain.upgradeAccessibility(forKey: legacy)
+        }
     }
 
     // MARK: - Shared-inbox scope (Share Extension attribution)

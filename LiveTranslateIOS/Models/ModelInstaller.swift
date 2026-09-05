@@ -83,6 +83,11 @@ final class ModelInstaller {
 
         let root = try ModelPaths.backendRoot(backend.kind)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Model files are READ by a classroom that keeps running in the
+        // locked background (on-demand Core ML loading) — they must stay
+        // readable after first unlock, and being re-downloadable they are
+        // excluded from backup.
+        FileProtection.apply(.modelFile, to: root)
 
         for file in backend.files {
             guard ModelIntegrityVerifier.isSafePath(file.path) else {
@@ -281,6 +286,7 @@ final class ModelInstaller {
         }
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: partialURL, to: destination)
+        FileProtection.apply(.modelFile, to: destination)
     }
 
     /// MainActor progress hop from the download task.

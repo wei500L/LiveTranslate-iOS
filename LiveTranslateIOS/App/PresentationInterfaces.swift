@@ -91,6 +91,15 @@ protocol KeychainStoring: Sendable {
     func set(_ value: String, forKey key: String) throws
     func get(forKey key: String) throws -> String?
     func delete(forKey key: String) throws
+    /// One-time accessibility migration (no value read/write). The demo
+    /// in-memory store accepts the call and does nothing.
+    @discardableResult
+    func upgradeAccessibility(forKey key: String) -> Bool
+}
+
+extension KeychainStoring {
+    @discardableResult
+    func upgradeAccessibility(forKey key: String) -> Bool { true }
 }
 
 extension KeychainStore: KeychainStoring {}

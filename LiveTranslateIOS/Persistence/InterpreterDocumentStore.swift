@@ -31,12 +31,24 @@ struct InterpreterDocumentStore: Sendable {
     init(accountID: UUID?) {
         self.root = AccountScope.interpreterDocumentsRoot(accountID: accountID)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        Self.protectRoot(root)
     }
 
     /// Store-internal init for tests/demo containers.
     init(root: URL) {
         self.root = root
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        Self.protectRoot(root)
+    }
+
+    /// 随身翻译 documents are the most sensitive files the app keeps
+    /// (证件、银行、医疗文书): `.complete` — unreadable while the device
+    /// is locked — and excluded from device/iCloud backups. They are
+    /// device-local BY DESIGN (never synced, never uploaded); losing the
+    /// device loses them, which the privacy center states plainly. The
+    /// exclusion set on the root covers the whole subtree.
+    private static func protectRoot(_ root: URL) {
+        FileProtection.apply(.sensitiveLocalDocument, to: root)
     }
 
     // MARK: - Paths
@@ -88,6 +100,7 @@ struct InterpreterDocumentStore: Sendable {
     ) throws -> ImportOutcome {
         let dir = directory(for: documentID)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileProtection.apply(.sensitiveLocalDocument, to: dir)
         let destination = originalURL(documentID: documentID, fileExtension: fileExtension)
         let temp = dir.appendingPathComponent(".tmp-\(UUID().uuidString)")
 
@@ -115,6 +128,7 @@ struct InterpreterDocumentStore: Sendable {
             } else {
                 try FileManager.default.moveItem(at: temp, to: destination)
             }
+            FileProtection.apply(.sensitiveLocalDocument, to: destination)
             let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             return ImportOutcome(
                 contentHash: hex,
@@ -137,12 +151,14 @@ struct InterpreterDocumentStore: Sendable {
         guard !data.isEmpty else { throw ImportError.emptyFile }
         let dir = directory(for: documentID)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileProtection.apply(.sensitiveLocalDocument, to: dir)
         let destination = originalURL(documentID: documentID, fileExtension: fileExtension)
         do {
-            try data.write(to: destination, options: .atomic)
+            try data.write(to: destination, options: [.atomic, .completeFileProtection])
         } catch {
             throw ImportError.createFailed
         }
+        FileProtection.apply(.sensitiveLocalDocument, to: destination)
         let hex = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         return ImportOutcome(
             contentHash: hex,
@@ -160,6 +176,7 @@ struct InterpreterDocumentStore: Sendable {
         }
         let dir = directory(for: documentID)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileProtection.apply(.sensitiveLocalDocument, to: dir)
         let temp = dir.appendingPathComponent(".tmp-extraction-\(UUID().uuidString)")
         do {
             try json.data(using: .utf8)?.write(to: temp, options: .atomic)
@@ -169,6 +186,7 @@ struct InterpreterDocumentStore: Sendable {
             } else {
                 try FileManager.default.moveItem(at: temp, to: destination)
             }
+            FileProtection.apply(.sensitiveLocalDocument, to: destination)
         } catch {
             try? FileManager.default.removeItem(at: temp)
             throw error
@@ -187,7 +205,9 @@ struct InterpreterDocumentStore: Sendable {
     func writePageThumbnail(_ data: Data, documentID: UUID, pageNumber: Int) {
         let dir = directory(for: documentID)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? data.write(to: pageThumbnailURL(documentID: documentID, pageNumber: pageNumber))
+        let url = pageThumbnailURL(documentID: documentID, pageNumber: pageNumber)
+        try? data.write(to: url, options: .atomic)
+        FileProtection.apply(.sensitiveLocalDocument, to: url)
     }
 
     func pageThumbnailData(documentID: UUID, pageNumber: Int) -> Data? {
@@ -227,6 +247,7 @@ struct InterpreterDocumentStore: Sendable {
     func removeAll() {
         try? FileManager.default.removeItem(at: root)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        Self.protectRoot(root)
     }
 
     /// Removes left-over `.tmp-*` files under every document directory

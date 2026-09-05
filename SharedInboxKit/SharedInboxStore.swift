@@ -60,14 +60,19 @@ struct SharedInboxStore: Sendable {
 
     private static func prepareDirectories(root: URL) {
         let fm = FileManager.default
-        try? fm.createDirectory(
-            at: root.appendingPathComponent("items", isDirectory: true),
-            withIntermediateDirectories: true
-        )
-        try? fm.createDirectory(
-            at: root.appendingPathComponent("tmp", isDirectory: true),
-            withIntermediateDirectories: true
-        )
+        let items = root.appendingPathComponent("items", isDirectory: true)
+        let tmp = root.appendingPathComponent("tmp", isDirectory: true)
+        try? fm.createDirectory(at: items, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // Shared-inbox protection (round 17): committed payloads and the
+        // manifest are `.complete` — every reader/writer runs on an
+        // unlocked device (share sheet requires unlock; the app's
+        // manifest passes are foreground-only). tmp/ is a regenerable
+        // staging area, excluded from backup. Both kits share one policy
+        // (SharedFileProtection).
+        FileProtection.apply(.sharedInboxItem, to: items)
+        FileProtection.apply(.regenerableCache, to: tmp)
+        FileProtection.apply(.sharedInboxItem, to: root)
     }
 
     private var manifestURL: URL { root.appendingPathComponent("manifest.json") }
@@ -88,17 +93,45 @@ struct SharedInboxStore: Sendable {
     /// manifest never crashes the app; the reconcile pass can rebuild).
     /// Coordinated shared read.
     func loadManifest() -> Manifest {
+        switch readManifestOutcome() {
+        case .ok(let manifest): return manifest
+        case .absent, .corrupt: return Manifest()
+        }
+    }
+
+    /// Distinguishes WHY the manifest read produced no manifest. A
+    /// `corrupt` outcome (bytes exist but they do not decode — I/O error,
+    /// protection-blocked read, truncation) MUST stop every write path:
+    /// persisting a mutation of the EMPTY fallback would erase the real
+    /// manifest and turn every committed item into an "orphan" the
+    /// reconcile pass would then delete. `absent` is a genuine fresh
+    /// start and may proceed.
+    private enum ManifestReadOutcome {
+        case ok(Manifest)
+        case absent
+        case corrupt
+    }
+
+    private func readManifestOutcome() -> ManifestReadOutcome {
         var data: Data?
         var error: NSError?
         let coordinator = NSFileCoordinator(filePresenter: nil)
         coordinator.coordinate(readingItemAt: manifestURL, options: [], error: &error) { url in
             data = try? Data(contentsOf: url)
         }
-        guard let data, !data.isEmpty else { return Manifest() }
-        guard let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
-            return Manifest()
+        // The read itself failed on a file that exists (protection-blocked
+        // or I/O error): the bytes are intact — refuse all writes.
+        if data == nil, FileManager.default.fileExists(atPath: manifestURL.path) {
+            return .corrupt
         }
-        return manifest
+        guard let data else { return .absent }
+        // An empty file reads as zero bytes: no entries to lose — a fresh
+        // start is safe (nothing destructive can overwrite).
+        guard !data.isEmpty else { return .absent }
+        guard let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
+            return .corrupt
+        }
+        return .ok(manifest)
     }
 
     /// Replaces the manifest under an exclusive coordinated write
@@ -131,9 +164,13 @@ struct SharedInboxStore: Sendable {
     /// Mutates the manifest under one exclusive coordinated
     /// read-modify-write — the only sanctioned mutation path for both the
     /// extension (append received items) and the app (status/ledger
-    /// updates). Returns the merged manifest. The mutate closure runs
-    /// synchronously inside the coordinated block (NOT @Sendable — it may
-    /// capture and mutate caller locals, e.g. the updated item).
+    /// updates). Returns the merged manifest.
+    ///
+    /// CORRUPT-MANIFEST GUARD: when the on-disk manifest exists but
+    /// cannot be read/decoded, the mutation is REFUSED and nothing is
+    /// written — writing the mutated empty fallback would erase the real
+    /// manifest and expose every committed item to orphan reaping. The
+    /// caller receives the empty fallback for display purposes only.
     @discardableResult
     func updateManifest(
         _ mutate: (inout Manifest) -> Void
@@ -143,11 +180,33 @@ struct SharedInboxStore: Sendable {
         let coordinator = NSFileCoordinator(filePresenter: nil)
         coordinator.coordinate(writingItemAt: manifestURL, options: [], error: &error) { url in
             var manifest: Manifest
-            if let data = try? Data(contentsOf: url), !data.isEmpty,
-               let decoded = try? JSONDecoder().decode(Manifest.self, from: data) {
-                manifest = decoded
+            let outcome: ManifestReadOutcome
+            let existing = try? Data(contentsOf: url)
+            if let existing, !existing.isEmpty {
+                if let decoded = try? JSONDecoder().decode(Manifest.self, from: existing) {
+                    outcome = .ok(decoded)
+                } else {
+                    outcome = .corrupt
+                }
+            } else if existing != nil {
+                // A zero-byte file: no entries to lose — fresh start.
+                outcome = .absent
+            } else if FileManager.default.fileExists(atPath: url.path) {
+                // The file exists but the read threw (I/O / protection):
+                // its bytes are intact — refuse to touch it.
+                outcome = .corrupt
             } else {
+                outcome = .absent
+            }
+            switch outcome {
+            case .corrupt:
+                // Refuse: never persist a mutation of the empty fallback.
+                merged = Manifest()
+                return
+            case .absent:
                 manifest = Manifest()
+            case .ok(let decoded):
+                manifest = decoded
             }
             mutate(&manifest)
             let encoder = JSONEncoder()
@@ -161,6 +220,7 @@ struct SharedInboxStore: Sendable {
                         try? FileManager.default.moveItem(at: tmp, to: url)
                     }
                     try? FileManager.default.removeItem(at: tmp)
+                    FileProtection.apply(.sharedInboxItem, to: url)
                 }
             }
             merged = manifest
@@ -215,6 +275,8 @@ struct SharedInboxStore: Sendable {
             } else {
                 try fm.moveItem(at: tmp, to: destination)
             }
+            FileProtection.apply(.sharedInboxItem, to: itemDirectory)
+            FileProtection.apply(.sharedInboxItem, to: destination)
             return StagedPayload(
                 relativePath: "items/\(itemID.uuidString)/payload.\(ext)",
                 byteCount: total,
@@ -262,6 +324,8 @@ struct SharedInboxStore: Sendable {
         } else {
             try fm.moveItem(at: tmp, to: destination)
         }
+        FileProtection.apply(.sharedInboxItem, to: itemDirectory)
+        FileProtection.apply(.sharedInboxItem, to: destination)
         return StagedPayload(
             relativePath: "items/\(itemID.uuidString)/payload.\(extensionName)",
             byteCount: byteCount,
@@ -397,6 +461,14 @@ struct SharedInboxStore: Sendable {
                     try? fm.removeItem(at: url)
                 }
             }
+        }
+
+        // CORRUPT-MANIFEST GUARD: when the manifest cannot be read,
+        // EVERY item directory would look like an orphan. Skip the
+        // reaping entirely — committed items survive until the manifest
+        // becomes readable again.
+        if case .corrupt = readManifestOutcome() {
+            return Manifest()
         }
 
         var orphanedDirectories: [UUID] = []

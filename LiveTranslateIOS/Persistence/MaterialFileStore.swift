@@ -35,12 +35,14 @@ struct MaterialFileStore: Sendable {
     init(accountID: UUID?) {
         self.root = AccountScope.materialsRoot(accountID: accountID)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: root)
     }
 
     /// Store-internal init for tests/demo containers.
     init(root: URL) {
         self.root = root
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: root)
     }
 
     /// Canonical file extension for a MIME type (sync write-backs and
@@ -145,6 +147,9 @@ struct MaterialFileStore: Sendable {
             } else {
                 try FileManager.default.moveItem(at: temp, to: destination)
             }
+            // Re-apply after the rename/replace: attributes ride along on
+            // rename, but replaceItemAt has no such guarantee.
+            FileProtection.apply(.syncedUserContent, to: destination)
             let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             return ImportOutcome(contentHash: hex, fileSize: total)
         } catch {
@@ -161,10 +166,10 @@ struct MaterialFileStore: Sendable {
     ) throws {
         let dir = directory(for: materialID)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try data.write(
-            to: originalURL(materialID: materialID, fileExtension: fileExtension),
-            options: .atomic
-        )
+        FileProtection.apply(.syncedUserContent, to: dir)
+        let url = originalURL(materialID: materialID, fileExtension: fileExtension)
+        try data.write(to: url, options: .atomic)
+        FileProtection.apply(.syncedUserContent, to: url)
     }
 
     // MARK: - Page thumbnail cache
@@ -173,7 +178,9 @@ struct MaterialFileStore: Sendable {
     func writePageThumbnail(_ data: Data, materialID: UUID, pageNumber: Int) {
         let dir = directory(for: materialID)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? data.write(to: pageThumbnailURL(materialID: materialID, pageNumber: pageNumber))
+        let url = pageThumbnailURL(materialID: materialID, pageNumber: pageNumber)
+        try? data.write(to: url, options: .atomic)
+        FileProtection.apply(.regenerableCache, to: url)
     }
 
     func pageThumbnailData(materialID: UUID, pageNumber: Int) -> Data? {
@@ -212,6 +219,7 @@ struct MaterialFileStore: Sendable {
     func removeAll() {
         try? FileManager.default.removeItem(at: root)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: root)
     }
 
     /// Total bytes under the store (storage management UI).

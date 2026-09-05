@@ -43,12 +43,26 @@ struct AttachmentFileStore: Sendable {
     init(accountID: UUID?) {
         self.root = AccountScope.attachmentsRoot(accountID: accountID)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: root)
     }
 
     /// Store-internal init for tests/demo containers.
     init(root: URL) {
         self.root = root
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: root)
+    }
+
+    /// Protection class per rendition: originals are user content that a
+    /// background sync pass may re-download while the device is locked
+    /// (`completeUntilFirstUserAuthentication`); the derived
+    /// preview/analysis JPEGs are regenerable caches (`.complete`,
+    /// excluded from backup).
+    private func protectionClass(for variant: Variant) -> DataProtectionClass {
+        switch variant {
+        case .original: return .syncedUserContent
+        case .preview, .analysis: return .regenerableCache
+        }
     }
 
     /// Canonical file extension for a MIME type (used when writing synced
@@ -192,26 +206,27 @@ struct AttachmentFileStore: Sendable {
     ) throws -> URL {
         let dir = directory(for: attachmentID, sessionID: sessionID)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: dir)
         do {
-            try original.write(
-                to: fileURL(
-                    for: attachmentID, sessionID: sessionID, variant: .original,
-                    fileExtension: importResult.fileExtension
-                ),
-                options: .atomic
-            )
-            try importResult.previewData.write(
-                to: fileURL(for: attachmentID, sessionID: sessionID, variant: .preview),
-                options: .atomic
-            )
-            try importResult.analysisData.write(
-                to: fileURL(for: attachmentID, sessionID: sessionID, variant: .analysis),
-                options: .atomic
-            )
-            return fileURL(
+            let originalURL = fileURL(
                 for: attachmentID, sessionID: sessionID, variant: .original,
                 fileExtension: importResult.fileExtension
             )
+            let previewURL = fileURL(
+                for: attachmentID, sessionID: sessionID, variant: .preview
+            )
+            let analysisURL = fileURL(
+                for: attachmentID, sessionID: sessionID, variant: .analysis
+            )
+            try original.write(to: originalURL, options: .atomic)
+            try importResult.previewData.write(to: previewURL, options: .atomic)
+            try importResult.analysisData.write(to: analysisURL, options: .atomic)
+            // Attributes AFTER the atomic writes land (the final files,
+            // not the transient temp copies, carry the protection).
+            FileProtection.apply(.syncedUserContent, to: originalURL)
+            FileProtection.apply(.regenerableCache, to: previewURL)
+            FileProtection.apply(.regenerableCache, to: analysisURL)
+            return originalURL
         } catch {
             try? FileManager.default.removeItem(at: dir) // no half-bundles
             throw error
@@ -261,13 +276,13 @@ struct AttachmentFileStore: Sendable {
     ) throws {
         let dir = directory(for: attachmentID, sessionID: sessionID)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try data.write(
-            to: fileURL(
-                for: attachmentID, sessionID: sessionID, variant: variant,
-                fileExtension: fileExtension
-            ),
-            options: .atomic
+        FileProtection.apply(.syncedUserContent, to: dir)
+        let url = fileURL(
+            for: attachmentID, sessionID: sessionID, variant: variant,
+            fileExtension: fileExtension
         )
+        try data.write(to: url, options: .atomic)
+        FileProtection.apply(protectionClass(for: variant), to: url)
     }
 
     // MARK: - Deletion / cleanup
@@ -290,6 +305,7 @@ struct AttachmentFileStore: Sendable {
     func removeAll() {
         try? FileManager.default.removeItem(at: root)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileProtection.apply(.syncedUserContent, to: root)
     }
 
     /// Total bytes under the store (storage management UI).

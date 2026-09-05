@@ -29,6 +29,10 @@ targets:
       # Shared-inbox kit: compiled into BOTH the app and the Share
       # Extension (the App Group storage contract — Foundation only).
       - path: SharedInboxKit
+      # Shared file-protection policy: compiled into BOTH the app and the
+      # Share Extension (the extension writes App Group inbox files and
+      # must apply protection attributes itself — Foundation + OSLog only).
+      - path: SharedFileProtection
       # System-integration kit: compiled into BOTH the app and the Widget
       # Extension (App Group snapshot / command / route contract +
       # ActivityKit attribute definitions — Foundation + ActivityKit only).
@@ -128,6 +132,9 @@ targets:
       - path: ShareExtension
       # Same App Group storage contract as the app (Foundation only).
       - path: SharedInboxKit
+      # Same file-protection policy as the app — the extension applies
+      # protection attributes to the inbox files it stages itself.
+      - path: SharedFileProtection
     info:
       path: ShareExtension/Info.plist
       properties:

@@ -72,6 +72,10 @@ final class AppEnvironment {
     let capabilities: Capabilities
     let modelContainer: ModelContainer
     let settings: SettingsStore
+    /// The profile's server account id (nil = guest). Storage roots are
+    /// derived from it (AccountScope); the launch protection reconcile
+    /// and per-account teardown need it too.
+    let accountID: UUID?
     let engineManager: any ASREngineManaging
     let keychain: any KeychainStoring
     let repository: any ClassroomRepositoryProtocol
@@ -364,6 +368,7 @@ final class AppEnvironment {
             capabilities: Capabilities(),
             modelContainer: modelContainer,
             settings: settings,
+            accountID: accountID,
             engineManager: engineManager,
             keychain: keychain,
             repository: repository,
@@ -411,6 +416,7 @@ final class AppEnvironment {
         capabilities: Capabilities,
         modelContainer: ModelContainer,
         settings: SettingsStore,
+        accountID: UUID? = nil,
         engineManager: any ASREngineManaging,
         keychain: any KeychainStoring,
         repository: any ClassroomRepositoryProtocol,
@@ -453,6 +459,7 @@ final class AppEnvironment {
         self.capabilities = capabilities
         self.modelContainer = modelContainer
         self.settings = settings
+        self.accountID = accountID
         self.engineManager = engineManager
         self.keychain = keychain
         self.repository = repository
@@ -808,6 +815,9 @@ final class AppEnvironment {
         // Recording rows ↔ disk: legacy raw.wav files gain metadata rows,
         // removed files flip isDeleted, orphan rows are reaped.
         try? repository.reconcileRecordingState()
+        // File-protection attributes for files written by earlier builds
+        // (idempotent in-place upgrade, off the main actor).
+        DataProtectionReconciler.reconcileActiveProfile(accountID: accountID)
     }
 
     /// Re-arms the class-reminder rolling window (launch, foreground

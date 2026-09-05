@@ -59,6 +59,12 @@ enum AccountScope {
         ).first!
         let dir = support.appendingPathComponent("Accounts/\(accountID.uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // classroomWorking: the account root itself (and the store/outbox
+        // directly inside it) must stay writable while a classroom runs in
+        // the locked background. Subdirectories with stronger needs
+        // (Attachments/Materials/InterpreterDocuments) apply their own
+        // classes in their stores.
+        FileProtection.apply(.classroomWorking, to: dir)
         return dir
     }
 

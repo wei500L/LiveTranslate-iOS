@@ -246,6 +246,10 @@ actor SyncOutboxStore {
                 try FileManager.default.removeItem(at: fileURL)
             }
             try FileManager.default.moveItem(at: tmp, to: fileURL)
+            // classroomWorking: the outbox is written from the locked
+            // background (a classroom's turns enqueue while the device is
+            // locked) — same class as the store, NOT .complete.
+            FileProtection.apply(.classroomWorking, to: fileURL)
         } catch {
             Self.logger.error(
                 "outbox persist failed: \(String(describing: error), privacy: .public)"

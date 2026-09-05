@@ -169,6 +169,10 @@ final class RecordingWaveformStore {
         buckets.withUnsafeBytes { raw in
             data.append(Data(raw))
         }
-        try? data.write(to: cacheURL(sessionID: sessionID), options: .atomic)
+        let url = cacheURL(sessionID: sessionID)
+        try? data.write(to: url, options: .atomic)
+        // Regenerable cache (recomputable from the recording): locked-
+        // inaccessible and excluded from backup.
+        FileProtection.apply(.regenerableCache, to: url)
     }
 }

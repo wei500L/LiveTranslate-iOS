@@ -59,6 +59,13 @@ final class SystemSnapshotUpdater {
             privacy: privacy
         )
         store.save(snapshot)
+        // Applied from the APP layer (SharedSystemKit is also compiled
+        // into the Widget extension, which only reads): the snapshot must
+        // stay readable while the device is locked (lock-screen widgets)
+        // and is regenerable — excluded from backup.
+        if let url = SystemSnapshotStore.snapshotFileURL() {
+            FileProtection.apply(.systemSurface, to: url)
+        }
         return snapshot
     }
 
