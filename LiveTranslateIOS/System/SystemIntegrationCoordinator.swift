@@ -188,7 +188,7 @@ final class SystemIntegrationCoordinator {
         let tracker = environment.studyActivityTracker
         if let activity = tracker.currentActivity, activity.status == .inProgress {
             let classroomRunning = environment.coordinator.isRunning
-            if studyActivity.currentActivitySessionID == nil {
+            if studyActivity.ownedActivityID == nil {
                 if startIfMissing, !classroomRunning {
                     let info = studyDisplayInfo(activity)
                     studyActivity.startActivity(
@@ -214,7 +214,7 @@ final class SystemIntegrationCoordinator {
                     estimatedMinutes: info.estimatedMinutes
                 )
             }
-        } else if let id = studyActivity.currentActivitySessionID {
+        } else if let id = studyActivity.ownedActivityID {
             // Row gone (completed / abandoned) — the activity ends AFTER
             // the data, never before.
             studyActivity.endActivity(activityID: id)

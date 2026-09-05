@@ -983,7 +983,7 @@ private struct ReviewItemEditor: View {
             switch context.kind {
             case .itemText(_, let initial, _):
                 text = initial
-            case .userAddition(let existing):
+            case .userAddition(let existing, _):
                 text = existing?.text ?? ""
             }
             focused = true

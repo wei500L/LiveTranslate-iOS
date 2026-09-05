@@ -17,6 +17,10 @@ final class StudyActivityController {
     private var activity: Activity<StudyActivityAttributes>?
     private var activityID: UUID?
 
+    /// The live activity's owning study-activity row id, nil when this
+    /// controller shows none (the coordinator's stale-activity check).
+    var ownedActivityID: UUID? { activityID }
+
     // MARK: - Lifecycle
 
     func startActivity(
