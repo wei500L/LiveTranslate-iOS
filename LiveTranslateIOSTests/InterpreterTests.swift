@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import LiveTranslateIOS
 
 final class InterpreterTests: XCTestCase {
