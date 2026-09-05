@@ -294,19 +294,19 @@ struct AttachmentSectionView: View {
         }
     }
 
-    /// One grid cell with its tap handling and selection mark — extracted
-    /// so the LazyVGrid body stays small enough for the type checker.
-    @ViewBuilder
     /// Extracted: the inline sheet content exceeded the type checker's
     /// expression budget.
     private var captureSheet: some View {
         AttachmentCaptureSheet(
             sessionID: session.id,
-            isPresented: $showCapture,
-            onImported: { onAttachmentSetChanged() }
+            onImported: { onAttachmentSetChanged() },
+            isPresented: $showCapture
         )
     }
 
+    /// One grid cell with its tap handling and selection mark — extracted
+    /// so the LazyVGrid body stays small enough for the type checker.
+    @ViewBuilder
     private func cell(for attachment: SessionAttachment) -> some View {
         let progress = environment.attachmentAnalysisGenerator.progressByID[attachment.id]
         AttachmentGridCell(attachment: attachment, progress: progress)
