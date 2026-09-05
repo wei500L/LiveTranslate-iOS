@@ -357,7 +357,9 @@ final class InterpreterTests: XCTestCase {
 
 /// Records every mutation notification — proves draft rows never notify
 /// the sync observer while save promotes the whole conversation at once.
-private final class MutationRecorder: TranscriptMutationObserving {
+/// Records mutation-observer calls (interpreter family). Internal so the
+/// document-context tests can reuse the same double.
+final class MutationRecorder: TranscriptMutationObserving {
     var conversationSaved: [UUID] = []
     var conversationUpdated: [UUID] = []
     var conversationDeleted: [UUID] = []
