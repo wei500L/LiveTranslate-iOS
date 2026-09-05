@@ -71,8 +71,8 @@ struct InterpreterScreen: View {
                 ) { conversationID in
                     // 继续作为新对话的上下文副本：载入场景与背景。
                     if let conversation = environment.repository.interpreterConversation(id: conversationID) {
-                        viewModel?.scene = conversation.scene
-                        viewModel?.contextNote = conversation.contextNote
+                        viewModel.scene = conversation.scene
+                        viewModel.contextNote = conversation.contextNote
                     }
                 }
             }

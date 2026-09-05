@@ -225,8 +225,8 @@ final class InterpreterViewModel {
             return
         }
         var parameters = SpeechSegmenter.Parameters()
-        parameters.vadMinSpeechMs = settings.vadMinSpeechMs
-        parameters.vadSilenceEndMs = settings.vadSilenceEndMs
+        parameters.minSpeechSeconds = TimeInterval(settings.vadMinSpeechMs) / 1000
+        parameters.silenceEndSeconds = TimeInterval(settings.vadSilenceEndMs) / 1000
         segmenter = SpeechSegmenter(parameters: parameters)
 
         let vad = self.vad!
@@ -250,7 +250,7 @@ final class InterpreterViewModel {
     func finishCurrentUtterance() {
         guard let segmenter else { return }
         let segments = segmenter.flush()
-        guard !Task.isCancelled else { return }
+        guard !segments.isEmpty else { return }
         Task { @MainActor in
             for segment in segments {
                 await self.handleSpeechSegment(segment)
