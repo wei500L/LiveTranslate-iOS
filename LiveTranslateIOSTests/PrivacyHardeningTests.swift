@@ -194,8 +194,10 @@ final class PrivacyHardeningTests: XCTestCase {
         let values = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
         if FileProtectionTests.protectionRoundTripSupported {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .complete)
+            let attributes: [FileAttributeKey: Any] = try FileManager.default
+                .attributesOfItem(atPath: url.path)
+            let level = attributes[FileAttributeKey.protectionKey] as? FileProtectionType
+            XCTAssertEqual(level, .complete)
         }
         XCTAssertGreaterThan(store.totalBytes(), 0)
 
