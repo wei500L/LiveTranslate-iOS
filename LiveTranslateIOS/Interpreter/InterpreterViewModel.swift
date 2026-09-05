@@ -105,19 +105,20 @@ final class InterpreterViewModel {
     // MARK: - Lifecycle
 
     /// 进入页面：加载设置默认值、恢复草稿提示、检查资源。
-    func reload() {
+    func reload() async {
         scene = environment.settings.interpreterDefaultScene
-        asrModelInstalled = (try? environment.engineManager.isInstalled(
+        asrModelInstalled = await environment.engineManager.isInstalled(
             environment.settings.preferredBackend
-        )) ?? true
+        )
         micPermissionDenied = AVAudioApplication.shared.recordPermission == .denied
         // 恢复上次未结束的草稿（App 被杀后重新进入）。
         if let draft = repository.interpreterDraft {
             conversation = draft
             scene = draft.scene
             contextNote = draft.contextNote
-            turns = (try? repository.interpreterTurns(conversationID: draft.id)) ?? []
-            Self.logger.info("resumed interpreter draft (\(turns.count) turns)")
+            let resumed = (try? repository.interpreterTurns(conversationID: draft.id)) ?? []
+            Self.logger.info("resumed interpreter draft (\(resumed.count) turns)")
+            turns = resumed
         }
     }
 

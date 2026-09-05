@@ -47,7 +47,7 @@ struct InterpreterScreen: View {
             if viewModel == nil {
                 viewModel = InterpreterViewModel(environment: environment)
             }
-            viewModel?.reload()
+            await viewModel?.reload()
         }
         .sheet(isPresented: $showScenePicker) {
             if let viewModel {
