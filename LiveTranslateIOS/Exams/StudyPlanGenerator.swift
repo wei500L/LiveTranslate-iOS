@@ -98,7 +98,7 @@ enum StudyPlanGenerator {
         //    reserved for final review (first pass must finish before).
         let today = calendar.startOfDay(for: now)
         let settingsStart = calendar.startOfDay(
-            for: input.settings.startDateKey.flatMap { Exam.parseDateKey($0) } ?? today
+            for: Exam.parseDateKey(input.settings.startDateKey) ?? today
         )
         let windowStart = max(settingsStart, today) // never in the past
         let restDays = Set(input.settings.restDays)

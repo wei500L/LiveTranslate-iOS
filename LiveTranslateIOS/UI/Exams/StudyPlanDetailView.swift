@@ -56,7 +56,7 @@ struct StudyPlanDetailView: View {
                             )
                         }
                         Button(role: .destructive) {
-                            setPlanStatus(plan, .archived)
+                            setPlanStatus(plan, status: .archived)
                         } label: {
                             Label("归档计划", systemImage: "archivebox")
                         }
