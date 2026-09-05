@@ -90,18 +90,16 @@ enum DataProtectionReconciler {
             }
         }
 
-        // 1. Store + outbox (classroomWorking): everything directly in the
-        //    store root, EXCEPT the subdirectories with their own classes.
-        let ownSubtrees: Set<String> = [
-            AccountScope.attachmentsDirectoryName,
-            AccountScope.materialsDirectoryName,
-            AccountScope.interpreterDocumentsDirectoryName,
-        ]
+        // 1. Store + outbox (classroomWorking): ONLY entries directly in
+        //    the store root (the sqlite store, WAL/SHM, the outbox).
+        //    Deeper paths belong to dedicated passes with their own
+        //    classes — and for the guest profile the store root is ALL of
+        //    Application Support, where descending would re-class OTHER
+        //    profiles' trees (downgrading their .complete files to the
+        //    working class). Allowlist, never blocklist.
         run(roots.storeRoot, .classroomWorking, label: "store") { url in
-            guard url == roots.storeRoot else {
-                return !ownSubtrees.contains(url.lastPathComponent)
-            }
-            return true
+            url == roots.storeRoot
+                || url.deletingLastPathComponent() == roots.storeRoot
         }
 
         // 2. Attachments: originals keep working-class (synced content);
@@ -141,7 +139,11 @@ enum DataProtectionReconciler {
             run(modelsRoot, .modelFile, label: "models")
         }
 
-        // 7. App Group system surfaces (snapshot, commands, routes) —
+        // 7. The AI activity ledger (metadata describing what was sent
+        //    where — same class as the interpreter documents).
+        run(roots.aiActivityRoot, .sensitiveLocalDocument, label: "ai-activity")
+
+        // 8. App Group system surfaces (snapshot, commands, routes) —
         //    read by the widget extension while locked, regenerable.
         if let groupRoot = SystemSnapshotStore.containerURL {
             run(groupRoot, .systemSurface, label: "system-surfaces") { url in
@@ -152,7 +154,7 @@ enum DataProtectionReconciler {
                     || name.hasPrefix("SystemRoutes")
             }
 
-            // 8. Shared inbox: committed items + manifest `.complete`;
+            // 9. Shared inbox: committed items + manifest `.complete`;
             //    the tmp staging area is a regenerable cache.
             let inboxRoot = groupRoot.appendingPathComponent("SharedInbox", isDirectory: true)
             let inboxTmp = inboxRoot.appendingPathComponent("tmp", isDirectory: true)

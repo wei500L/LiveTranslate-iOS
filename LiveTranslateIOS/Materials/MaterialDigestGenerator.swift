@@ -320,7 +320,7 @@ final class MaterialDigestGenerator {
                 // payload); the remaining empty pages stay honestly
                 // uncertain in the digest.
                 let pageNumber = first.pageNumber
-                if let raw = try? await AICallScope.with(
+                let raw = try? await AICallScope.with(
                     AICallContext(feature: .materialDigest, textCategory: .none)
                 ) {
                     try await imageService.complete(
@@ -332,8 +332,9 @@ final class MaterialDigestGenerator {
                         imageMIME: "image/jpeg",
                         maxTokens: 1_200
                     )
-                }, let parsed = MaterialDigestParser.parseImagePage(text: raw) {
-                    imageObservations.append((first.pageNumber, Self.imageObservationJSON(parsed)))
+                }
+                if let raw, let parsed = MaterialDigestParser.parseImagePage(text: raw) {
+                    imageObservations.append((pageNumber, Self.imageObservationJSON(parsed)))
                 }
             }
 

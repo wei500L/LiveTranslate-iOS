@@ -270,7 +270,7 @@ enum ExamExporter {
     /// "/" used to silently break the export by naming a phantom
     /// subdirectory).
     static func safeNameFragment(_ raw: String) -> String {
-        raw.replacingOccurrences(of: "[\\/:*?\"<>|\s]+", with: "-", options: .regularExpression)
+        raw.replacingOccurrences(of: "[\\\\/:*?\"<>|\\s]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 }

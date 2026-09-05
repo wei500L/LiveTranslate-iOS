@@ -472,7 +472,7 @@ struct SharedInboxStore: Sendable {
         }
 
         var orphanedDirectories: [UUID] = []
-        var manifest = updateManifest { manifest in
+        let manifest = updateManifest { manifest in
             // Collapse duplicate ids (defensive — append is guarded).
             var seen = Set<UUID>()
             manifest.items.removeAll { !seen.insert($0.id).inserted }
