@@ -210,7 +210,7 @@ enum FileProtection {
             guard
                 let values = try? url.resourceValues(
                     forKeys: [.isDirectoryKey, .isRegularFileKey,
-                              .fileProtectionKey, .isExcludedFromBackupKey]
+                              .isExcludedFromBackupKey]
                 )
             else { continue }
             if let matching, !matching(url) {
@@ -218,7 +218,11 @@ enum FileProtection {
                 // directories — files below may match a later pass.
                 continue
             }
-            let currentProtection = values.protectionKey
+            // File protection is READ via FileManager attributes
+            // (URLResourceValues exposes no property for it).
+            let currentProtection = (try? fileManager.attributesOfItem(
+                atPath: url.path
+            )?[.protectionKey]) as? FileProtectionType
             let currentExcluded = values.isExcludedFromBackup ?? false
             let protectionMatches =
                 currentProtection == cls.fileProtection

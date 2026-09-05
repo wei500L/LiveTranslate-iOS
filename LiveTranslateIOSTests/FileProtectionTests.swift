@@ -28,8 +28,10 @@ final class FileProtectionTests: XCTestCase {
     }
 
     private func protection(of url: URL) -> FileProtectionType? {
-        try? url.resourceValues(forKeys: [.fileProtectionKey]).protectionKey
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes?[.protectionKey] as? FileProtectionType
     }
+
 
     private func backupExcluded(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isExcludedFromBackupKey])
