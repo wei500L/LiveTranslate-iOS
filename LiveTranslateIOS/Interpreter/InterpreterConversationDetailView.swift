@@ -26,8 +26,8 @@ struct InterpreterConversationDetailView: View {
                                 turn: turn,
                                 isExpanded: false,
                                 showStress: environment.settings.interpreterShowStress,
-                                availableDocumentIDs: availableDocumentIDs,
-                                isTranslating: false
+                                isTranslating: false,
+                                availableDocumentIDs: availableDocumentIDs
                             )
                         }
                     } else {

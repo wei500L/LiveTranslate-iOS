@@ -268,8 +268,8 @@ struct InterpreterScreen: View {
                             turn: turn,
                             isExpanded: isExpanded,
                             showStress: environment.settings.interpreterShowStress,
-                            availableDocumentIDs: viewModel.availableDocumentIDs,
                             isTranslating: isTranslating,
+                            availableDocumentIDs: viewModel.availableDocumentIDs,
                             onToggleExpanded: {
                                 if viewModel.expandedTurnIDs.contains(turn.id) {
                                     viewModel.expandedTurnIDs.remove(turn.id)
