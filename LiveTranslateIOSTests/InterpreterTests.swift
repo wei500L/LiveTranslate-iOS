@@ -72,8 +72,8 @@ final class InterpreterTests: XCTestCase {
         XCTAssertEqual(result?.mainText, "У меня есть только оригинал.")
         XCTAssertEqual(result?.stressedRussian, "У меня есть то́лько оригина́л.")
         XCTAssertEqual(result?.backTranslation, "我只有原件。")
-        XCTAssertEqual(result?.details?.keywords?.count, 1)
-        XCTAssertEqual(result?.details?.politeAlternative, "Не могли бы вы подсказать?")
+        XCTAssertEqual(result?.details.keywords?.count, 1)
+        XCTAssertEqual(result?.details.politeAlternative, "Не могли бы вы подсказать?")
         XCTAssertEqual(result?.isPlainTextResponse, false)
     }
 
@@ -98,7 +98,7 @@ final class InterpreterTests: XCTestCase {
         XCTAssertEqual(result?.mainText, "Хорошо.")
         XCTAssertNil(result?.stressedRussian)
         XCTAssertNil(result?.backTranslation)
-        XCTAssertNil(result?.details?.keywords)
+        XCTAssertNil(result?.details.keywords)
     }
 
     func testParseZh2RuStringInsteadOfArray() {
@@ -107,7 +107,7 @@ final class InterpreterTests: XCTestCase {
         {"russian": "Хорошо.", "keywords": "оригинал 原件"}
         """
         let result = InterpreterResponseParser.parseZh2Ru(raw)
-        XCTAssertEqual(result?.details?.keywords, ["оригинал 原件"])
+        XCTAssertEqual(result?.details.keywords, ["оригинал 原件"])
     }
 
     func testParseZh2RuPlainTextFallback() {
@@ -138,8 +138,8 @@ final class InterpreterTests: XCTestCase {
         let result = InterpreterResponseParser.parseRu2Zh(raw)
         XCTAssertEqual(result?.mainText, "您有护照复印件吗？")
         XCTAssertEqual(result?.stressedRussian, "У вас есть ко́пия па́спорта?")
-        XCTAssertEqual(result?.details?.intentSummary, "询问材料")
-        XCTAssertEqual(result?.details?.suggestedReplies?.count, 2)
+        XCTAssertEqual(result?.details.intentSummary, "询问材料")
+        XCTAssertEqual(result?.details.suggestedReplies?.count, 2)
     }
 
     func testParseRu2ZhPlainTextFallback() {
@@ -236,7 +236,7 @@ final class InterpreterTests: XCTestCase {
 
     // MARK: - InterpreterTurnDetails 编解码
 
-    func testTurnDetailsCodableRoundTrip() {
+    func testTurnDetailsCodableRoundTrip() throws {
         let details = InterpreterTurnDetails(
             intentSummary: "询问材料",
             keywords: ["паспорт 护照"],
@@ -367,6 +367,7 @@ private final class MutationRecorder: TranscriptMutationObserving {
     }
 }
 
+@MainActor
 final class InterpreterRepositoryTests: XCTestCase {
     private var container: ModelContainer!
     private var repository: TranscriptRepository!
