@@ -48,7 +48,7 @@ struct StudyPlanDetailView: View {
                 Menu {
                     if let plan {
                         Button {
-                            setPlanStatus(plan, plan.status == .paused ? .active : .paused)
+                            setPlanStatus(plan, status: plan.status == .paused ? .active : .paused)
                         } label: {
                             Label(
                                 plan.status == .paused ? "恢复计划" : "暂停计划",
