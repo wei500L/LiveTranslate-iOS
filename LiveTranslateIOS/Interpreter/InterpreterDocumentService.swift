@@ -624,15 +624,27 @@ final class InterpreterDocumentService {
 
     // MARK: - Merge helpers
 
-    /// Merges updated page entries into existing ones (update-in-place
-    /// by page number; new page numbers append).
+    /// Merges updated page entries into existing ones — FIELD-WISE:
+    /// an update's empty extractedText never wipes the existing text
+    /// layer (OCR updates only touch OCR fields), and OCR fields always
+    /// take the update's values (status transitions are authoritative).
     static func mergePages(
         existing: [InterpreterDocumentPageText],
         updated: [InterpreterDocumentPageText]
     ) -> [InterpreterDocumentPageText] {
         var byNumber = Dictionary(uniqueKeysWithValues: existing.map { ($0.pageNumber, $0) })
         for page in updated {
-            byNumber[page.pageNumber] = page
+            if let old = byNumber[page.pageNumber] {
+                byNumber[page.pageNumber] = InterpreterDocumentPageText(
+                    pageNumber: page.pageNumber,
+                    extractedText: page.extractedText.isEmpty ? old.extractedText : page.extractedText,
+                    ocrText: page.ocrText.isEmpty ? old.ocrText : page.ocrText,
+                    ocrConfidence: page.ocrConfidence,
+                    ocrStatusRaw: page.ocrStatusRaw
+                )
+            } else {
+                byNumber[page.pageNumber] = page
+            }
         }
         return byNumber.values.sorted { $0.pageNumber < $1.pageNumber }
     }

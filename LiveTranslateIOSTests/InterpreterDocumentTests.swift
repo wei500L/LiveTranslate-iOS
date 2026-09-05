@@ -337,11 +337,15 @@ final class InterpreterDocumentRepositoryTests: XCTestCase {
             root: FileManager.default.temporaryDirectory
                 .appendingPathComponent("interp-doc-tests-\(UUID().uuidString)", isDirectory: true)
         )
+        // Repository deletes/reconcile go through the shared holder —
+        // point it at THIS test's store (tearDown resets).
+        InterpreterDocumentStoreShared.store = store
         recorder = MutationRecorder()
         repository.mutationObserver = recorder
     }
 
     override func tearDown() async throws {
+        InterpreterDocumentStoreShared.store = nil
         try? FileManager.default.removeItem(at: store.root)
     }
 
@@ -352,12 +356,15 @@ final class InterpreterDocumentRepositoryTests: XCTestCase {
     private func importDocument(
         into conversationID: UUID, text: String
     ) throws -> InterpreterDocument {
+        // 同一 documentID 贯穿文件与行（行 id == 文件目录 id —— 生产
+        // 代码里 importFile/importData 与 addInterpreterDraft 天然一致）。
         let documentID = UUID()
         let outcome = try store.importData(
             text.data(using: .utf8)!, documentID: documentID, fileExtension: "txt"
         )
         return try repository.addInterpreterDocument(
             InterpreterDocumentDraft(
+                id: documentID,
                 conversationID: conversationID,
                 source: .files,
                 originalFileName: "通知.txt",

@@ -50,6 +50,62 @@ struct InterpreterDocumentAnalysis: Codable, Equatable, Sendable {
         case citations, detailsAvailable
     }
 
+    /// 宽容解码：逐字段 decodeIfPresent（合成的 init(from:) 会要求
+    /// 非可选字段全部在 JSON 里 —— detailsAvailable 缺失时整个解码
+    /// 失败，这违反"部分字段缺失"的解析姿态）。
+    init(
+        documentType: String? = nil,
+        summaryChinese: String? = nil,
+        keyFacts: [String]? = nil,
+        requiredActions: [String]? = nil,
+        requiredDocuments: [String]? = nil,
+        deadlines: [String]? = nil,
+        fees: [String]? = nil,
+        addresses: [String]? = nil,
+        contacts: [String]? = nil,
+        formFields: [InterpreterFormField]? = nil,
+        questionsToAsk: [String]? = nil,
+        warnings: [String]? = nil,
+        uncertainties: [String]? = nil,
+        citations: [InterpreterCitation]? = nil,
+        detailsAvailable: Bool = true
+    ) {
+        self.documentType = documentType
+        self.summaryChinese = summaryChinese
+        self.keyFacts = keyFacts
+        self.requiredActions = requiredActions
+        self.requiredDocuments = requiredDocuments
+        self.deadlines = deadlines
+        self.fees = fees
+        self.addresses = addresses
+        self.contacts = contacts
+        self.formFields = formFields
+        self.questionsToAsk = questionsToAsk
+        self.warnings = warnings
+        self.uncertainties = uncertainties
+        self.citations = citations
+        self.detailsAvailable = detailsAvailable
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        documentType = try container.decodeIfPresent(String.self, forKey: .documentType)
+        summaryChinese = try container.decodeIfPresent(String.self, forKey: .summaryChinese)
+        keyFacts = try container.decodeIfPresent([String].self, forKey: .keyFacts)
+        requiredActions = try container.decodeIfPresent([String].self, forKey: .requiredActions)
+        requiredDocuments = try container.decodeIfPresent([String].self, forKey: .requiredDocuments)
+        deadlines = try container.decodeIfPresent([String].self, forKey: .deadlines)
+        fees = try container.decodeIfPresent([String].self, forKey: .fees)
+        addresses = try container.decodeIfPresent([String].self, forKey: .addresses)
+        contacts = try container.decodeIfPresent([String].self, forKey: .contacts)
+        formFields = try container.decodeIfPresent([InterpreterFormField].self, forKey: .formFields)
+        questionsToAsk = try container.decodeIfPresent([String].self, forKey: .questionsToAsk)
+        warnings = try container.decodeIfPresent([String].self, forKey: .warnings)
+        uncertainties = try container.decodeIfPresent([String].self, forKey: .uncertainties)
+        citations = try container.decodeIfPresent([InterpreterCitation].self, forKey: .citations)
+        detailsAvailable = try container.decodeIfPresent(Bool.self, forKey: .detailsAvailable) ?? true
+    }
+
     static let plainTextFallback = InterpreterDocumentAnalysis(
         summaryChinese: nil, detailsAvailable: false
     )
@@ -78,6 +134,38 @@ struct InterpreterFormField: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case russianLabel, chineseMeaning, expectedType, existingValue
         case preparationHint, exampleFormat, pageNumber, riskNote
+    }
+
+    init(
+        russianLabel: String,
+        chineseMeaning: String,
+        expectedType: String? = nil,
+        existingValue: String? = nil,
+        preparationHint: String? = nil,
+        exampleFormat: String? = nil,
+        pageNumber: Int? = nil,
+        riskNote: String? = nil
+    ) {
+        self.russianLabel = russianLabel
+        self.chineseMeaning = chineseMeaning
+        self.expectedType = expectedType
+        self.existingValue = existingValue
+        self.preparationHint = preparationHint
+        self.exampleFormat = exampleFormat
+        self.pageNumber = pageNumber
+        self.riskNote = riskNote
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        russianLabel = try container.decodeIfPresent(String.self, forKey: .russianLabel) ?? ""
+        chineseMeaning = try container.decodeIfPresent(String.self, forKey: .chineseMeaning) ?? ""
+        expectedType = try container.decodeIfPresent(String.self, forKey: .expectedType)
+        existingValue = try container.decodeIfPresent(String.self, forKey: .existingValue)
+        preparationHint = try container.decodeIfPresent(String.self, forKey: .preparationHint)
+        exampleFormat = try container.decodeIfPresent(String.self, forKey: .exampleFormat)
+        pageNumber = try container.decodeIfPresent(Int.self, forKey: .pageNumber)
+        riskNote = try container.decodeIfPresent(String.self, forKey: .riskNote)
     }
 }
 
@@ -108,6 +196,41 @@ struct InterpreterDocumentAnswer: Codable, Equatable, Sendable {
         case answerChinese, suggestedRussian, stressedRussian
         case backTranslation, politeAlternative, simpleAlternative
         case citations, uncertainties, detailsAvailable
+    }
+
+    init(
+        answerChinese: String,
+        suggestedRussian: String? = nil,
+        stressedRussian: String? = nil,
+        backTranslation: String? = nil,
+        politeAlternative: String? = nil,
+        simpleAlternative: String? = nil,
+        citations: [InterpreterCitation]? = nil,
+        uncertainties: [String]? = nil,
+        detailsAvailable: Bool = true
+    ) {
+        self.answerChinese = answerChinese
+        self.suggestedRussian = suggestedRussian
+        self.stressedRussian = stressedRussian
+        self.backTranslation = backTranslation
+        self.politeAlternative = politeAlternative
+        self.simpleAlternative = simpleAlternative
+        self.citations = citations
+        self.uncertainties = uncertainties
+        self.detailsAvailable = detailsAvailable
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        answerChinese = try container.decodeIfPresent(String.self, forKey: .answerChinese) ?? ""
+        suggestedRussian = try container.decodeIfPresent(String.self, forKey: .suggestedRussian)
+        stressedRussian = try container.decodeIfPresent(String.self, forKey: .stressedRussian)
+        backTranslation = try container.decodeIfPresent(String.self, forKey: .backTranslation)
+        politeAlternative = try container.decodeIfPresent(String.self, forKey: .politeAlternative)
+        simpleAlternative = try container.decodeIfPresent(String.self, forKey: .simpleAlternative)
+        citations = try container.decodeIfPresent([InterpreterCitation].self, forKey: .citations)
+        uncertainties = try container.decodeIfPresent([String].self, forKey: .uncertainties)
+        detailsAvailable = try container.decodeIfPresent(Bool.self, forKey: .detailsAvailable) ?? true
     }
 }
 
