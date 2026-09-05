@@ -172,9 +172,14 @@ jobs:
             codesign -d --entitlements :- "$product" >/tmp/ents.plist 2>/dev/null || true
             # Trust the product-side dump only when it parses as a plist —
             # ad-hoc simulator signatures may emit DER or nothing.
-            if plutil -lint /tmp/ents.plist >/dev/null 2>&1; then
+            # Ad-hoc simulator signatures on Xcode 26 embed NO
+            # entitlements (the dump is an empty plist "{}") — only assert
+            # against the product when it actually carries some; the repo
+            # entitlements (what xcodegen consumed) are the fallback truth.
+            if plutil -lint /tmp/ents.plist >/dev/null 2>&1 \
+               && plutil -p /tmp/ents.plist | grep -q "=>"; then
               echo "--- entitlements dump for $product:"
-              plutil -p /tmp/ents.plist || cat /tmp/ents.plist
+              plutil -p /tmp/ents.plist
               echo "---"
               if grep -q "keychain-access-groups" /tmp/ents.plist; then
                 echo "keychain-access-groups found in $product"; exit 1
@@ -182,7 +187,7 @@ jobs:
               grep -q "group.com.livetranslate.ios" /tmp/ents.plist \
                 || { echo "App Group missing in $product"; exit 1; }
             else
-              echo "note: embedded entitlements not plist-readable for $product (ad-hoc simulator build) — repo entitlements verified below"
+              echo "note: no entitlements embedded in the ad-hoc simulator signature of $product — repo entitlements verified below"
             fi
           done
           for f in LiveTranslateIOS/LiveTranslateIOS.entitlements \
