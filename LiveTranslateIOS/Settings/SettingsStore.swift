@@ -298,15 +298,19 @@ final class SettingsStore {
         interpreterAutoSpeak = interpreterSpeak ?? false
         let interpreterSave = defaults.object(forKey: Keys.interpreterAskToSave) as? Bool
         interpreterAskToSave = interpreterSave ?? true
-        // Round 17 (last: reads another stored property, so every other
-        // property must be initialized first): derive the unified level
-        // from the legacy classroom preference on first run — nothing the
-        // user had chosen is lost.
+        // Round 17: derive the unified level from the legacy classroom
+        // preference on first run (nothing the user had chosen is lost).
+        // NOTE: under @Observable `lockScreenPrivacy` is a computed
+        // property — reading it mid-init requires full initialization, so
+        // the legacy value is re-parsed from defaults instead.
         if let stored = defaults.string(forKey: Keys.systemSurfacePrivacy),
            let parsed = SystemSurfacePrivacy(rawValue: stored) {
             systemSurfacePrivacy = parsed
         } else {
-            switch lockScreenPrivacy {
+            let legacy = LockScreenPrivacy(
+                rawValue: defaults.string(forKey: Keys.lockScreenPrivacy) ?? ""
+            ) ?? .statusAndTitle
+            switch legacy {
             case .statusOnly: systemSurfacePrivacy = .hideSensitiveContent
             case .statusAndTitle: systemSurfacePrivacy = .showTitlesOnly
             case .statusTitleAndLatestText: systemSurfacePrivacy = .showFullContent
