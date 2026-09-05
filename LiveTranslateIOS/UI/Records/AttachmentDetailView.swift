@@ -46,7 +46,9 @@ struct AttachmentDetailView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("编辑信息") { showEditor = true }
-                        Button("旋转 90°") { rotate(attachment) }
+                        Button("旋转 90°") {
+                            if let attachment { rotate(attachment) }
+                        }
                         Button("裁切") { showCropper = true }
                         Menu("分析") {
                             ForEach(AttachmentAnalysisGenerator.Mode.allCases) { mode in
@@ -256,6 +258,7 @@ struct AttachmentDetailView: View {
                     AnalysisResultView(
                         result: result,
                         session: session,
+                        attachmentID: attachment.id,
                         isPartial: attachment.analysisStatus == .partial
                     )
                 } else {
@@ -428,7 +431,12 @@ struct AnalysisResultView: View {
     @Environment(AppEnvironment.self) private var environment
     let result: AttachmentAnalysisResult
     let session: ClassroomSession
+    /// The analyzed attachment (draft provenance chips reference it).
+    var attachmentID: UUID? = nil
     var isPartial: Bool = false
+    @State private var termDraftBox: TermDraftBox?
+    @State private var cardDraftBox: CardDraftBox?
+    @State private var taskDraftBox: TaskDraftBox?
 
     var body: some View {
         VStack(alignment: .leading, spacing: LTSpacing.m) {
