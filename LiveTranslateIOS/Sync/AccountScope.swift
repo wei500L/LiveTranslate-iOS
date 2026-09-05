@@ -66,6 +66,7 @@ enum AccountScope {
     static let outboxFileName = "SyncOutbox.json"
     static let attachmentsDirectoryName = "Attachments"
     static let materialsDirectoryName = "Materials"
+    static let interpreterDocumentsDirectoryName = "InterpreterDocuments"
 
     /// SwiftData store for a profile: the guest global file, or one
     /// account's isolated store.
@@ -108,6 +109,22 @@ enum AccountScope {
         }
         return accountDirectory(accountID: accountID)
             .appendingPathComponent(materialsDirectoryName, isDirectory: true)
+    }
+
+    /// Root directory for a profile's interpreter (随身翻译) local
+    /// document files — the on-site file context (scanned forms,
+    /// notices, receipts). Same isolation rule as attachments/materials:
+    /// one root per account, derived ONLY here. Device-local by design —
+    /// these files NEVER enter the sync outbox.
+    static func interpreterDocumentsRoot(accountID: UUID?) -> URL {
+        let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        guard let accountID else {
+            return support.appendingPathComponent("InterpreterDocuments", isDirectory: true)
+        }
+        return accountDirectory(accountID: accountID)
+            .appendingPathComponent(interpreterDocumentsDirectoryName, isDirectory: true)
     }
 
     // MARK: - Guest (legacy global) paths

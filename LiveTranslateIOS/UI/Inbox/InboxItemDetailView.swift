@@ -30,6 +30,15 @@ struct InboxItemDetailView: View {
     /// carry several classes; all of them ledger when the sheet saves).
     @State private var scheduleActions: [InboxSuggestedAction] = []
     @State private var showDeleteConfirm = false
+    /// 现场文件：payload 存在时的"用于随身翻译"路由目标。
+    @State private var interpreterRoute: InboxLedgerRoute?
+
+    private var interpreterRouteBinding: Binding<InboxLedgerRoute?> {
+        Binding(
+            get: { interpreterRoute },
+            set: { interpreterRoute = $0 }
+        )
+    }
 
     private var inbox: InboxCoordinator { environment.inbox }
     private var item: SharedInboxItem? { inbox.item(id: itemID) }
@@ -56,6 +65,17 @@ struct InboxItemDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    // 现场文件：进入随身翻译（复制进 Interpreter 自己的
+                    // 受控生命周期 —— 收件箱删除不影响已复制的文档）。
+                    if let current = item,
+                       current.payloadKind == .file,
+                       environment.inbox.payloadURL(for: current) != nil {
+                        Button {
+                            interpreterRoute = .interpreter(itemID)
+                        } label: {
+                            Label("用于随身翻译", systemImage: "character.bubble")
+                        }
+                    }
                     Button(role: .destructive) {
                         showDeleteConfirm = true
                     } label: {
@@ -96,6 +116,13 @@ struct InboxItemDetailView: View {
         }
         .onAppear {
             inbox.reload()
+        }
+        // 用于随身翻译 — pushes the interpreter (the file is then copied
+        // through the document panel's inbox picker into the interpreter's
+        // own store).
+        .navigationDestination(item: interpreterRouteBinding) { route in
+            InboxLedgerRoute.destination(for: route)
+                .environment(environment)
         }
         .sheet(isPresented: $showScheduleSheet) {
             if let item {
@@ -821,6 +848,10 @@ enum InboxLedgerRoute: Hashable {
     case task
     case timetable
     case sessionDetailNote(UUID)
+    /// 用于随身翻译 — open the interpreter with this item pre-selected
+    /// as document context (the payload is copied into the interpreter's
+    /// own store; the inbox item keeps its own lifecycle).
+    case interpreter(UUID)
 
     /// The destination view for the route (attached where the detail view
     /// lives inside its NavigationStack).
@@ -839,6 +870,8 @@ enum InboxLedgerRoute: Hashable {
             ScheduleScreen()
         case .sessionDetailNote(let id):
             SessionDetailView(sessionID: id)
+        case .interpreter:
+            InterpreterScreen()
         }
     }
 }

@@ -219,6 +219,15 @@ struct InterpreterTurnCard: View {
                 detailList(title: "不确定项", items: details.uncertainties)
                 detailRow(title: "更礼貌的表达", value: details.politeAlternative)
                 detailRow(title: "更简单的表达", value: details.simpleAlternative)
+                // 文件上下文回合：关键词行呈现来源（文件名 · 第n页）。
+                // 引用的来源文件只在本机 —— 其他设备打开时明确说明，
+                // 绝不渲染一个打不开的假链接。
+                if let keywords = details.keywords,
+                   keywords.contains(where: { $0.contains(" · 第") }) {
+                    Text("来源文件仅保存在原设备；本设备未保存该文件。")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
             }
 
             // 编辑原文（stamp modifiedAt — 合并裁决基准）。

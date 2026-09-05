@@ -5,6 +5,16 @@ import SwiftUI
 /// 普通俄语、带重音俄语、中文翻译与用户主动选择的详细解释（关键词、
 /// 备选表达）。绝不导出模型名、API 地址、文件路径或 Keychain 信息。
 enum InterpreterExporter {
+    /// Export options (导出内容选择 —— 分享前决定是否包含文件来源
+    /// 与用户选中的短引文；默认不包含)。
+    struct Options: Sendable, Equatable {
+        /// 包含文件名与页码来源（文件上下文回合的 citation 标签）。
+        var includeDocumentSources: Bool = false
+        /// 包含用户选中的短引文（details 中保留的结构化内容）。
+        var includeDetails: Bool = true
+
+        static let `default` = Options()
+    }
     /// 一个回合的导出投影（值类型，脱离 SwiftData 模型）。
     struct TurnExport: Sendable {
         var speaker: InterpreterSpeaker
@@ -28,7 +38,9 @@ enum InterpreterExporter {
     // MARK: - Render
 
     /// 双语 TXT。
-    static func bilingualText(_ conversation: ConversationExport) -> String {
+    static func bilingualText(
+        _ conversation: ConversationExport, options: Options = .default
+    ) -> String {
         var lines: [String] = []
         let header = "\(conversation.title) · \(conversation.scene.displayName)"
         lines.append(header)
@@ -55,12 +67,20 @@ enum InterpreterExporter {
                     lines.append("回译: \(turn.backTranslation)")
                 }
             }
+            if options.includeDocumentSources,
+               let sources = documentSourceLabels(for: turn), !sources.isEmpty {
+                lines.append("来源: \(sources.joined(separator: "；"))")
+            }
         }
         return lines.joined(separator: "\n")
     }
 
-    /// Markdown（含用户主动选择的详细解释）。
-    static func markdown(_ conversation: ConversationExport) -> String {
+    /// Markdown（含用户主动选择的详细解释）。`options` 决定是否包含
+    /// 文件来源标签 —— 默认不打包原始证件照片或 PDF，也不导出模型名、
+    /// API 地址、内部 UUID 与绝对路径。
+    static func markdown(
+        _ conversation: ConversationExport, options: Options = .default
+    ) -> String {
         var lines: [String] = []
         lines.append("# \(conversation.title)")
         lines.append("")
@@ -97,11 +117,16 @@ enum InterpreterExporter {
                     lines.append("")
                 }
             }
-            if let details = turn.details, details.detailsAvailable {
+            if let details = turn.details, options.includeDetails, details.detailsAvailable {
                 if let intent = details.intentSummary, !intent.isEmpty {
                     lines.append("- 意图：\(intent)")
                 }
-                if let keywords = details.keywords, !keywords.isEmpty {
+                if options.includeDocumentSources,
+                   let sources = documentSourceLabels(for: turn), !sources.isEmpty {
+                    lines.append("- 来源：\(sources.joined(separator: "；"))（来源文件仅保存在原设备）")
+                }
+                if let keywords = details.keywords, !keywords.isEmpty,
+                   options.includeDocumentSources || !hasDocumentSources(for: turn) {
                     lines.append("- 关键词：\(keywords.joined(separator: "、"))")
                 }
                 if let polite = details.politeAlternative, !polite.isEmpty {
@@ -117,6 +142,15 @@ enum InterpreterExporter {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// 文件上下文回合的来源标签（文件名 · 第n页 形态的关键词行）。
+    private static func documentSourceLabels(for turn: TurnExport) -> [String]? {
+        turn.details?.keywords?.filter { $0.contains(" · 第") }
+    }
+
+    private static func hasDocumentSources(for turn: TurnExport) -> Bool {
+        !(documentSourceLabels(for: turn) ?? []).isEmpty
     }
 
     // MARK: - File

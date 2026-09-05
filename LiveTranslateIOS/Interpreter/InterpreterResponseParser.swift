@@ -135,28 +135,10 @@ enum InterpreterResponseParser {
     // MARK: - 辅助
 
     /// 剥 Markdown 代码栅栏 + 取最外层大括号（容忍前后散文）。
-    /// 仓库惯例的收敛建模（StudyReviewParser.jsonPayload 语义）。
+    /// 本轮（第十六轮）收敛：委托 AttachmentAnalysisParser.jsonPayload
+    /// —— 全仓共享的同一语义（此前是等价的私有实现）。
     static func jsonPayload(from text: String) -> String? {
-        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // 剥围栏：```json ... ``` / ``` ... ```
-        if s.hasPrefix("```") {
-            // 丢弃第一行（``` 或 ```json）。
-            if let firstNewline = s.firstIndex(of: "\n") {
-                s = String(s[s.index(after: firstNewline)...])
-            } else {
-                return nil
-            }
-            // 剥尾栅栏。
-            if let fenceRange = s.range(of: "```", options: .backwards) {
-                s = String(s[..<fenceRange.lowerBound])
-            }
-            s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        // 取最外层大括号（容忍前后散文）。
-        guard let start = s.firstIndex(of: "{"),
-              let end = s.lastIndex(of: "}"),
-              start < end else { return nil }
-        return String(s[start...end])
+        AttachmentAnalysisParser.jsonPayload(from: text)
     }
 
     private static func nonEmpty(_ s: String?) -> String? {

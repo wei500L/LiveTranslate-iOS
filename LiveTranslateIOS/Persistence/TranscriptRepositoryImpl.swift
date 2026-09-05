@@ -93,6 +93,13 @@ enum MaterialFileStoreShared {
     nonisolated(unsafe) static var store: MaterialFileStore?
 }
 
+/// Same holder pattern for the profile's InterpreterDocumentStore (随身
+/// 翻译's local file context) — set by the composition root at profile
+/// build so repository deletes/reconcile can reap files.
+enum InterpreterDocumentStoreShared {
+    nonisolated(unsafe) static var store: InterpreterDocumentStore?
+}
+
 @MainActor
 final class TranscriptRepository: ClassroomRepositoryProtocol {
     private let container: ModelContainer

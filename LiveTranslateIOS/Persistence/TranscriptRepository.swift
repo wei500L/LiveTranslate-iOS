@@ -686,6 +686,55 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func applyRemoteInterpreterTurn(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteInterpreterConversationByID(_ id: UUID) throws
     func deleteInterpreterTurnByID(_ id: UUID) throws
+
+    // MARK: Interpreter document context (现场文件 · device-local)
+
+    /// All documents of one conversation, creation order. NEVER notifies
+    /// sync — interpreter documents are device-local.
+    func interpreterDocuments(conversationID: UUID) throws -> [InterpreterDocument]
+    /// One document by id.
+    func interpreterDocument(id: UUID) -> InterpreterDocument?
+    /// Documents with the same content hash in ONE conversation (the
+    /// duplicate-import prompt; never crosses accounts).
+    func interpreterDocuments(conversationID: UUID, contentHash: String) throws -> [InterpreterDocument]
+    /// All document rows (storage management / launch reconcile).
+    func allInterpreterDocuments() throws -> [InterpreterDocument]
+    /// Inserts a fully-imported document row (file already landed via
+    /// the store). Local-only — never notifies sync.
+    func addInterpreterDocument(_ draft: InterpreterDocumentDraft) throws -> InterpreterDocument
+    /// Status transition of the local state machine. Local-only.
+    func setInterpreterDocumentStatus(
+        _ document: InterpreterDocument, status: InterpreterDocumentStatus, errorSummary: String
+    ) throws
+    /// Records a landed extraction sidecar. Local-only.
+    func setInterpreterDocumentExtraction(
+        _ document: InterpreterDocument,
+        extractionRelativePath: String,
+        pageCount: Int,
+        status: InterpreterDocumentStatus
+    ) throws
+    /// Privacy gate / keep-originals preference. Local-only.
+    func updateInterpreterDocumentPreferences(
+        _ document: InterpreterDocument, allowsModelUse: Bool?, keepOriginalFile: Bool?
+    ) throws
+    /// Interrupt recovery: importing → retryable failed, extracting →
+    /// imported; a row whose file vanished flips to failed. Local-only.
+    func reconcileInterpreterDocuments(store: InterpreterDocumentStore)
+    /// Deletes one document row + its files. Local-only (no wire traffic).
+    func deleteInterpreterDocument(
+        _ document: InterpreterDocument, store: InterpreterDocumentStore?
+    ) throws
+    /// Deletes every document of one conversation (+ files). Local-only.
+    func deleteInterpreterDocuments(
+        conversationID: UUID, store: InterpreterDocumentStore?
+    ) throws
+    /// Drops ORIGINAL files keeping extraction sidecars (the
+    /// end-of-conversation choice). Local-only.
+    func dropInterpreterDocumentOriginals(
+        conversationID: UUID, store: InterpreterDocumentStore?
+    ) throws
+    /// Row counts for the storage-management UI.
+    func interpreterDocumentCounts() throws -> (documents: Int, withOriginals: Int)
 }
 
 /// A new exam (title + date required). AI candidates pass

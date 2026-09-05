@@ -19,6 +19,10 @@ struct InterpreterScreen: View {
     @State private var showScenePicker = false
     @State private var showHistory = false
     @State private var showEndConfirmation = false
+    /// 文件上下文面板。
+    @State private var showDocumentPanel = false
+    /// 结束保存时的文件处理选择。
+    @State private var endFileDisposition: InterpreterViewModel.EndFileDisposition = .discardDocuments
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -82,15 +86,43 @@ struct InterpreterScreen: View {
             isPresented: $showEndConfirmation,
             titleVisibility: .visible
         ) {
-            Button("保存记录") {
-                Task { await endConversation(save: true) }
+            if viewModel?.documentContext?.hasContext == true {
+                Button("保存记录，文件上下文只留本机") {
+                    endFileDisposition = .keepOriginals
+                    Task { await endConversation(save: true) }
+                }
+                Button("保存记录，保留提取文字、删除原始文件") {
+                    endFileDisposition = .keepTextOnly
+                    Task { await endConversation(save: true) }
+                }
+                Button("保存记录，删除文件上下文") {
+                    endFileDisposition = .discardDocuments
+                    Task { await endConversation(save: true) }
+                }
+            } else {
+                Button("保存记录") {
+                    Task { await endConversation(save: true) }
+                }
             }
             Button("丢弃", role: .destructive) {
                 Task { await endConversation(save: false) }
             }
             Button("继续翻译", role: .cancel) {}
         } message: {
-            Text("保存后进入正式记录并同步到云端；丢弃将删除本次草稿与全部回合。")
+            if viewModel?.documentContext?.hasContext == true {
+                Text("保存后进入正式记录并同步到云端；丢弃将删除本次草稿、全部回合与文件上下文。原始文件与完整识别文本不会上传——\"只留本机\"指的是保存在这台设备上，不是云端同步。")
+            } else {
+                Text("保存后进入正式记录并同步到云端；丢弃将删除本次草稿与全部回合。")
+            }
+        }
+        .sheet(isPresented: $showDocumentPanel) {
+            if let viewModel {
+                InterpreterDocumentPanel(
+                    viewModel: viewModel,
+                    isPresented: $showDocumentPanel
+                )
+                .environment(environment)
+            }
         }
         .onDisappear {
             // 切后台/离开页面不打断草稿；只停收音与朗读。
@@ -104,11 +136,70 @@ struct InterpreterScreen: View {
     private func mainContent(_ viewModel: InterpreterViewModel) -> some View {
         VStack(spacing: 0) {
             headerBar(viewModel)
+            documentContextBar(viewModel)
             turnList(viewModel)
             replyComposer(viewModel)
         }
         .safeAreaInset(edge: .bottom) {
             listeningControls(viewModel)
+        }
+    }
+
+    /// 文件上下文紧凑状态条：已加载文档数与状态（点击进入面板）。
+    @ViewBuilder
+    private func documentContextBar(_ viewModel: InterpreterViewModel) -> some View {
+        if let documentModel = viewModel.documentContext {
+            let ready = documentModel.readyDocumentCount
+            let total = documentModel.documents.count
+            let extracting = documentModel.documents.contains {
+                documentModel.extractionProgress(for: $0.id) != nil
+            }
+            Button {
+                showDocumentPanel = true
+            } label: {
+                HStack(spacing: LTSpacing.s) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(total > 0 ? LTColors.accentCyan : LTColors.textTertiary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        if total > 0 {
+                            Text("文件上下文：\(ready > 0 ? "\(ready) 份就绪" : "提取中")\(ready < total ? " · 共 \(total) 份" : "")")
+                                .font(LTTypography.caption)
+                                .foregroundStyle(LTColors.textSecondary)
+                        } else {
+                            Text("添加现场文件（表格、通知、回执）")
+                                .font(LTTypography.caption)
+                                .foregroundStyle(LTColors.textTertiary)
+                        }
+                    }
+                    Spacer()
+                    if extracting {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(LTColors.textTertiary)
+                }
+                .padding(.horizontal, LTSpacing.m)
+                .padding(.vertical, LTSpacing.xs + 2)
+                .background(
+                    RoundedRectangle(cornerRadius: LTRadius.medium)
+                        .fill(LTColors.surfaceElevated.opacity(0.5))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: LTRadius.medium)
+                        .strokeBorder(LTColors.border, lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, LTSpacing.screenPadding)
+            .padding(.top, LTSpacing.xs)
+            .accessibilityLabel(
+                total > 0
+                    ? "文件上下文，\(total) 份文件，\(ready) 份就绪，点击管理"
+                    : "添加现场文件，点击打开"
+            )
         }
     }
 
@@ -452,7 +543,7 @@ struct InterpreterScreen: View {
     }
 
     private func endConversation(save: Bool) async {
-        await viewModel?.endConversation(save: save)
+        await viewModel?.endConversation(save: save, fileDisposition: endFileDisposition)
         dismiss()
     }
 }

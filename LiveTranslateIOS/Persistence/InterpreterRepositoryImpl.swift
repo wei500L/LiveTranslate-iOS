@@ -81,6 +81,11 @@ extension TranscriptRepository {
         for turn in turns {
             context.delete(turn)
         }
+        // The draft's local document context goes with the draft (the
+        // user explicitly abandons the working session).
+        try? deleteInterpreterDocuments(
+            conversationID: draft.id, store: InterpreterDocumentStoreShared.store
+        )
         context.delete(draft)
         try context.save()
         // Draft deletes produce no wire traffic (nothing was uploaded).
@@ -254,6 +259,13 @@ extension TranscriptRepository {
         }
         context.delete(conversation)
         try context.save()
+        // The conversation's LOCAL document context is reaped after the
+        // row is gone (never resurrected by a late task — rows delete
+        // first, so a late file write becomes an orphan the store-level
+        // cleanup reaps).
+        try? deleteInterpreterDocuments(
+            conversationID: id, store: InterpreterDocumentStoreShared.store
+        )
         if conversation.status == .saved {
             mutationObserver?.interpreterConversationDeleted(id: id)
         }

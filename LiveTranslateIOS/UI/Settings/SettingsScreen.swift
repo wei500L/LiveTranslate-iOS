@@ -19,6 +19,10 @@ struct SettingsScreen: View {
     @State private var recordingCount = 0
     @State private var incompleteRecordingCount = 0
     @State private var recordingBytes: Int64 = 0
+    /// 随身翻译现场文件存储统计（文档数、原始文件与提取缓存占用）。
+    @State private var interpreterDocumentCount = 0
+    @State private var interpreterDocumentBytes: Int64 = 0
+    @State private var interpreterDocumentCacheBytes: Int64 = 0
 
     var body: some View {
         Group {
@@ -32,6 +36,7 @@ struct SettingsScreen: View {
             storageBytes = environment.repository.storageBytes()
             refreshAttachmentStorage()
             refreshRecordingStorage()
+            refreshInterpreterDocumentStorage()
             apiKeyInput = (try? environment.keychain.get(forKey: AppEnvironment.apiKeychainKey)) ?? ""
         }
         // Keep the live translator in sync with edited settings.
@@ -573,6 +578,7 @@ struct SettingsScreen: View {
                 label: String(localized: "Classroom images"),
                 value: Format.bytes(Int(attachmentBytes))
             )
+            interpreterDocumentStorageRows
             inboxStorageRows
             if attachmentBytes > 0 {
                 Button {
@@ -651,6 +657,67 @@ struct SettingsScreen: View {
                 value: String(localized: "暂无内容")
             )
         }
+    }
+
+    /// 随身翻译现场文件存储统计（真实数字：文档数、原始文件与缓存
+    /// 占用、可清理项）。
+    @ViewBuilder
+    private var interpreterDocumentStorageRows: some View {
+        if interpreterDocumentCount > 0 {
+            LabeledRow(
+                label: String(localized: "随身翻译文件"),
+                value: "\(interpreterDocumentCount) 份 · \(Format.bytes(Int(interpreterDocumentBytes)))"
+            )
+            if interpreterDocumentCacheBytes > 0 {
+                LabeledRow(
+                    label: String(localized: "识别与缩略图缓存"),
+                    value: Format.bytes(Int(interpreterDocumentCacheBytes))
+                )
+            }
+            Button(role: .destructive) {
+                clearInterpreterDocumentOrphans()
+            } label: {
+                Text(String(localized: "清理无效文件上下文"))
+            }
+        } else {
+            LabeledRow(
+                label: String(localized: "随身翻译文件"),
+                value: String(localized: "暂无")
+            )
+        }
+    }
+
+    /// Real interpreter-document statistics. Originals + sidecars +
+    /// thumbnails are counted separately (originals vs derived caches).
+    private func refreshInterpreterDocumentStorage() {
+        let store = environment.interpreterDocumentStore
+        interpreterDocumentBytes = store.totalBytes()
+        // Cache share: everything except the originals + sidecars.
+        let documents = (try? environment.repository.allInterpreterDocuments()) ?? []
+        interpreterDocumentCount = documents.count
+        var originalBytes: Int64 = 0
+        for document in documents where document.keepOriginalFile {
+            let ext = TranscriptRepository.fileExtension(
+                fileName: document.originalFileName, mime: document.mimeType
+            )
+            if let url = store.originalURL(forRelativePath: document.originalRelativePath),
+               let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                originalBytes += Int64(size)
+            }
+            _ = ext
+        }
+        interpreterDocumentCacheBytes = max(0, interpreterDocumentBytes - originalBytes)
+    }
+
+    /// 清理孤儿与已删除会话残留：先对账行集（liveIDs），再收割没有
+    /// 行的目录。绝不删除仍被活动会话引用的文件。
+    private func clearInterpreterDocumentOrphans() {
+        let store = environment.interpreterDocumentStore
+        let liveIDs = Set(
+            ((try? environment.repository.allInterpreterDocuments()) ?? []).map(\.id)
+        )
+        store.removeOrphans(liveIDs: liveIDs)
+        refreshInterpreterDocumentStorage()
     }
 
     @State private var attachmentBytes: Int64 = 0

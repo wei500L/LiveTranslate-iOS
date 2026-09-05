@@ -17,6 +17,9 @@ struct DemoLaunchOptions {
         case records
         case detail
         case interpreter
+        /// 随身翻译现场文件 demo：一份虚构的宿舍登记表 + canned OCR/AI
+        /// 驱动真实 ViewModel 状态机（绝不打开相机/相册/App Group）。
+        case interpreterDocument = "interpreter-document"
     }
 
     let screen: Screen
@@ -108,6 +111,13 @@ extension AppEnvironment {
             root: demoStoreRoot.appendingPathComponent("Materials", isDirectory: true)
         )
         MaterialFileStoreShared.store = demoMaterialStore
+        // Demo interpreter-document storage: same fresh temp directory
+        // rule (虚构的宿舍登记表 lives ONLY in the demo temp dir — the
+        // real per-account store is never touched).
+        let demoDocumentStore = InterpreterDocumentStore(
+            root: demoStoreRoot.appendingPathComponent("InterpreterDocuments", isDirectory: true)
+        )
+        InterpreterDocumentStoreShared.store = demoDocumentStore
         let demoExtractionRunner = MaterialExtractionRunner(
             repository: repository,
             fileStore: { MaterialFileStoreShared.store }
@@ -217,6 +227,12 @@ extension AppEnvironment {
             // HomeScreen's onAppear consumes the interpreter pending
             // route (the demo never opens the microphone — the canned
             // conversation is seeded in the demo SwiftData store).
+            flow.selectedTab = .home
+            flow.requestInterpreterScreen()
+        case .interpreterDocument:
+            // Same route as interpreter (the seeded demo conversation
+            // carries a document context row; the panel is one tap away —
+            // the demo never opens camera/photos/real App Group).
             flow.selectedTab = .home
             flow.requestInterpreterScreen()
         }
@@ -356,6 +372,25 @@ struct DemoStudyReviewService: StudyReviewModelService {
             }
             return """
             {"russian": "У меня есть только оригинал. Мо́жно сде́лать ко́пию здесь?", "stressedRussian": "У меня есть то́лько оригина́л. Мо́жно сде́лать ко́пию здесь?", "backTranslation": "我只有原件。可以在这里复印吗？", "keywords": ["оригинал 原件", "копия 复印件"], "politeAlternative": "Не могли бы вы подсказать, где можно сделать копию документа?", "simpleAlternative": "Где можно сделать копию?", "uncertainties": []}
+            """
+        }
+        if systemPrompt.hasPrefix("你是一位现场文件理解助手") {
+            // 随身翻译现场文件 demo：虚构宿舍登记表的 canned 文件分析
+            // （明确标记的虚构数据 —— 不使用真实护照、地址或文件）。
+            if userPrompt.contains("请分析这份文件并返回 JSON") {
+                return """
+                {"documentType": "宿舍入住登记表（演示虚构数据）", "summaryChinese": "这是一份演示用的宿舍入住登记表：需要填写个人信息、入住日期，并附护照复印件。所有内容均为虚构。", "keyFacts": ["Заселение 入住", "Паспорт 护照", "Дата вселения 入住日期"], "requiredActions": ["填写登记表各字段", "提交护照复印件"], "requiredDocuments": ["护照复印件"], "deadlines": ["Дата вселения: 01.09.2026（演示虚构日期）"], "fees": [], "addresses": ["演示地址：ул. Примерная, 1（虚构）"], "contacts": [], "formFields": [{"russianLabel": "Фамилия", "chineseMeaning": "姓", "expectedType": "姓名", "existingValue": "", "preparationHint": "按护照拼音填写", "exampleFormat": "IVANOV（示例格式）", "pageNumber": 1, "riskNote": ""}, {"russianLabel": "Дата вселения", "chineseMeaning": "入住日期", "expectedType": "日期", "existingValue": "01.09.2026", "preparationHint": "格式为 DD.MM.YYYY", "exampleFormat": "01.09.2026（示例格式）", "pageNumber": 1, "riskNote": ""}], "questionsToAsk": ["Подскажите, пожалуйста, куда прикрепить копию паспорта?"], "warnings": [], "uncertainties": ["演示数据：OCR 置信度均为虚构"], "citations": [{"source": "S1", "page": 1, "snippet": "Фамилия Имя Отчество"}]}
+                """
+            }
+            // 字段值核对。
+            return """
+            {"answerChinese": "格式正确（演示响应）：日期按 DD.MM.YYYY 填写即可。", "suggestedRussian": "", "stressedRussian": "", "backTranslation": "", "citations": [], "uncertainties": []}
+            """
+        }
+        if systemPrompt.hasPrefix("你是一位现场口译与办事助手") {
+            // 按文件提问（结合最近对话）的 canned 回答。
+            return """
+            {"answerChinese": "（演示响应）这份登记表需要你在前台填写个人信息并提交护照复印件。", "suggestedRussian": "Скажите, пожалуйста, я правильно заполнил эту форму?", "stressedRussian": "Скажи́те, пожа́луйста, я пра́вильно заполнил э́ту фо́рму?", "backTranslation": "请问我这张表填对了吗？", "politeAlternative": "Не могли бы вы проверить, правильно ли заполнена форма?", "simpleAlternative": "Проверьте форму, пожалуйста.", "citations": [{"source": "S1", "page": 1, "snippet": "Фамилия Имя Отчество"}], "uncertainties": ["演示数据"]}
             """
         }
         if systemPrompt == StudyReviewPrompt.extractionSystemPrompt() {
@@ -1210,6 +1245,46 @@ enum DemoSeed {
             endedAt: day(0, hour: 10, minute: 12)
         )
         context.insert(demoConversation)
+        // 现场文件 demo：一份虚构的宿舍登记表（明确标记的虚构数据）。
+        // 原始文件与提取 sidecar 只写入 demo 临时目录，绝不触碰真实
+        // App Group 或账号存储。
+        let demoDocument = InterpreterDocument(
+            conversationID: demoConversation.id,
+            sourceRaw: InterpreterDocumentSource.scan.rawValue,
+            originalFileName: "宿舍登记表（演示）.pdf",
+            formatRaw: InterpreterDocumentFormat.pdf.rawValue,
+            mimeType: "application/pdf",
+            fileSize: 0,
+            contentHash: "",
+            pageCount: 1,
+            statusRaw: InterpreterDocumentStatus.ready.rawValue,
+            originalRelativePath: "",
+            extractionRelativePath: "",
+            keepOriginalFile: false // 演示：无原始文件（提取文本足够驱动 demo）
+        )
+        context.insert(demoDocument)
+        if let demoStore = InterpreterDocumentStoreShared.store {
+            let fakeText = """
+            АНКЕТА ВСЕЛЯЮЩЕГОСЯ (демо, все данные вымышлены)
+            Фамилия Имя Отчество: ______
+            Дата вселения: 01.09.2026
+            Паспорт: копия обязательна
+            Комната: № 412
+            """
+            let extraction = InterpreterDocumentExtraction(
+                pages: [InterpreterDocumentPageText(
+                    pageNumber: 1,
+                    extractedText: fakeText,
+                    ocrText: fakeText,
+                    ocrConfidence: 0.93,
+                    ocrStatusRaw: InterpreterPageOCRStatus.done.rawValue
+                )],
+                extractionVersion: "1"
+            )
+            try? demoStore.writeExtraction(extraction, documentID: demoDocument.id)
+            demoDocument.extractionRelativePath = "\(demoDocument.id.uuidString)/extraction.json"
+            demoDocument.updatedAt = .now
+        }
         context.insert(InterpreterTurn(
             conversationID: demoConversation.id,
             speakerRaw: InterpreterSpeaker.counterpart.rawValue,

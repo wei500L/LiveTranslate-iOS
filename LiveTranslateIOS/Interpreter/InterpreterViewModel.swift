@@ -79,6 +79,13 @@ final class InterpreterViewModel {
     /// 最近一次模型错误（真实错误类别）。
     var lastTranslationError: String?
 
+    // MARK: - Document context (现场文件)
+
+    /// 文件上下文模型（导入/提取/选择/预览/ AI 动作的编排层）。
+    private(set) var documentContext: InterpreterDocumentContextModel?
+    /// 文档触发的 AI 动作进行中的 turn id（防重复 + 迟到回调 scope 校验）。
+    private var documentTaskTurnIDs: Set<UUID> = []
+
     // MARK: - Presentation state (UI-only, never synced)
 
     /// 展开的回合卡片（展开状态属于 UI 状态，不上传）。
@@ -120,6 +127,17 @@ final class InterpreterViewModel {
             Self.logger.info("resumed interpreter draft (\(resumed.count) turns)")
             turns = resumed
         }
+        // 文件上下文模型随会话建立（同一环境与模型服务注入）。
+        if documentContext == nil {
+            documentContext = InterpreterDocumentContextModel(
+                environment: environment,
+                aiServiceProvider: translationServiceProvider,
+                imageServiceProvider: { [weak self] in
+                    self?.environment.attachmentServiceBoxForInterpreter?.get()
+                }
+            )
+        }
+        documentContext?.reload(conversationID: conversation?.id)
     }
 
     /// 是否存在可恢复的草稿（进入页面时的"继续上次翻译"提示）。
@@ -474,6 +492,264 @@ final class InterpreterViewModel {
         }
     }
 
+    // MARK: - 文件上下文问答（文档触发的 AI 动作）
+
+    /// 用户确认预览后提交基于文件的问题：中文问题先落本地（持久化），
+    /// 再带（已遮盖的）文件 chunk 与最近对话请求模型；结果写回同一
+    /// turn。会话切换/删除后迟到的回调被 scope 校验拒绝 —— 绝不写入
+    /// 当前正在查看的另一会话。
+    func submitDocumentQuestion(question: String) async {
+        guard let documentContext,
+              !documentContext.currentPreviewSources.isEmpty else { return }
+        let sources = documentContext.currentPreviewSources
+        let chinese = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !chinese.isEmpty, !isTranslatingReply else { return }
+        guard let modelService = resolveModelService() else {
+            lastTranslationError = "翻译模型未配置，请在设置中填写 API 地址与模型"
+            return
+        }
+        ensureConversation()
+        guard let conversation else { return }
+        let conversationID = conversation.id
+
+        isTranslatingReply = true
+        documentContext.setAsking(true)
+        lastTranslationError = nil
+        documentContext.clearAIError()
+        defer {
+            isTranslatingReply = false
+            documentContext.setAsking(false)
+        }
+
+        // 中文问题先落本地（pending）。
+        let turn: InterpreterTurn
+        do {
+            turn = try repository.addInterpreterUserTurn(
+                conversationID: conversationID, chinese: chinese, inputMethod: .text
+            )
+            turns.append(turn)
+        } catch {
+            Self.logger.error("append user turn failed: \(error)")
+            return
+        }
+
+        // 提交即清除预览（确认的载荷只在这一次请求中使用）。
+        documentContext.cancelPreview()
+
+        let service = InterpreterDocumentAIService(model: modelService)
+        let scene = self.scene
+        let contextNote = self.contextNote
+        let projections = contextProjections()
+        do {
+            let answer = try await service.answerQuestion(
+                question: chinese,
+                sources: sources,
+                scene: scene,
+                contextNote: contextNote,
+                recentTurns: projections
+            )
+            // Scope 校验：会话已切换/删除 → 丢弃迟到结果。
+            guard conversation?.id == conversationID,
+                  repository.interpreterConversation(id: conversationID) != nil else { return }
+            try? repository.completeInterpreterTurnTranslation(
+                turn,
+                chinese: nil,
+                russian: answer.suggestedRussian,
+                stressedRussian: answer.stressedRussian,
+                backTranslation: answer.backTranslation,
+                details: Self.documentAnswerDetails(answer)
+            )
+            reloadTurns()
+        } catch is CancellationError {
+            // 取消的请求不标成失败。
+        } catch {
+            // Scope 校验同样适用于失败写回。
+            if repository.interpreterConversation(id: conversationID) != nil,
+               conversation?.id == conversationID {
+                lastTranslationError = Self.describeTranslationError(error)
+                try? repository.failInterpreterTurnTranslation(turn)
+                reloadTurns()
+            }
+        }
+    }
+
+    /// 文件分析的落地：分析结果作为用户可见的结构化详情进入一个
+    /// 专用"文档分析"回合（不产生俄语 —— 用户读的是解释）。文字与
+    /// 用户提交的中文摘要沿既有 turn 同步；原始文件与 OCR 全文绝不
+    /// 进入 details（只存 citation 元数据与短引文）。
+    func submitDocumentAnalysis() async {
+        guard let documentContext,
+              !documentContext.currentPreviewSources.isEmpty,
+              let modelService = resolveModelService() else { return }
+        ensureConversation()
+        guard let conversation else { return }
+        let conversationID = conversation.id
+
+        isTranslatingReply = true
+        documentContext.setAsking(true)
+        lastTranslationError = nil
+        documentContext.clearAIError()
+        defer {
+            isTranslatingReply = false
+            documentContext.setAsking(false)
+        }
+
+        let sources = documentContext.currentPreviewSources
+        let documentNames = Array(Set(sources.map { $0.chunk.documentName })).sorted()
+        let chinese = "请解释文件：\(documentNames.joined(separator: "、"))"
+
+        let turn: InterpreterTurn
+        do {
+            turn = try repository.addInterpreterUserTurn(
+                conversationID: conversationID, chinese: chinese, inputMethod: .text
+            )
+            turns.append(turn)
+        } catch {
+            Self.logger.error("append user turn failed: \(error)")
+            return
+        }
+        documentContext.cancelPreview()
+
+        let service = InterpreterDocumentAIService(model: modelService)
+        let scene = self.scene
+        do {
+            let analysis = try await service.analyzeDocument(
+                sources: sources, scene: scene
+            )
+            guard conversation?.id == conversationID,
+                  repository.interpreterConversation(id: conversationID) != nil else { return }
+            try? repository.completeInterpreterTurnTranslation(
+                turn,
+                chinese: analysis.summaryChinese,
+                russian: nil,
+                stressedRussian: nil,
+                backTranslation: nil,
+                details: Self.documentAnalysisDetails(analysis)
+            )
+            reloadTurns()
+        } catch is CancellationError {
+        } catch {
+            if repository.interpreterConversation(id: conversationID) != nil,
+               conversation?.id == conversationID {
+                lastTranslationError = Self.describeTranslationError(error)
+                try? repository.failInterpreterTurnTranslation(turn)
+                reloadTurns()
+            }
+        }
+    }
+
+    /// 字段值核对结果进入对话（用户手动输入自己的值之后）。
+    func submitFieldCheck(field: InterpreterFormField, value: String) async {
+        let chinese = "字段「\(field.chineseMeaning)」填 \(value) 对吗？"
+        guard let modelService = resolveModelService() else {
+            lastTranslationError = "翻译模型未配置，请在设置中填写 API 地址与模型"
+            return
+        }
+        ensureConversation()
+        guard let conversation else { return }
+        let conversationID = conversation.id
+        isTranslatingReply = true
+        defer { isTranslatingReply = false }
+
+        let turn: InterpreterTurn
+        do {
+            turn = try repository.addInterpreterUserTurn(
+                conversationID: conversationID, chinese: chinese, inputMethod: .text
+            )
+            turns.append(turn)
+        } catch { return }
+
+        let service = InterpreterDocumentAIService(model: modelService)
+        do {
+            let answer = try await service.checkFieldValue(field: field, userValue: value)
+            guard conversation?.id == conversationID,
+                  repository.interpreterConversation(id: conversationID) != nil else { return }
+            try? repository.completeInterpreterTurnTranslation(
+                turn,
+                chinese: nil,
+                russian: answer.suggestedRussian,
+                stressedRussian: answer.stressedRussian,
+                backTranslation: answer.backTranslation,
+                details: Self.documentAnswerDetails(answer)
+            )
+            reloadTurns()
+        } catch is CancellationError {
+        } catch {
+            if repository.interpreterConversation(id: conversationID) != nil,
+               conversation?.id == conversationID {
+                lastTranslationError = Self.describeTranslationError(error)
+                try? repository.failInterpreterTurnTranslation(turn)
+                reloadTurns()
+            }
+        }
+    }
+
+    /// 多模态页面分析（用户明确确认后执行；图像只含选定页面的受限
+    /// 尺寸副本，绝不发送整份 PDF）。分析结果作为文档分析回合落地。
+    func submitMultimodalAnalysis(question: String) async {
+        guard let documentContext,
+              let imageService = documentContext.resolveImageService() else {
+            lastTranslationError = "图片理解模型未配置，请在设置中填写"
+            return
+        }
+        ensureConversation()
+        guard let conversation, let modelService = resolveModelService() else { return }
+        let conversationID = conversation.id
+        isTranslatingReply = true
+        documentContext.setAsking(true)
+        documentContext.clearAIError()
+        defer {
+            isTranslatingReply = false
+            documentContext.setAsking(false)
+        }
+        let documents = documentContext.documents.filter {
+            documentContext.selectedPages[$0.id]?.isEmpty == false
+        }
+        let images = await documentContext.prepareMultimodalImages(documents: documents)
+        guard !images.isEmpty else {
+            lastTranslationError = "无法渲染选定的页面（先完成文字提取或检查文件）"
+            return
+        }
+        documentContext.cancelPreview()
+
+        let turn: InterpreterTurn
+        do {
+            turn = try repository.addInterpreterUserTurn(
+                conversationID: conversationID,
+                chinese: question.isEmpty ? "请分析这些页面的内容" : question,
+                inputMethod: .text
+            )
+            turns.append(turn)
+        } catch { return }
+
+        let scene = self.scene
+        let service = InterpreterDocumentAIService(model: modelService)
+        do {
+            let analysis = try await service.analyzePages(
+                images: images, question: question, scene: scene, imageService: imageService
+            )
+            guard conversation?.id == conversationID,
+                  repository.interpreterConversation(id: conversationID) != nil else { return }
+            try? repository.completeInterpreterTurnTranslation(
+                turn,
+                chinese: analysis.summaryChinese,
+                russian: nil,
+                stressedRussian: nil,
+                backTranslation: nil,
+                details: Self.documentAnalysisDetails(analysis)
+            )
+            reloadTurns()
+        } catch is CancellationError {
+        } catch {
+            if repository.interpreterConversation(id: conversationID) != nil,
+               conversation?.id == conversationID {
+                lastTranslationError = Self.describeTranslationError(error)
+                try? repository.failInterpreterTurnTranslation(turn)
+                reloadTurns()
+            }
+        }
+    }
+
     // MARK: - 回合操作
 
     /// 删除一个回合（草稿或已保存均可）。
@@ -517,13 +793,41 @@ final class InterpreterViewModel {
     // MARK: - 结束会话
 
     /// 结束：保存或丢弃。返回 true 表示可以离开页面。
-    func endConversation(save: Bool) async {
+    /// 保存且存在文件上下文时的文件处理由 fileDisposition 决定（UI
+    /// 在确认对话框中收集用户选择）。
+    enum EndFileDisposition: Equatable, Sendable {
+        /// 仅保留对话，删除文件上下文（默认）。
+        case discardDocuments
+        /// 保留提取文字与分析，删除原始文件。
+        case keepTextOnly
+        /// 在本机保留原始文件（不等于"已同步"）。
+        case keepOriginals
+    }
+
+    func endConversation(
+        save: Bool, fileDisposition: EndFileDisposition = .discardDocuments
+    ) async {
         await stopListening()
         speech.stop()
         guard let conversation, conversation.status == .draft else { return }
         do {
             if save {
                 try repository.saveInterpreterDraft(title: nil)
+                // 保存后的文件上下文处理（用户明确选择）：
+                switch fileDisposition {
+                case .discardDocuments:
+                    try repository.deleteInterpreterDocuments(
+                        conversationID: conversation.id,
+                        store: InterpreterDocumentStoreShared.store
+                    )
+                case .keepTextOnly:
+                    try repository.dropInterpreterDocumentOriginals(
+                        conversationID: conversation.id,
+                        store: InterpreterDocumentStoreShared.store
+                    )
+                case .keepOriginals:
+                    break // 原始文件留在本机（绝不上传）
+                }
             } else {
                 try repository.discardInterpreterDraft()
             }
@@ -533,6 +837,7 @@ final class InterpreterViewModel {
         self.conversation = nil
         turns = []
         lastRecognizedRussian = ""
+        documentContext?.reload(conversationID: nil)
     }
 
     /// 离开页面（不打断草稿 —— 切后台/误退出不丢对话）。
@@ -581,5 +886,41 @@ final class InterpreterViewModel {
             return translationError.localizedDescription
         }
         return error.localizedDescription
+    }
+
+    // MARK: - 文件上下文 details 构造（同步边界的关键）
+
+    /// 问答详情：只存 citation 元数据（来源名/页码/短引文）与结构化
+    /// 字段 —— 绝不存原始文件、OCR 全文或本机路径。其他设备看到
+    /// citation 时显示"来源文件仅保存在原设备"（InterpreterTurnCard
+    /// 依据 detailsAvailable + citations 渲染）。
+    private static func documentAnswerDetails(
+        _ answer: InterpreterDocumentAnswer
+    ) -> InterpreterTurnDetails {
+        var details = InterpreterTurnDetails(detailsAvailable: answer.detailsAvailable)
+        details.keywords = answer.citations?.map(\.displayLabel)
+        details.uncertainties = answer.uncertainties
+        details.politeAlternative = answer.politeAlternative
+        details.simpleAlternative = answer.simpleAlternative
+        return details
+    }
+
+    /// 文件分析详情：分析结构（事项/材料/期限/费用/字段助手） +
+    /// citation 元数据。短引文（≤300 字符）随 turn 同步 —— 用户明确
+    /// 提交的内容；完整 OCR 文本永远留在本机。
+    private static func documentAnalysisDetails(
+        _ analysis: InterpreterDocumentAnalysis
+    ) -> InterpreterTurnDetails {
+        var details = InterpreterTurnDetails(detailsAvailable: analysis.detailsAvailable)
+        details.intentSummary = analysis.documentType
+        var keywords: [String] = analysis.keyFacts ?? []
+        if let citations = analysis.citations {
+            keywords.append(contentsOf: citations.map(\.displayLabel))
+        }
+        if !keywords.isEmpty { details.keywords = keywords }
+        details.uncertainties = analysis.uncertainties
+        details.suggestedReplies = analysis.questionsToAsk
+        details.ambiguity = analysis.warnings?.joined(separator: "；")
+        return details
     }
 }

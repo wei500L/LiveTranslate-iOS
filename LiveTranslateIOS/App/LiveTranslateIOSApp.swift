@@ -121,6 +121,9 @@ final class AppEnvironment {
     let attachmentStore: AttachmentFileStore
     /// The profile's course-material file store (paths, page caches).
     let materialStore: MaterialFileStore
+    /// The profile's interpreter (随身翻译) document file store — the
+    /// on-site file context. Device-local files, never synced.
+    let interpreterDocumentStore: InterpreterDocumentStore
     /// 智能收件箱 — the App Group shared inbox (reconcile, inspect,
     /// counts). Items are device-local until confirmed into formal
     /// entities; the store is shared with the Share Extension but the
@@ -314,6 +317,11 @@ final class AppEnvironment {
         // one HTTP transport, one provider config.
         let materialStore = MaterialFileStore(accountID: accountID)
         MaterialFileStoreShared.store = materialStore
+        // 随身翻译现场文件 (interpreter document context): the same
+        // build-first-and-register-globally rule — repository deletes
+        // and the launch reconcile reap files through the holder.
+        let interpreterDocumentStore = InterpreterDocumentStore(accountID: accountID)
+        InterpreterDocumentStoreShared.store = interpreterDocumentStore
         let materialExtractionRunner = MaterialExtractionRunner(
             repository: repository,
             fileStore: { MaterialFileStoreShared.store }
@@ -380,6 +388,7 @@ final class AppEnvironment {
             attachmentImporter: attachmentImporter,
             attachmentStore: attachmentStore,
             materialStore: materialStore,
+            interpreterDocumentStore: interpreterDocumentStore,
             materialImporter: materialImporter,
             materialExtractionRunner: materialExtractionRunner,
             materialDigestGenerator: materialDigestGenerator,
@@ -430,6 +439,7 @@ final class AppEnvironment {
         attachmentImporter: AttachmentImportService? = nil,
         attachmentStore: AttachmentFileStore? = nil,
         materialStore: MaterialFileStore? = nil,
+        interpreterDocumentStore: InterpreterDocumentStore? = nil,
         materialImporter: MaterialImportService? = nil,
         materialExtractionRunner: MaterialExtractionRunner? = nil,
         materialDigestGenerator: MaterialDigestGenerator? = nil,
@@ -509,6 +519,16 @@ final class AppEnvironment {
         } else {
             self.materialStore = MaterialFileStore(accountID: nil)
             MaterialFileStoreShared.store = self.materialStore
+        }
+        // 随身翻译 document context: same DI-default pattern (tests/demo
+        // inject temp-root stores; production registers the profile's
+        // real store at composition time above).
+        if let interpreterDocumentStore {
+            self.interpreterDocumentStore = interpreterDocumentStore
+            InterpreterDocumentStoreShared.store = interpreterDocumentStore
+        } else {
+            self.interpreterDocumentStore = InterpreterDocumentStore(accountID: nil)
+            InterpreterDocumentStoreShared.store = self.interpreterDocumentStore
         }
         if let materialExtractionRunner {
             self.materialExtractionRunner = materialExtractionRunner
@@ -600,7 +620,8 @@ final class AppEnvironment {
         CourseAssistantThread.self, CourseAssistantMessage.self,
         Exam.self, ExamTopic.self, StudyPlan.self, StudyPlanItem.self,
         StudyActivity.self,
-        InterpreterConversation.self, InterpreterTurn.self
+        InterpreterConversation.self, InterpreterTurn.self,
+        InterpreterDocument.self
     ])
 
     // MARK: - Translation configuration (single source of truth)
@@ -778,6 +799,12 @@ final class AppEnvironment {
         // extraction and digest runs (孤儿 analyzing 状态 → 可继续).
         materialExtractionRunner.reconcileInterrupted()
         materialDigestGenerator.reconcileInterrupted()
+        // 随身翻译 document context: interrupted imports/extractions roll
+        // back to honest states; stale temp files are reaped.
+        InterpreterDocumentStoreShared.store?.removeStaleTempFiles()
+        if let documentStore = InterpreterDocumentStoreShared.store {
+            repository.reconcileInterpreterDocuments(store: documentStore)
+        }
         // Recording rows ↔ disk: legacy raw.wav files gain metadata rows,
         // removed files flip isDeleted, orphan rows are reaped.
         try? repository.reconcileRecordingState()
@@ -809,6 +836,13 @@ final class AppEnvironment {
     /// keeps it current.
     var studyServiceBoxForInterpreter: StudyServiceBox? {
         studyServiceBox
+    }
+
+    /// The image-understanding (multimodal) service box handed out the
+    /// same way — the interpreter document page-image fallback rides the
+    /// SAME attachment-analysis service (one key, one transport).
+    var attachmentServiceBoxForInterpreter: AttachmentServiceBox? {
+        attachmentServiceBox
     }
 
     /// Shared interpreter TTS engine — one per app so starting a live
