@@ -81,9 +81,14 @@ final class InterpreterDocumentContextModel {
     ) {
         self.environment = environment
         self.repository = environment.repository
+        // Capture the profile's store VALUE at creation: an in-flight
+        // extraction surviving a profile switch must keep writing to the
+        // OLD account's store (its rows live there), never the new one —
+        // reading the shared holder at call time would race the swap.
+        let capturedStore = InterpreterDocumentStoreShared.store
         self.documentService = InterpreterDocumentService(
             repository: environment.repository,
-            fileStore: { InterpreterDocumentStoreShared.store }
+            fileStore: { capturedStore }
         )
         self.aiServiceProvider = aiServiceProvider
         self.imageServiceProvider = imageServiceProvider
