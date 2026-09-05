@@ -20,13 +20,13 @@ struct InterpreterTurnCard: View {
     /// 提供，来源一律按存在渲染）。用于"本机删除文件后 local
     /// citation 如实变为不可用"。
     var availableDocumentIDs: Set<UUID>? = nil
-    var onToggleExpanded: () -> Void
-    var onRetry: () -> Void
-    var onSpeak: () -> Void
-    var onPresent: () -> Void
-    var onDelete: () -> Void
+    var onToggleExpanded: () -> Void = {}
+    var onRetry: () -> Void = {}
+    var onSpeak: () -> Void = {}
+    var onPresent: () -> Void = {}
+    var onDelete: () -> Void = {}
     /// 编辑原文保存回调（stamp modifiedAt — 合并裁决基准）。
-    var onUpdateSource: (String) -> Void
+    var onUpdateSource: (String) -> Void = { _ in }
 
     @State private var showEditSheet = false
     @State private var editedSource = ""

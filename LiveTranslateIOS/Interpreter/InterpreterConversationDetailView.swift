@@ -27,13 +27,7 @@ struct InterpreterConversationDetailView: View {
                                 isExpanded: false,
                                 showStress: environment.settings.interpreterShowStress,
                                 availableDocumentIDs: availableDocumentIDs,
-                                isTranslating: false,
-                                onToggleExpanded: {},
-                                onRetry: {},
-                                onSpeak: {},
-                                onPresent: {},
-                                onDelete: {},
-                                onUpdateSource: { _ in }
+                                isTranslating: false
                             )
                         }
                     } else {

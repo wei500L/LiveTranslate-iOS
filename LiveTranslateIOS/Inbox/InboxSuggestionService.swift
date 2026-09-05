@@ -93,6 +93,7 @@ struct InboxSuggestionService {
 
         let raw: String
         if let imageData, let imageService {
+            let mime = imageMIME
             raw = try await AICallScope.with(
                 AICallContext(feature: .inboxSuggestion, textCategory: .userInput)
             ) {
@@ -100,17 +101,18 @@ struct InboxSuggestionService {
                     systemPrompt: Self.systemPrompt,
                     userPrompt: prompt + "\n\n来源内容（图片）：",
                     imageData: imageData,
-                    imageMIME: imageMIME,
+                    imageMIME: mime,
                     maxTokens: Self.maxTokens
                 )
             }
         } else if let textService, !sourceText.isEmpty {
+            let source = sourceText
             raw = try await AICallScope.with(
                 AICallContext(feature: .inboxSuggestion, textCategory: .mixed)
             ) {
                 try await textService.complete(
                     systemPrompt: Self.systemPrompt,
-                    userPrompt: prompt + "\n\n来源内容：\n" + sourceText,
+                    userPrompt: prompt + "\n\n来源内容：\n" + source,
                     maxTokens: Self.maxTokens
                 )
             }
