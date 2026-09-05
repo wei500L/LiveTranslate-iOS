@@ -83,8 +83,6 @@ final class InterpreterViewModel {
 
     /// 文件上下文模型（导入/提取/选择/预览/ AI 动作的编排层）。
     private(set) var documentContext: InterpreterDocumentContextModel?
-    /// 文档触发的 AI 动作进行中的 turn id（防重复 + 迟到回调 scope 校验）。
-    private var documentTaskTurnIDs: Set<UUID> = []
 
     // MARK: - Presentation state (UI-only, never synced)
 
@@ -626,6 +624,16 @@ final class InterpreterViewModel {
                 backTranslation: nil,
                 details: Self.documentAnalysisDetails(analysis)
             )
+            // 分析结果写入来源文档（字段助手数据源；设备本地）。
+            let sourceDocumentIDs = Set(sources.map { $0.chunk.documentID })
+            for documentID in sourceDocumentIDs {
+                if let document = repository.interpreterDocument(id: documentID) {
+                    try? repository.setInterpreterDocumentAnalysis(
+                        document, analysis: analysis
+                    )
+                }
+            }
+            documentContext.reload(conversationID: conversationID)
             reloadTurns()
         } catch is CancellationError {
         } catch {
@@ -738,6 +746,11 @@ final class InterpreterViewModel {
                 backTranslation: nil,
                 details: Self.documentAnalysisDetails(analysis)
             )
+            // 多模态分析结果同样写入来源文档（字段助手数据源）。
+            for document in documents {
+                try? repository.setInterpreterDocumentAnalysis(document, analysis: analysis)
+            }
+            documentContext.reload(conversationID: conversationID)
             reloadTurns()
         } catch is CancellationError {
         } catch {

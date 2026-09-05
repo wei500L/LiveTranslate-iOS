@@ -74,10 +74,6 @@ final class InterpreterDocumentContextModel {
     private(set) var isAskingAI = false
     var lastAIError: String?
 
-    /// 字段助手：当前核对的字段与用户输入值。
-    var fieldCheckValue: String = ""
-    var checkingField: InterpreterFormField?
-
     init(
         environment: AppEnvironment,
         aiServiceProvider: @escaping @MainActor () -> (any StudyReviewModelService)? = { nil },

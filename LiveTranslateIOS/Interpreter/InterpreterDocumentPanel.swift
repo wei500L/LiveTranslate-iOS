@@ -470,8 +470,8 @@ struct InterpreterDocumentCard: View {
                 textToggle(extraction)
             }
 
-            // 字段助手。
-            if let fields = extractionFields, !fields.isEmpty {
+            // 字段助手（来自最近一次 AI 文件分析 —— 数据在本机文档行上）。
+            if let fields = document.analysis?.formFields, !fields.isEmpty {
                 fieldAssistant(fields)
             }
         }
@@ -537,13 +537,6 @@ struct InterpreterDocumentCard: View {
             }
             .frame(maxHeight: 180)
         }
-    }
-
-    private var extractionFields: [InterpreterFormField]? {
-        // 字段列表来自最近一次文件分析结果（存储于 turn details 的
-        // suggestedReplies/keywords 之外——本轮字段助手从分析 JSON
-        // 载入）。简化：字段助手入口由解释文件流程写入。
-        nil
     }
 
     @ViewBuilder

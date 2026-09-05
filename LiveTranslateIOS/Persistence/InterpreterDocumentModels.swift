@@ -40,6 +40,9 @@ final class InterpreterDocument {
     var keepOriginalFile: Bool
     /// 提取算法版本（缓存失效依据；当前 "1"）。
     var extractionVersion: String
+    /// 最近一次 AI 文件分析的结构化结果 JSON（字段助手的数据源）。
+    /// 设备本地 sidecar —— 只含分析结构，绝不含原始文件或 OCR 全文。
+    var analysisJSON: String
     /// 失败/中断的人类可读摘要（"" = 无）。
     var errorSummary: String
     var createdAt: Date
@@ -61,6 +64,7 @@ final class InterpreterDocument {
         allowsModelUse: Bool = true,
         keepOriginalFile: Bool = true,
         extractionVersion: String = "1",
+        analysisJSON: String = "",
         errorSummary: String = "",
         createdAt: Date = .now,
         updatedAt: Date = .now
@@ -80,6 +84,7 @@ final class InterpreterDocument {
         self.allowsModelUse = allowsModelUse
         self.keepOriginalFile = keepOriginalFile
         self.extractionVersion = extractionVersion
+        self.analysisJSON = analysisJSON
         self.errorSummary = errorSummary
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -98,6 +103,15 @@ final class InterpreterDocument {
     var status: InterpreterDocumentStatus {
         get { InterpreterDocumentStatus(rawValue: statusRaw) ?? .failed }
         set { statusRaw = newValue.rawValue }
+    }
+
+    /// 解码后的 AI 分析结果（坏 JSON → nil，绝不崩溃）。
+    var analysis: InterpreterDocumentAnalysis? {
+        get {
+            guard !analysisJSON.isEmpty else { return nil }
+            guard let data = analysisJSON.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(InterpreterDocumentAnalysis.self, from: data)
+        }
     }
 }
 

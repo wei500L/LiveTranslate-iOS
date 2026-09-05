@@ -140,6 +140,18 @@ extension TranscriptRepository {
         try context.save()
     }
 
+    /// Stores the latest AI analysis onto the document (the field
+    /// assistant's data source). Device-local only.
+    func setInterpreterDocumentAnalysis(
+        _ document: InterpreterDocument, analysis: InterpreterDocumentAnalysis
+    ) throws {
+        guard let data = try? JSONEncoder().encode(analysis),
+              let json = String(data: data, encoding: .utf8) else { return }
+        document.analysisJSON = json
+        document.updatedAt = .now
+        try context.save()
+    }
+
     // MARK: - Reconcile (interrupt recovery)
 
     /// Launch/foreground recovery: an orphaned `importing` row (the app

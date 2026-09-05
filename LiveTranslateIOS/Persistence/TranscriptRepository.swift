@@ -717,6 +717,11 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func updateInterpreterDocumentPreferences(
         _ document: InterpreterDocument, allowsModelUse: Bool?, keepOriginalFile: Bool?
     ) throws
+    /// Stores the latest AI analysis (the field assistant's data source).
+    /// Local-only.
+    func setInterpreterDocumentAnalysis(
+        _ document: InterpreterDocument, analysis: InterpreterDocumentAnalysis
+    ) throws
     /// Interrupt recovery: importing → retryable failed, extracting →
     /// imported; a row whose file vanished flips to failed. Local-only.
     func reconcileInterpreterDocuments(store: InterpreterDocumentStore)
