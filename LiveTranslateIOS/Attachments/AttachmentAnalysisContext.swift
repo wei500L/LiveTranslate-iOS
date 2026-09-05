@@ -73,7 +73,9 @@ enum AttachmentAnalysisContext {
         // Bounded window around the anchor point (or the newest entries
         // when the image is unanchored and predates the session).
         var window: [TranscriptEntry] = []
-        if let center = anchorOffset {
+        // Hoisted: `center` is needed again in the trimming sort below.
+        let center = anchorOffset
+        if let center {
             window = entries.filter {
                 abs($0.startOffset - center) <= windowSeconds
             }

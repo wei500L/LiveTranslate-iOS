@@ -34,7 +34,7 @@ final class AttachmentAnalysisGenerator {
         var displayName: String {
             switch self {
             case .imageOnly: return String(localized: "仅理解图片")
-            case withClassContext: return String(localized: "结合课堂讲解")
+            case .withClassContext: return String(localized: "结合课堂讲解")
             }
         }
 
