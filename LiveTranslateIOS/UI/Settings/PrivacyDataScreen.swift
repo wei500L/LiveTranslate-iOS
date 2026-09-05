@@ -247,13 +247,7 @@ struct PrivacyDataScreen: View {
                                         : LTColors.textTertiary
                                 )
                         }
-                        Text(
-                            "\(entry.occurredAt.formatted(date: .abbreviated, time: .shortened))"
-                                + (entry.host.isEmpty ? "" : " · \(entry.host)")
-                                + " · \(entry.textCategory == .none ? "" : entry.textCategory.displayName + " " )\(entry.characterCount) 字"
-                                + (entry.imageCount > 0 ? " · \(entry.imageCount) 图" : "")
-                                + (entry.masked ? " · 已遮盖" : "")
-                        )
+                        Text(Self.entryMetadataLine(entry))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
@@ -268,6 +262,21 @@ struct PrivacyDataScreen: View {
         } footer: {
             Text("只记录时间、功能、数据类别、字符/图片数量、是否遮盖、结果与服务商地址 —— 不记录请求正文、密钥或完整 URL。仅保存在本机，保留 \(Int(AIActivityLog.retention / 86_400)) 天，不进入同步或系统日志。这不是服务商侧的审计日志。\(clearedActivity ? "已清空。" : "")\(aiActivityBytes > 0 ? "当前占用 \(Format.bytes(aiActivityBytes))。" : "")")
         }
+    }
+
+    /// One metadata line per activity entry (kept as a helper — the
+    /// inline concatenation exceeded the type-checker's budget).
+    private static func entryMetadataLine(_ entry: AIActivityLog.Entry) -> String {
+        var parts: [String] = [
+            entry.occurredAt.formatted(date: .abbreviated, time: .shortened)
+        ]
+        if !entry.host.isEmpty { parts.append(entry.host) }
+        var categoryAndCount = entry.textCategory.displayName
+        if !categoryAndCount.isEmpty { categoryAndCount += " " }
+        parts.append("\(categoryAndCount)\(entry.characterCount) 字")
+        if entry.imageCount > 0 { parts.append("\(entry.imageCount) 图") }
+        if entry.masked { parts.append("已遮盖") }
+        return parts.joined(separator: " · ")
     }
 
     private static func outcomeLabel(_ outcome: AIActivityLog.Entry.Outcome) -> String {

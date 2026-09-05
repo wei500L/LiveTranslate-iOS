@@ -54,23 +54,28 @@ final class ClipboardService {
 
     /// Copies text under the given policy. Returns the user-facing hint
     /// text (also published to `notice` for the root toast).
+    ///
+    /// API note: the `localOnly` / `expirationDate` PROPERTIES were
+    /// removed from the iOS 26 SDK — `setObjects(_:localOnly:
+    /// expirationDate:)` is the (only) supported way to write with those
+    /// options. String bridges to NSString (NSItemProviderWriting), so
+    /// plain text rides it directly and `pasteboard.string` still reads
+    /// back.
     @discardableResult
     func copy(_ text: String, policy: Policy) -> String? {
         let trimmed = text
         guard !trimmed.isEmpty else { return nil }
         let pasteboard = UIPasteboard.general
-        pasteboard.string = trimmed
-        // After writing: local-only FIRST, then expiration (setting the
-        // expiration date applies to the contents just written).
-        pasteboard.localOnly = true
+        let expiration: Date?
         if case .sensitive = policy {
-            pasteboard.expirationDate = Date().addingTimeInterval(
-                Self.sensitiveExpiration
-            )
+            expiration = Date().addingTimeInterval(Self.sensitiveExpiration)
         } else {
             // A plain copy explicitly outlives the sensitive window.
-            pasteboard.expirationDate = nil
+            expiration = nil
         }
+        pasteboard.setObjects(
+            [trimmed], localOnly: true, expirationDate: expiration
+        )
         lastCopyChangeCount = pasteboard.changeCount
 
         switch policy {
