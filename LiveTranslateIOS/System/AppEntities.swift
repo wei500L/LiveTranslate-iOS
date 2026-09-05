@@ -28,6 +28,7 @@ struct CourseEntity: AppEntity {
 }
 
 struct CourseEntityQuery: EntityQuery {
+    @MainActor
     func entities(for identifiers: [UUID]) async throws -> [CourseEntity] {
         let results = await AppIntentHost.withEnvironment { environment in
             identifiers.compactMap { id in
@@ -37,6 +38,7 @@ struct CourseEntityQuery: EntityQuery {
         return (results ?? []).map(CourseEntity.from)
     }
 
+    @MainActor
     func suggestedEntities() async throws -> [CourseEntity] {
         let results = await AppIntentHost.withEnvironment { environment in
             (try? environment.repository.courses()) ?? []
@@ -75,6 +77,7 @@ struct ExamEntity: AppEntity {
 }
 
 struct ExamEntityQuery: EntityQuery {
+    @MainActor
     func entities(for identifiers: [UUID]) async throws -> [ExamEntity] {
         let results = await AppIntentHost.withEnvironment { environment in
             identifiers.compactMap { id in
@@ -87,6 +90,7 @@ struct ExamEntityQuery: EntityQuery {
         }
     }
 
+    @MainActor
     func suggestedEntities() async throws -> [ExamEntity] {
         let results = await AppIntentHost.withEnvironment { environment in
             (try? environment.repository.exams(courseID: nil, includeCandidates: false)) ?? []
@@ -102,6 +106,7 @@ struct ExamEntityQuery: EntityQuery {
 
     func defaultResult() async -> ExamEntity? { nil }
 
+    @MainActor
     private func courseName(of exam: Exam) async -> String {
         let name = await AppIntentHost.withEnvironment { environment -> String in
             guard let courseID = exam.courseID else { return "" }
@@ -141,6 +146,7 @@ struct StudyPlanItemEntity: AppEntity {
 }
 
 struct StudyPlanItemEntityQuery: EntityQuery {
+    @MainActor
     func entities(for identifiers: [UUID]) async throws -> [StudyPlanItemEntity] {
         let results = await AppIntentHost.withEnvironment { environment in
             identifiers.compactMap { id in
@@ -151,6 +157,7 @@ struct StudyPlanItemEntityQuery: EntityQuery {
     }
 
     /// Today's undone items (the natural Shortcuts suggestions).
+    @MainActor
     func suggestedEntities() async throws -> [StudyPlanItemEntity] {
         let results = await AppIntentHost.withEnvironment { environment in
             let todayKey = Exam.dateKey(.now)
