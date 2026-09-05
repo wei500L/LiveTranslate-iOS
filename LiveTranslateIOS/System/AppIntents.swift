@@ -229,8 +229,8 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenTodayStudyIntent(),
             phrases: [
-                "在 LiveTranslate 打开今天学习",
-                "用 LiveTranslate 看今天的学习计划"
+                "在 \(.applicationName) 打开今天学习",
+                "用 \(.applicationName) 看今天的学习计划"
             ],
             shortTitle: "今日学习",
             systemImageName: "graduationcap"
@@ -238,8 +238,8 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenNextClassIntent(),
             phrases: [
-                "在 LiveTranslate 查看下一堂课",
-                "用 LiveTranslate 看下一堂课"
+                "在 \(.applicationName) 查看下一堂课",
+                "用 \(.applicationName) 看下一堂课"
             ],
             shortTitle: "下一堂课",
             systemImageName: "calendar"
@@ -247,8 +247,8 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenBlackboardCaptureIntent(),
             phrases: [
-                "在 LiveTranslate 拍黑板",
-                "用 LiveTranslate 拍黑板"
+                "在 \(.applicationName) 拍黑板",
+                "用 \(.applicationName) 拍黑板"
             ],
             shortTitle: "拍黑板",
             systemImageName: "camera"
@@ -256,8 +256,8 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenInboxIntent(),
             phrases: [
-                "在 LiveTranslate 查看收件箱",
-                "用 LiveTranslate 打开收件箱"
+                "在 \(.applicationName) 查看收件箱",
+                "用 \(.applicationName) 打开收件箱"
             ],
             shortTitle: "收件箱",
             systemImageName: "tray.full"
@@ -265,8 +265,8 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenCurrentClassroomIntent(),
             phrases: [
-                "在 LiveTranslate 打开当前课堂",
-                "用 LiveTranslate 回到课堂"
+                "在 \(.applicationName) 打开当前课堂",
+                "用 \(.applicationName) 回到课堂"
             ],
             shortTitle: "当前课堂",
             systemImageName: "waveform"
