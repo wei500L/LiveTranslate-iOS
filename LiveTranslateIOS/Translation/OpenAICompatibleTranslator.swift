@@ -251,18 +251,33 @@ struct OpenAICompatibleTranslator: TranslationService {
         return result
     }
 
+    /// Whether a plain-HTTP endpoint host is LOCAL (allowed by the scoped
+    /// ATS exception): loopback, `*.local` mDNS names, or a PRIVATE IPv4
+    /// range (RFC 1918 + link-local). A public IPv4 literal is NOT local
+    /// — plain HTTP to it is rejected here exactly as ATS would reject
+    /// it at the network layer, so the app-level rule and the OS rule
+    /// can never disagree.
     static func isLocalHost(_ host: String) -> Bool {
         let lowered = host.lowercased()
         if lowered == "localhost" || lowered == "::1" { return true }
         if lowered.hasSuffix(".local") { return true }
         // IPv4 literal: four dot-separated 0-255 octets.
-        let octets = lowered.split(separator: ".", omittingEmptySubsequences: false)
-        if octets.count == 4 {
-            return octets.allSatisfy { octet in
-                guard !octet.isEmpty, octet.count <= 3, octet.allSatisfy(\.isNumber) else { return false }
-                return (Int(octet) ?? 256) <= 255
-            }
-        }
+        let parts = lowered.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4,
+              parts.allSatisfy({ octet in
+                  guard !octet.isEmpty, octet.count <= 3, octet.allSatisfy(\.isNumber) else {
+                      return false
+                  }
+                  return (Int(octet) ?? 256) <= 255
+              }),
+              let first = Int(parts[0]), let second = Int(parts[1])
+        else { return false }
+        // Private ranges: 10/8, 172.16/12, 192.168/16, 169.254/16
+        // (link-local). Loopback 127/8 covered above, but keep it for
+        // non-canonical forms.
+        if first == 10 || first == 127 || first == 169 && second == 254 { return true }
+        if first == 172 && (16...31).contains(second) { return true }
+        if first == 192 && second == 168 { return true }
         return false
     }
 

@@ -90,6 +90,13 @@ final class InterpreterViewModel {
         Set((documentContext?.documents ?? []).map(\.id))
     }
 
+    /// The configured AI endpoint base for disclosure UI (round 17 —
+    /// the send preview shows which host content goes to; the API key
+    /// itself never leaves the service layer).
+    var apiBaseForDisclosure: String {
+        environment.settings.apiBase
+    }
+
     // MARK: - Presentation state (UI-only, never synced)
 
     /// 展开的回合卡片（展开状态属于 UI 状态，不上传）。

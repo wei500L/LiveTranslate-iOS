@@ -107,6 +107,90 @@ jobs:
             echo "Release binary contains the demo launch path"; exit 1
           fi
 
+      - name: Privacy manifest & entitlements checks (round 17)
+        run: |
+          set -euo pipefail
+          app="build/DerivedData/Build/Products/Release-iphonesimulator/LiveTranslateIOS.app"
+          share="$app/PlugIns/LiveTranslateShareExtension.appex"
+          widgets="$app/PlugIns/LiveTranslateWidgets.appex"
+
+          # 1. Every target ships a PrivacyInfo.xcprivacy, source + product.
+          for f in LiveTranslateIOS/PrivacyInfo.xcprivacy \
+                   ShareExtension/PrivacyInfo.xcprivacy \
+                   Widgets/PrivacyInfo.xcprivacy; do
+            test -f "$f"
+            plutil -lint "$f"
+          done
+          test -f "$app/PrivacyInfo.xcprivacy"
+          test -f "$share/PrivacyInfo.xcprivacy"
+          test -f "$widgets/PrivacyInfo.xcprivacy"
+
+          # 2. Manifest contract: no tracking, no tracking domains, and
+          #    exactly the required-reason APIs the source actually uses.
+          python3 - <<'EOF'
+          import plistlib, sys
+          def load(p):
+              with open(p, "rb") as fh: return plistlib.load(fh)
+          app = load("LiveTranslateIOS/PrivacyInfo.xcprivacy")
+          assert app["NSPrivacyTracking"] is False
+          assert app["NSPrivacyTrackingDomains"] == []
+          assert app["NSPrivacyCollectedDataTypes"] == []
+          apis = {a["NSPrivacyAccessedAPIType"] for a in app["NSPrivacyAccessedAPITypes"]}
+          assert apis == {
+              "NSPrivacyAccessedAPICategoryUserDefaults",
+              "NSPrivacyAccessedAPICategoryFileTimestamp",
+              "NSPrivacyAccessedAPICategoryDiskSpace",
+          }, apis
+          share = load("ShareExtension/PrivacyInfo.xcprivacy")
+          widgets = load("Widgets/PrivacyInfo.xcprivacy")
+          for m in (share, widgets):
+              assert m["NSPrivacyTracking"] is False
+              assert m["NSPrivacyCollectedDataTypes"] == []
+              apis = {a["NSPrivacyAccessedAPIType"] for a in m["NSPrivacyAccessedAPITypes"]}
+              assert apis == {"NSPrivacyAccessedAPICategoryUserDefaults"}, apis
+          print("privacy manifests OK")
+          EOF
+
+          # 3. Face ID usage string present in the built app (the
+          #    biometric privacy lock requires it).
+          plutil -extract NSFaceIDUsageDescription raw -o - "$app/Info.plist" | grep -q "Face ID"
+
+          # 4. No broad ATS exception in any built plist.
+          for plist in "$app/Info.plist" "$share/Info.plist" "$widgets/Info.plist"; do
+            if plutil -extract NSAppTransportSecurity.NSAllowsArbitraryLoads raw -o - "$plist" 2>/dev/null | grep -q true; then
+              echo "NSAllowsArbitraryLoads found in $plist"; exit 1
+            fi
+          done
+
+          # 5. Entitlements matrix: the App Group on all three targets and
+          #    NOTHING else on the extensions (no keychain access groups
+          #    anywhere — extensions must never reach the Keychain).
+          for product in "$app" "$share" "$widgets"; do
+            codesign -d --entitlements :- "$product" 2>/dev/null > /tmp/ents.plist
+            if grep -q "keychain-access-groups" /tmp/ents.plist; then
+              echo "keychain-access-groups found in $product"; exit 1
+            fi
+            grep -q "group.com.livetranslate.ios" /tmp/ents.plist \
+              || { echo "App Group missing in $product"; exit 1; }
+          done
+
+          # 6. Extension binaries must not carry the Keychain/secret
+          #    vocabulary (account names the app's Keychain items use).
+          for binary in "$share/LiveTranslateShareExtension" "$widgets/LiveTranslateWidgets"; do
+            if strings "$binary" | grep -q "translation.apiKey"; then
+              echo "API-key account name leaked into extension binary: $binary"; exit 1
+            fi
+            if strings "$binary" | grep -q "cloudsync.account"; then
+              echo "Sync-token account name leaked into extension binary: $binary"; exit 1
+            fi
+          done
+
+          # 7. Release carries no debug/localhost endpoint defaults.
+          if strings "$app/LiveTranslateIOS" | grep -q "127.0.0.1:8000"; then
+            echo "Debug sync endpoint leaked into Release binary"; exit 1
+          fi
+          echo "privacy checks OK"
+
       - name: Unit tests (iOS Simulator)
         run: |
           set -o pipefail

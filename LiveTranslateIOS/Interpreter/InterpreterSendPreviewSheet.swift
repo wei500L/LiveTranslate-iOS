@@ -74,6 +74,18 @@ struct InterpreterSendPreviewSheet: View {
             Label("将发送以下内容给你的翻译模型", systemImage: "paperplane")
                 .font(LTTypography.cardTitle)
                 .foregroundStyle(LTColors.textPrimary)
+            // Round 17: the unified request disclosure — one line stating
+            // the feature, the endpoint host, the content category and the
+            // masking state (the same vocabulary the AI activity log
+            // records).
+            Text(disclosureSummary(
+                preview: preview,
+                feature: preview.action == .analyze
+                    ? AIFeature.interpreterDocumentAnalysis
+                    : .interpreterDocumentQA
+            ))
+            .font(LTTypography.caption)
+            .foregroundStyle(LTColors.accentCyan)
             Text("只包含你选择发送的文字；原始文件和完整识别文本仍留在本机。")
                 .font(LTTypography.caption)
                 .foregroundStyle(LTColors.textSecondary)
@@ -104,6 +116,32 @@ struct InterpreterSendPreviewSheet: View {
 
             syncBoundaryFootnote
         }
+    }
+
+    /// The unified disclosure copy for this request (feature · host ·
+    /// content category · masking).
+    private func disclosureSummary(
+        preview: InterpreterDocumentContextModel.SendPreview,
+        feature: AIFeature
+    ) -> String {
+        let host = URL(
+            string: OpenAICompatibleTranslator.normalizeAPIBase(
+                viewModel.apiBaseForDisclosure
+            ) ?? ""
+        )?.host ?? ""
+        let chars = visibleLines
+            .reduce(0) { $0 + $1.count }
+            + question.count
+        let disclosure = AIRequestDisclosure(
+            feature: feature,
+            host: host,
+            textCategory: .documentText,
+            characterCount: chars,
+            imageCount: 0,
+            masked: preview.maskedSensitive && !sendUnmasked,
+            userTriggered: true
+        )
+        return "请求概要：" + disclosure.previewSummary + " · \(chars) 字"
     }
 
     private func sensitiveCard(
