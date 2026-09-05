@@ -22,7 +22,10 @@ final class ScreenCaptureObserver {
 
     private(set) var isCaptured: Bool
 
-    private var observer: NSObjectProtocol?
+    /// nonisolated(unsafe): deinit is nonisolated and must be able to
+    /// unregister the token — the value is only ever touched on the main
+    /// actor plus this one cleanup path.
+    nonisolated(unsafe) private var observer: NSObjectProtocol?
 
     private init() {
         // UIScreen.main is deprecated in iOS 26 but remains the only
