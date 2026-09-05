@@ -249,12 +249,21 @@ struct InterpreterScreen: View {
                         emptyState
                     }
                     ForEach(viewModel.turns, id: \.id) { turn in
-                        // Hoisted locals — the inline compound expression
-                        // exceeded the type-checker's budget.
+                        // Decomposed into small statements — the inline
+                        // compound expression (several @Observable reads
+                        // chained with &&/||) exceeded the type-checker's
+                        // budget.
                         let isExpanded = viewModel.expandedTurnIDs.contains(turn.id)
-                        let isTranslating = viewModel.translatingTurnIDs.contains(turn.id)
-                            || (turn.direction == .zh2ru && viewModel.isTranslatingReply
-                                && viewModel.turns.last?.id == turn.id)
+                        let isTranslating: Bool = {
+                            if viewModel.translatingTurnIDs.contains(turn.id) {
+                                return true
+                            }
+                            guard turn.direction == .zh2ru,
+                                  viewModel.isTranslatingReply else {
+                                return false
+                            }
+                            return viewModel.turns.last?.id == turn.id
+                        }()
                         InterpreterTurnCard(
                             turn: turn,
                             isExpanded: isExpanded,
