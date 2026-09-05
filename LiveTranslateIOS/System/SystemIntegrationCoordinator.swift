@@ -549,12 +549,15 @@ private final class DarwinWakeBox: @unchecked Sendable {
             let ref = Unmanaged<DarwinWakeRef>.fromOpaque(info).takeUnretainedValue()
             ref.box.handler()
         }
+        // C signature: (center, observer, callback, name: CFStringRef,
+        // object, suspension). The observer pointer doubles as the
+        // callback's identity — the retained ref travels through it.
         CFNotificationCenterAddObserver(
             center,
-            CFNotificationName((SystemCommandStore.darwinNotificationName as CFString)),
-            callback,
-            nil,
             info,
+            callback,
+            SystemCommandStore.darwinNotificationName as CFString,
+            nil,
             .deliverImmediately
         )
         token = info
