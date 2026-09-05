@@ -40,15 +40,9 @@ struct LiveScreen: View {
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(viewModel.isRunning)
         .sheet(isPresented: $showAttachmentCapture) {
-            if let sessionID = viewModel.sessionID {
-                AttachmentCaptureSheet(
-                    sessionID: sessionID,
-                    defaultAnchorEntryID: viewModel.currentAnchorEntryID,
-                    showsAnchorHint: true,
-                    onImported: { viewModel.reloadAttachments() },
-                    isPresented: $showAttachmentCapture
-                )
-            }
+            // Extracted: the inline `if let` + view literal made this
+            // expression exceed the type checker's budget.
+            captureSheet
         }
         .sheet(isPresented: $showLiveMaterials) {
             NavigationStack {
@@ -285,6 +279,21 @@ struct LiveScreen: View {
     }
 
     // MARK: - In-class toolbar
+
+    /// The live classroom's capture sheet (nil content when no session
+    /// id yet — the sheet simply shows nothing).
+    @ViewBuilder
+    private var captureSheet: some View {
+        if let sessionID = viewModel.sessionID {
+            AttachmentCaptureSheet(
+                sessionID: sessionID,
+                defaultAnchorEntryID: viewModel.currentAnchorEntryID,
+                showsAnchorHint: true,
+                onImported: { viewModel.reloadAttachments() },
+                isPresented: $showAttachmentCapture
+            )
+        }
+    }
 
     private var tabBar: some View {
         HStack(spacing: 0) {

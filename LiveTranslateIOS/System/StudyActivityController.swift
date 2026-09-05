@@ -116,14 +116,14 @@ final class StudyActivityController {
     /// Launch-time cleanup: end study activities that outlived their
     /// tracker row (or belong to another profile).
     static func reconcileStaleActivities(activeActivityID: UUID?, scopeKey: String) {
-        let mismatched = Activity<StudyActivityAttributes>.activeActivities
+        let mismatched = Activity<StudyActivityAttributes>.activities
             .filter { activity in
                 activity.attributes.activityID != activeActivityID
                     || activity.attributes.scopeKey != scopeKey
             }
         for activity in mismatched {
             Task {
-                await activity.end(disposition: .immediate)
+                await activity.end(dismissalPolicy: .immediate)
             }
         }
     }

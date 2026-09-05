@@ -172,14 +172,14 @@ final class ClassroomActivityController {
     /// this app owns that does not match the given live session id (nil =
     /// no live session → all such activities are stale).
     static func reconcileStaleActivities(activeSessionID: UUID?, scopeKey: String) {
-        let mismatched = Activity<ClassroomSessionActivityAttributes>.activeActivities
+        let mismatched = Activity<ClassroomSessionActivityAttributes>.activities
             .filter { activity in
                 activity.attributes.sessionID != activeSessionID
                     || activity.attributes.scopeKey != scopeKey
             }
         for activity in mismatched {
             Task {
-                await activity.end(disposition: .immediate)
+                await activity.end(dismissalPolicy: .immediate)
             }
         }
     }
