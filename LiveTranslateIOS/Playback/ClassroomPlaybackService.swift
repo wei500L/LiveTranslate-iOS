@@ -72,7 +72,9 @@ final class ClassroomPlaybackService {
 
     // MARK: - Interruption handling
 
-    private var interruptionTask: Task<Void, Never>?
+    // nonisolated(unsafe): deinit is nonisolated and cancels the task
+    // there; Task<Void, Never> is itself Sendable so the access is safe.
+    nonisolated(unsafe) private var interruptionTask: Task<Void, Never>?
 
     init() {
         // Reuse the capture service's interruption handler stream (route
@@ -81,7 +83,7 @@ final class ClassroomPlaybackService {
             let events = AudioInterruptionHandler().start()
             for await event in events {
                 guard !Task.isCancelled else { break }
-                self?.handleInterruption(event)
+                await self?.handleInterruption(event)
             }
         }
     }
@@ -90,7 +92,7 @@ final class ClassroomPlaybackService {
         interruptionTask?.cancel()
     }
 
-    private func handleInterruption(_ event: AudioInterruptionEvent) {
+    private func handleInterruption(_ event: AudioInterruptionEvent) async {
         switch event {
         case .interruptionBegan:
             // Playback pauses for the interruption; the position survives

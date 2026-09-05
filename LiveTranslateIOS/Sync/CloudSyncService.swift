@@ -1449,10 +1449,12 @@ final class CloudSyncService: AuthenticationService {
     func isMaterialFileUploaded(_ material: CourseMaterial) async -> Bool? {
         guard isSignedIn else { return nil }
         guard material.serverVersion > 0 else { return false }
+        // Hoisted Sendable value (the authorize closure is @Sendable).
+        let materialID = material.id
         do {
             return try await authSession.authorize { [api] token in
                 try await api.materialFileUploaded(
-                    materialID: material.id, accessToken: token
+                    materialID: materialID, accessToken: token
                 )
             }
         } catch {
