@@ -195,15 +195,17 @@ struct AttachmentTransform: Codable, Sendable, Equatable {
 
     static func decode(_ json: String) -> AttachmentTransform? {
         guard !json.isEmpty, let data = json.data(using: .utf8) else { return nil }
-        var value = try? JSONDecoder().decode(AttachmentTransform.self, from: data)
+        guard var value = try? JSONDecoder().decode(AttachmentTransform.self, from: data) else {
+            return nil
+        }
         // Clamp defensively — a malformed stored rect must never break
-        // rendering.
-        if value == nil { return nil }
-        value?.quarterTurns = ((value?.quarterTurns ?? 0) % 4 + 4) % 4
-        value?.cropX = min(max(value?.cropX ?? 0, 0), 1)
-        value?.cropY = min(max(value?.cropY ?? 0, 0), 1)
-        value?.cropWidth = min(max(value?.cropWidth ?? 1, 0.05), 1)
-        value?.cropHeight = min(max(value?.cropHeight ?? 1, 0.05), 1)
+        // rendering. (One optional value, no overlapping optional-chained
+        // read+write accesses.)
+        value.quarterTurns = ((value.quarterTurns % 4) + 4) % 4
+        value.cropX = min(max(value.cropX, 0), 1)
+        value.cropY = min(max(value.cropY, 0), 1)
+        value.cropWidth = min(max(value.cropWidth, 0.05), 1)
+        value.cropHeight = min(max(value.cropHeight, 0.05), 1)
         return value
     }
 }
