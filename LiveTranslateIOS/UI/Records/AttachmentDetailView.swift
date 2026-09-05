@@ -21,6 +21,8 @@ struct AttachmentDetailView: View {
     @State private var originalLoaded = false
     @State private var downloadingOriginal = false
     @State private var termDraftBox: TermDraftBox?
+    @State private var cardDraftBox: CardDraftBox?
+    @State private var taskDraftBox: TaskDraftBox?
 
     var body: some View {
         NavigationStack {
