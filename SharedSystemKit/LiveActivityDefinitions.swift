@@ -116,3 +116,14 @@ struct StudyActivityAttributes: ActivityAttributes {
     var courseName: String
     var scopeKey: String
 }
+
+// MARK: - Task-carry box
+
+/// Carries an `Activity` reference into a `Task` closure. ActivityKit does
+/// not mark `Activity` Sendable, but its async `update`/`end` methods are
+/// safe to call from any isolation (the system hops internally) — the
+/// same wrapper pattern Apple's Live Activity samples use. The box only
+/// makes that contract explicit for Swift 6's capture checks.
+struct ActivityBox<Attributes: ActivityAttributes>: @unchecked Sendable {
+    let activity: Activity<Attributes>
+}

@@ -89,9 +89,9 @@ final class StudyActivityController {
             staleAfter: nil,
             updatedAt: .now
         )
-        let session = activity
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await session.update(ActivityContent(state: state, staleDate: nil))
+            await box.activity.update(ActivityContent(state: state, staleDate: nil))
         }
     }
 
@@ -99,9 +99,9 @@ final class StudyActivityController {
     /// writes already happened in the tracker). Dismiss the activity.
     func endActivity(activityID: UUID) {
         guard let activity, self.activityID == activityID else { return }
-        let session = activity
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await session.end(dismissalPolicy: .immediate)
+            await box.activity.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         self.activityID = nil
@@ -109,9 +109,9 @@ final class StudyActivityController {
 
     func endOwnedActivity() {
         guard let activity else { return }
-        let session = activity
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await session.end(dismissalPolicy: .immediate)
+            await box.activity.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         self.activityID = nil
@@ -126,8 +126,9 @@ final class StudyActivityController {
                     || activity.attributes.scopeKey != scopeKey
             }
         for activity in mismatched {
+            let box = ActivityBox(activity: activity)
             Task { @MainActor in
-                await activity.end(dismissalPolicy: .immediate)
+                await box.activity.end(dismissalPolicy: .immediate)
             }
         }
     }

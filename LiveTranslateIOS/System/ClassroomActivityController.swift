@@ -116,8 +116,9 @@ final class ClassroomActivityController {
             updatedAt: .now
         )
         let staleDate = staleAfter
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await activity.update(
+            await box.activity.update(
                 ActivityContent(state: state, staleDate: staleDate)
             )
         }
@@ -140,13 +141,13 @@ final class ClassroomActivityController {
             staleAfter: .now.addingTimeInterval(15),
             updatedAt: .now
         )
-        let session = activity
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await session.update(ActivityContent(
+            await box.activity.update(ActivityContent(
                 state: state,
                 staleDate: .now.addingTimeInterval(15)
             ))
-            await session.end(dismissalPolicy: saved ? .default : .immediate)
+            await box.activity.end(dismissalPolicy: saved ? .default : .immediate)
         }
         self.activity = nil
         activitySessionID = nil
@@ -178,8 +179,9 @@ final class ClassroomActivityController {
                     || activity.attributes.scopeKey != scopeKey
             }
         for activity in mismatched {
+            let box = ActivityBox(activity: activity)
             Task { @MainActor in
-                await activity.end(dismissalPolicy: .immediate)
+                await box.activity.end(dismissalPolicy: .immediate)
             }
         }
     }
@@ -189,9 +191,9 @@ final class ClassroomActivityController {
     /// already stopping).
     func endOwnedActivity() {
         guard let activity else { return }
-        let session = activity
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await session.end(dismissalPolicy: .immediate)
+            await box.activity.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         activitySessionID = nil
@@ -205,9 +207,9 @@ final class ClassroomActivityController {
 
     private func endStaleActivity() {
         guard let activity else { return }
-        let session = activity
+        let box = ActivityBox(activity: activity)
         Task { @MainActor in
-            await session.end(dismissalPolicy: .immediate)
+            await box.activity.end(dismissalPolicy: .immediate)
         }
         self.activity = nil
         activitySessionID = nil
