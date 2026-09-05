@@ -24,7 +24,6 @@ struct AccountSecurityView: View {
             if let errorText = form.errorText {
                 Section { AuthErrorText(message: errorText) }
             }
-            .screenCaptureMask()
             if let profile {
                 identitySection(profile)
                 signInMethodsSection(profile)
@@ -44,6 +43,9 @@ struct AccountSecurityView: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(LTBackground())
+        // Round 17: the account-security form is masked while the screen
+        // is being recorded or mirrored.
+        .screenCaptureMask()
         .task { await load() }
         .refreshable { await load() }
         .sheet(isPresented: $showDisplayNameEdit) {
