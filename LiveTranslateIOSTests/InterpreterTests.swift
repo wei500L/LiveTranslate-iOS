@@ -290,7 +290,8 @@ final class InterpreterTests: XCTestCase {
     }
 
     func testServerRecordDecodesInterpreterConversation() throws {
-        // Go wire 记录形状（interpreterXxx 键）的解码容忍度。
+        // Go wire 记录形状（interpreterXxx 键）的解码容忍度。日期与
+        // SyncAPIClient 同策略（RFC 3339，支持小数秒）。
         let json = """
         {"entityType": "interpreter_conversation", "id": "00000000-0000-0000-0000-000000000001",
          "title": "宿舍办理 · 9月5日", "interpreterScene": "dorm",
@@ -299,7 +300,7 @@ final class InterpreterTests: XCTestCase {
          "interpreterStartedAt": "2026-09-05T10:00:00Z",
          "serverVersion": 3, "deleted": false}
         """
-        let record = try JSONDecoder().decode(
+        let record = try Self.decoder.decode(
             SyncServerRecordDTO.self, from: Data(json.utf8)
         )
         XCTAssertEqual(record.title, "宿舍办理 · 9月5日")
@@ -324,7 +325,7 @@ final class InterpreterTests: XCTestCase {
          "turnModifiedAt": "2026-09-05T10:01:00Z",
          "serverVersion": 1, "deleted": false}
         """
-        let record = try JSONDecoder().decode(
+        let record = try Self.decoder.decode(
             SyncServerRecordDTO.self, from: Data(json.utf8)
         )
         XCTAssertEqual(record.turnSpeaker, "user")
@@ -333,6 +334,23 @@ final class InterpreterTests: XCTestCase {
         XCTAssertEqual(record.turnStressedRussian, "У меня есть то́лько оригина́л.")
         XCTAssertEqual(record.turnDetails, "{\"keywords\":[\"оригинал 原件\"]}")
     }
+
+    /// 与 SyncAPIClient 相同的 RFC 3339 日期解码策略（测试用）。
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = SyncAPIClient.parseServerDate(raw) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "unparseable server date: \(raw)"
+            )
+        }
+        return decoder
+    }()
 }
 
 // MARK: - Repository draft lifecycle (草稿永不通知 sync)
