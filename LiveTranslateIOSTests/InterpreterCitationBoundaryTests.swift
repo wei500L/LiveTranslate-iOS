@@ -51,6 +51,7 @@ final class InterpreterCitationBoundaryTests: XCTestCase {
 
     // MARK: - 出站 payload(绝不上传来源标签)
 
+    @MainActor
     func testOutboundPayloadSanitizesLegacyDirtyTurn() throws {
         let dirtyDetails = InterpreterTurnDetails(
             intentSummary: "文件分析",
@@ -82,6 +83,7 @@ final class InterpreterCitationBoundaryTests: XCTestCase {
         XCTAssertEqual(details.hasLocalSources, true)
     }
 
+    @MainActor
     func testOutboundPayloadNeverCarriesLocalSources() throws {
         // localSourcesJSON 是设备本地字段 —— payload(for:) 从不读取它。
         let turn = InterpreterTurn(
