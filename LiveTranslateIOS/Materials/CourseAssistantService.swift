@@ -648,18 +648,25 @@ final class CourseAssistantService {
             let correctionsByEntry = Dictionary(
                 corrections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
             )
+            // Effective text is resolved UP FRONT into plain strings: the
+            // correction model objects then never cross into any closure
+            // (Swift 6's exclusive-access and sending checks are happiest
+            // with precomputed Sendable values).
+            let effectiveEntries: [(entry: TranscriptEntry, text: String, cost: Int)] = entries.map { entry in
+                let correction = correctionsByEntry[entry.id]
+                let russian = entry.effectiveRussianText(correction: correction)
+                let chinese = entry.effectiveChineseText(correction: correction) ?? ""
+                let text = chinese.isEmpty ? russian : "\(russian)\n\(chinese)"
+                return (entry, text, russian.count + chinese.count)
+            }
             // Group adjacent entries into ~600-char chunks — a citation lands
             // on the FIRST entry of its group (jump target), the group text
             // is all four entries' effective text.
-            var groupEntries: [TranscriptEntry] = []
+            var groupEntries: [(entry: TranscriptEntry, text: String)] = []
             var groupChars = 0
             func flushGroup() {
                 guard let first = groupEntries.first else { return }
-                let text = groupEntries.map { entry -> String in
-                    let russian = entry.effectiveRussianText(correction: correctionsByEntry[entry.id])
-                    let chinese = entry.effectiveChineseText(correction: correctionsByEntry[entry.id]) ?? ""
-                    return chinese.isEmpty ? russian : "\(russian)\n\(chinese)"
-                }.joined(separator: "\n")
+                let text = groupEntries.map(\.text).joined(separator: "\n")
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     groupEntries = []
                     groupChars = 0
@@ -675,13 +682,12 @@ final class CourseAssistantService {
                 groupEntries = []
                 groupChars = 0
             }
-            for entry in entries {
-                let cost = entry.originalText.count + (entry.translatedText?.count ?? 0)
-                if !groupEntries.isEmpty && groupChars + cost > 600 {
+            for effective in effectiveEntries {
+                if !groupEntries.isEmpty && groupChars + effective.cost > 600 {
                     flushGroup()
                 }
-                groupEntries.append(entry)
-                groupChars += cost
+                groupEntries.append((effective.entry, effective.text))
+                groupChars += effective.cost
             }
             flushGroup()
         }
