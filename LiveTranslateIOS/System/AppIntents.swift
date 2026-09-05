@@ -169,6 +169,21 @@ struct OpenBlackboardCaptureIntent: AppIntent {
     }
 }
 
+// MARK: - Open interpreter (随身翻译)
+
+/// 打开随身翻译页面。只导航 —— 绝不在后台开启麦克风（收音永远由
+/// 页面内显式按钮触发）。
+struct OpenInterpreterIntent: AppIntent {
+    static let title: LocalizedStringResource = "打开随身翻译"
+    static let description = IntentDescription("面对面办事口译：俄语工作人员 ⇄ 中文。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult {
+        await AppIntentHost.open(.interpreter)
+        return .result()
+    }
+}
+
 // MARK: - Create task (real repository write)
 
 /// 快速创建任务 — title (required), optional course, optional due date.
@@ -270,6 +285,15 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "当前课堂",
             systemImageName: "waveform"
+        ),
+        AppShortcut(
+            intent: OpenInterpreterIntent(),
+            phrases: [
+                "在 \(.applicationName) 打开随身翻译",
+                "用 \(.applicationName) 做办事翻译"
+            ],
+            shortTitle: "随身翻译",
+            systemImageName: "person.2.wave.2"
         )
     ]
 }

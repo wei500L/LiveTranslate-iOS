@@ -41,6 +41,17 @@ final class SettingsStore {
         /// globally, not per-account): status-only, status + name (the
         /// restrained default), or additionally one latest Chinese line.
         static let lockScreenPrivacy = "ui.lockScreenPrivacy"
+        // 随身翻译 (interpreter) preferences.
+        /// Default errand scene for a new interpreter conversation.
+        static let interpreterDefaultScene = "interpreter.defaultScene"
+        /// Whether Russian stress marks render by default (U+0301).
+        static let interpreterShowStress = "interpreter.showStress"
+        /// Auto-expand turn details after translation completes (off).
+        static let interpreterAutoExpand = "interpreter.autoExpandDetails"
+        /// Auto-speak a finished user reply (off — never automatic).
+        static let interpreterAutoSpeak = "interpreter.autoSpeak"
+        /// Ask save-or-discard when a conversation ends (on).
+        static let interpreterAskToSave = "interpreter.askToSave"
     }
 
     /// Live-classroom translation toggle (new-classroom form). When off,
@@ -138,6 +149,33 @@ final class SettingsStore {
         didSet { defaults.set(attachmentAnalysisModel, forKey: Keys.attachmentAnalysisModel) }
     }
 
+    // MARK: - 随身翻译 (interpreter)
+
+    /// Default errand scene for a new conversation.
+    var interpreterDefaultScene: InterpreterScene {
+        didSet { defaults.set(interpreterDefaultScene.rawValue, forKey: Keys.interpreterDefaultScene) }
+    }
+
+    /// Whether Russian stress marks render by default.
+    var interpreterShowStress: Bool {
+        didSet { defaults.set(interpreterShowStress, forKey: Keys.interpreterShowStress) }
+    }
+
+    /// Auto-expand turn details after translation completes (default off).
+    var interpreterAutoExpand: Bool {
+        didSet { defaults.set(interpreterAutoExpand, forKey: Keys.interpreterAutoExpand) }
+    }
+
+    /// Auto-speak a finished user reply (default off — never automatic).
+    var interpreterAutoSpeak: Bool {
+        didSet { defaults.set(interpreterAutoSpeak, forKey: Keys.interpreterAutoSpeak) }
+    }
+
+    /// Ask save-or-discard when a conversation ends (default on).
+    var interpreterAskToSave: Bool {
+        didSet { defaults.set(interpreterAskToSave, forKey: Keys.interpreterAskToSave) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         preferredBackend = ASRBackendKind(
@@ -178,6 +216,17 @@ final class SettingsStore {
         lockScreenPrivacy = LockScreenPrivacy(
             rawValue: defaults.string(forKey: Keys.lockScreenPrivacy) ?? ""
         ) ?? .statusAndTitle
+        interpreterDefaultScene = InterpreterScene(
+            rawValue: defaults.string(forKey: Keys.interpreterDefaultScene) ?? ""
+        ) ?? .general
+        let interpreterStress = defaults.object(forKey: Keys.interpreterShowStress) as? Bool
+        interpreterShowStress = interpreterStress ?? true
+        let interpreterExpand = defaults.object(forKey: Keys.interpreterAutoExpand) as? Bool
+        interpreterAutoExpand = interpreterExpand ?? false
+        let interpreterSpeak = defaults.object(forKey: Keys.interpreterAutoSpeak) as? Bool
+        interpreterAutoSpeak = interpreterSpeak ?? false
+        let interpreterSave = defaults.object(forKey: Keys.interpreterAskToSave) as? Bool
+        interpreterAskToSave = interpreterSave ?? true
     }
 }
 

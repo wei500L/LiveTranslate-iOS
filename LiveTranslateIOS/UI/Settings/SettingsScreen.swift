@@ -56,6 +56,7 @@ struct SettingsScreen: View {
             translationSection
             studyReviewSection
             attachmentAnalysisSection
+            interpreterSection
             dataSection
             cloudSection
             aboutSection
@@ -370,6 +371,58 @@ struct SettingsScreen: View {
         Binding(
             get: { environment.settings.attachmentAnalysisModel },
             set: { environment.settings.attachmentAnalysisModel = $0 }
+        )
+    }
+
+    /// 随身翻译 (interpreter)：默认场景、重音显示、自动行为与数据范围。
+    /// 复用上方翻译设置与同一个 API Key —— 绝没有第二个翻译 Key、
+    /// 第二套服务器地址或"随身翻译模型"页面。
+    private var interpreterSection: some View {
+        Section {
+            Picker("默认办事场景", selection: interpreterSceneBinding) {
+                ForEach(InterpreterScene.allCases) { scene in
+                    Text(scene.displayName).tag(scene)
+                }
+            }
+            Toggle("默认显示俄语重音", isOn: interpreterStressBinding)
+            Toggle("翻译后自动展开详情", isOn: interpreterAutoExpandBinding)
+            Toggle("翻译后自动朗读", isOn: interpreterAutoSpeakBinding)
+            Toggle("结束时询问保存", isOn: interpreterAskSaveBinding)
+        } header: {
+            Text("随身翻译")
+        } footer: {
+            Text("面对面办事口译（俄语工作人员 ⇄ 中文）。翻译使用上方同一个模型服务与密钥；上下文只携带最近约 8 个对话回合；未保存的草稿只存在本机，不上传云端；保存后的对话文本（不含音频）随账号同步。")
+        }
+    }
+
+    private var interpreterSceneBinding: Binding<InterpreterScene> {
+        Binding(
+            get: { environment.settings.interpreterDefaultScene },
+            set: { environment.settings.interpreterDefaultScene = $0 }
+        )
+    }
+    private var interpreterStressBinding: Binding<Bool> {
+        Binding(
+            get: { environment.settings.interpreterShowStress },
+            set: { environment.settings.interpreterShowStress = $0 }
+        )
+    }
+    private var interpreterAutoExpandBinding: Binding<Bool> {
+        Binding(
+            get: { environment.settings.interpreterAutoExpand },
+            set: { environment.settings.interpreterAutoExpand = $0 }
+        )
+    }
+    private var interpreterAutoSpeakBinding: Binding<Bool> {
+        Binding(
+            get: { environment.settings.interpreterAutoSpeak },
+            set: { environment.settings.interpreterAutoSpeak = $0 }
+        )
+    }
+    private var interpreterAskSaveBinding: Binding<Bool> {
+        Binding(
+            get: { environment.settings.interpreterAskToSave },
+            set: { environment.settings.interpreterAskToSave = $0 }
         )
     }
 

@@ -49,6 +49,12 @@ enum SyncEntityType: String, Codable, Sendable {
     case studyPlan = "study_plan"
     case studyPlanItem = "study_plan_item"
     case studyActivity = "study_activity"
+    // Interpreter conversations (随身翻译, 00014). Wire names are 24/17
+    // chars — both fit the server's VARCHAR(32) entity_type columns.
+    // DRAFT conversations never ride the wire (device-local only);
+    // only saved ones are ever pushed.
+    case interpreterConversation = "interpreter_conversation"
+    case interpreterTurn = "interpreter_turn"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -455,6 +461,29 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var planId: UUID?
     var planItemId: UUID?
     var topicId: UUID?
+    // interpreter conversations (00014, 随身翻译). The conversation
+    // reference rides `conversationId` (plain required reference — a turn
+    // may arrive before its conversation). Titles ride the shared `title`.
+    // The structured-detail snapshot rides as a JSON STRING in
+    // `turnDetails` (the citations convention) — never raw model
+    // responses or prompts.
+    var conversationId: UUID?
+    var interpreterScene: String?
+    var interpreterContextNote: String?
+    var interpreterStatus: String?
+    var interpreterStartedAt: Date?
+    var interpreterEndedAt: Date?
+    var turnSpeaker: String?
+    var turnDirection: String?
+    var turnInputMethod: String?
+    var turnSequence: Int?
+    var turnSourceText: String?
+    var turnPlainRussian: String?
+    var turnStressedRussian: String?
+    var turnChineseText: String?
+    var turnBackTranslation: String?
+    var turnDetails: String?
+    var turnModifiedAt: Date?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -676,6 +705,26 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var planId: UUID?
     var planItemId: UUID?
     var topicId: UUID?
+    // interpreter (随身翻译) — names mirror the push payload (the
+    // interpreterXxx / turnXxx families) so one CodingKeys set covers
+    // records and conflict payloads. Details rides as a JSON string.
+    var conversationId: UUID?
+    var interpreterScene: String?
+    var interpreterContextNote: String?
+    var interpreterStatus: String?
+    var interpreterStartedAt: Date?
+    var interpreterEndedAt: Date?
+    var turnSpeaker: String?
+    var turnDirection: String?
+    var turnInputMethod: String?
+    var turnSequence: Int?
+    var turnSourceText: String?
+    var turnPlainRussian: String?
+    var turnStressedRussian: String?
+    var turnChineseText: String?
+    var turnBackTranslation: String?
+    var turnDetails: String?
+    var turnModifiedAt: Date?
     var serverVersion: Int
     var deleted: Bool
 
@@ -864,6 +913,23 @@ struct SyncServerRecordDTO: Codable, Sendable {
         planId: UUID? = nil,
         planItemId: UUID? = nil,
         topicId: UUID? = nil,
+        conversationId: UUID? = nil,
+        interpreterScene: String? = nil,
+        interpreterContextNote: String? = nil,
+        interpreterStatus: String? = nil,
+        interpreterStartedAt: Date? = nil,
+        interpreterEndedAt: Date? = nil,
+        turnSpeaker: String? = nil,
+        turnDirection: String? = nil,
+        turnInputMethod: String? = nil,
+        turnSequence: Int? = nil,
+        turnSourceText: String? = nil,
+        turnPlainRussian: String? = nil,
+        turnStressedRussian: String? = nil,
+        turnChineseText: String? = nil,
+        turnBackTranslation: String? = nil,
+        turnDetails: String? = nil,
+        turnModifiedAt: Date? = nil,
         serverVersion: Int = 0,
         deleted: Bool = false
     ) {
@@ -1048,6 +1114,23 @@ struct SyncServerRecordDTO: Codable, Sendable {
         self.planId = planId
         self.planItemId = planItemId
         self.topicId = topicId
+        self.conversationId = conversationId
+        self.interpreterScene = interpreterScene
+        self.interpreterContextNote = interpreterContextNote
+        self.interpreterStatus = interpreterStatus
+        self.interpreterStartedAt = interpreterStartedAt
+        self.interpreterEndedAt = interpreterEndedAt
+        self.turnSpeaker = turnSpeaker
+        self.turnDirection = turnDirection
+        self.turnInputMethod = turnInputMethod
+        self.turnSequence = turnSequence
+        self.turnSourceText = turnSourceText
+        self.turnPlainRussian = turnPlainRussian
+        self.turnStressedRussian = turnStressedRussian
+        self.turnChineseText = turnChineseText
+        self.turnBackTranslation = turnBackTranslation
+        self.turnDetails = turnDetails
+        self.turnModifiedAt = turnModifiedAt
         self.serverVersion = serverVersion
         self.deleted = deleted
     }
@@ -1236,6 +1319,23 @@ struct SyncServerRecordDTO: Codable, Sendable {
         planId = try container.decodeIfPresent(UUID.self, forKey: .planId)
         planItemId = try container.decodeIfPresent(UUID.self, forKey: .planItemId)
         topicId = try container.decodeIfPresent(UUID.self, forKey: .topicId)
+        conversationId = try container.decodeIfPresent(UUID.self, forKey: .conversationId)
+        interpreterScene = try container.decodeIfPresent(String.self, forKey: .interpreterScene)
+        interpreterContextNote = try container.decodeIfPresent(String.self, forKey: .interpreterContextNote)
+        interpreterStatus = try container.decodeIfPresent(String.self, forKey: .interpreterStatus)
+        interpreterStartedAt = try container.decodeIfPresent(Date.self, forKey: .interpreterStartedAt)
+        interpreterEndedAt = try container.decodeIfPresent(Date.self, forKey: .interpreterEndedAt)
+        turnSpeaker = try container.decodeIfPresent(String.self, forKey: .turnSpeaker)
+        turnDirection = try container.decodeIfPresent(String.self, forKey: .turnDirection)
+        turnInputMethod = try container.decodeIfPresent(String.self, forKey: .turnInputMethod)
+        turnSequence = try container.decodeIfPresent(Int.self, forKey: .turnSequence)
+        turnSourceText = try container.decodeIfPresent(String.self, forKey: .turnSourceText)
+        turnPlainRussian = try container.decodeIfPresent(String.self, forKey: .turnPlainRussian)
+        turnStressedRussian = try container.decodeIfPresent(String.self, forKey: .turnStressedRussian)
+        turnChineseText = try container.decodeIfPresent(String.self, forKey: .turnChineseText)
+        turnBackTranslation = try container.decodeIfPresent(String.self, forKey: .turnBackTranslation)
+        turnDetails = try container.decodeIfPresent(String.self, forKey: .turnDetails)
+        turnModifiedAt = try container.decodeIfPresent(Date.self, forKey: .turnModifiedAt)
         serverVersion = try container.decodeIfPresent(Int.self, forKey: .serverVersion) ?? 0
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
     }
@@ -1298,4 +1398,6 @@ struct SyncStatusResponseDTO: Codable, Sendable {
     var studyPlanCount: Int?
     var studyPlanItemCount: Int?
     var studyActivityCount: Int?
+    var interpreterConversationCount: Int?
+    var interpreterTurnCount: Int?
 }

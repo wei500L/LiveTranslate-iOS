@@ -599,7 +599,8 @@ final class AppEnvironment {
         CourseMaterial.self, MaterialPage.self, MaterialAnnotation.self,
         CourseAssistantThread.self, CourseAssistantMessage.self,
         Exam.self, ExamTopic.self, StudyPlan.self, StudyPlanItem.self,
-        StudyActivity.self
+        StudyActivity.self,
+        InterpreterConversation.self, InterpreterTurn.self
     ])
 
     // MARK: - Translation configuration (single source of truth)
@@ -715,6 +716,9 @@ final class AppEnvironment {
         // the live classroom stops playback outright (an honest stop, not
         // a mute — the playback screen re-loads on demand).
         playback.stop()
+        // Same rule for interpreter speech: a live classroom's microphone
+        // must never compete with TTS.
+        interpreterSpeech.stop()
         let sessionID = coordinator.activeSessionID
         if liveViewModel == nil
             || liveViewModelSessionID != sessionID
@@ -795,6 +799,24 @@ final class AppEnvironment {
             schedules: schedules, exceptions: exceptions
         ) { courseID in names[courseID] }
     }
+
+    // MARK: - 随身翻译 (interpreter)
+
+    /// The shared study-model service box (the interpreter translation
+    /// service reuses the SAME OpenAI-compatible transport + key + model
+    /// fallback chain — never a third HTTP client, never a second key).
+    /// Read-only handing-out of the box itself; `refreshTranslationService`
+    /// keeps it current.
+    var studyServiceBoxForInterpreter: StudyServiceBox? {
+        studyServiceBox
+    }
+
+    /// Shared interpreter TTS engine — one per app so starting a live
+    /// classroom, playback, or an account switch can stop it from one
+    /// place (the ClassroomPlaybackService one-instance convention).
+    /// Starting the live classroom stops interpreter speech outright:
+    /// never speak over an active microphone.
+    let interpreterSpeech = InterpreterSpeechService()
 
     // MARK: - System-integration bridge
 
@@ -1000,6 +1022,23 @@ final class AppFlow {
 
     func consumeNewSessionForm() {
         pendingNewSessionForm = false
+    }
+
+    // MARK: - 随身翻译 (interpreter) routing
+
+    /// A system surface (intent / shortcut / Spotlight) asked to open the
+    /// interpreter screen — IN-MEMORY ONLY, consumed exactly once by
+    /// HomeScreen, which pushes the page. The route NEVER starts the
+    /// microphone; listening is always an explicit in-page action.
+    var pendingInterpreterScreen = false
+
+    func requestInterpreterScreen() {
+        selectedTab = .home
+        pendingInterpreterScreen = true
+    }
+
+    func consumeInterpreterScreen() {
+        pendingInterpreterScreen = false
     }
 
     #if DEBUG

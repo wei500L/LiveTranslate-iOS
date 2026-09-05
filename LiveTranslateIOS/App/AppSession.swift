@@ -142,6 +142,9 @@ final class AppSession {
             return false
         }
         environment.cloudSync?.shutdown()
+        // 随身翻译：账号切换前停止收音与朗读（麦克风与 TTS 都不得跨
+        // 账号存活；草稿留在旧账号的本地库里）。
+        environment.interpreterSpeech.stop()
         // Class reminders live in the system notification center (global
         // across accounts): the previous profile's pending notifications
         // are cancelled; the new profile's window re-arms on its launch

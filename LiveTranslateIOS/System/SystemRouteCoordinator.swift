@@ -90,6 +90,8 @@ final class SystemRouteCoordinator {
             flow.selectedTab = .home
         case .newSession:
             flow.requestNewSessionForm()
+        case .interpreter:
+            flow.requestInterpreterScreen()
         case .captureBlackboard:
             if environment.coordinator.isRunning {
                 environment.presentLive()

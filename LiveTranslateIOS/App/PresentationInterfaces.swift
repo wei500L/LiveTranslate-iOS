@@ -42,9 +42,12 @@ protocol LiveTranslationCoordinating: AnyObject {
 
 extension LiveTranslationCoordinator: LiveTranslationCoordinating {}
 
-/// Status-only surface of the ASR engine manager the UI consults. Sendable
+/// Status surface + pipeline control of the ASR engine manager. Sendable
 /// because the (MainActor-isolated) manager may be handed to nonisolated
-/// async install checks.
+/// async install checks. The pipeline methods exist so the interpreter
+/// view model can drive the SAME engine instance (never a second one)
+/// through its own listening loop; `ASREngineManager` remains the only
+/// implementation that actually loads GigaAM/sherpa.
 @MainActor
 protocol ASREngineManaging: AnyObject, Sendable {
     var loaded: ASREngineManager.LoadedEngine? { get }
@@ -52,6 +55,14 @@ protocol ASREngineManaging: AnyObject, Sendable {
     /// Disk-backed install check (nonisolated so it can be awaited from
     /// any actor without hopping through the manager first).
     nonisolated func isInstalled(_ kind: ASRBackendKind) async -> Bool
+    /// Load + pin the resident backend for a capture session (throws when
+    /// another session holds the engine — the one-instance invariant).
+    func ensureLoaded(_ kind: ASRBackendKind) async throws
+    /// Session pinning: refuses to load a different backend mid-session.
+    func beginSession() throws
+    func endSession()
+    /// Transcribe one speech segment through the resident engine.
+    func transcribe(_ segment: SpeechSegment) async throws -> ASRResult
 }
 
 extension ASREngineManager: ASREngineManaging, Sendable {}

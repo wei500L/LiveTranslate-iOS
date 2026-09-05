@@ -25,6 +25,7 @@ struct SearchScreen: View {
     @State private var examTopicHits: [(topic: ExamTopic, examID: UUID)] = []
     @State private var planItemHits: [StudyPlanItem] = []
     @State private var activityHits: [StudyActivity] = []
+    @State private var interpreterHits: [InterpreterConversation] = []
     @State private var viewingTerm: GlossaryTerm?
     @State private var viewingTask: StudyTask?
     @State private var viewingCard: StudyCard?
@@ -138,7 +139,7 @@ struct SearchScreen: View {
         let learningCount = termHits.count + cardHits.count + taskHits.count
             + materialHits.count + assistantHits.count
             + examHits.count + examTopicHits.count + planItemHits.count
-            + activityHits.count
+            + activityHits.count + interpreterHits.count
         let sessionPart = results.isEmpty ? "没有匹配的课堂" : "共 \(results.count) 堂课匹配"
         let learningPart = learningCount > 0 ? " · 学习资料 \(learningCount) 条" : ""
         return Text(sessionPart + learningPart)
@@ -153,7 +154,7 @@ struct SearchScreen: View {
         if !termHits.isEmpty || !cardHits.isEmpty || !taskHits.isEmpty
             || !materialHits.isEmpty || !assistantHits.isEmpty
             || !examHits.isEmpty || !examTopicHits.isEmpty || !planItemHits.isEmpty
-            || !activityHits.isEmpty {
+            || !activityHits.isEmpty || !interpreterHits.isEmpty {
             VStack(alignment: .leading, spacing: LTSpacing.s) {
                 LTSectionHeader(title: "学习资料")
                 VStack(spacing: LTSpacing.xs) {
@@ -275,6 +276,23 @@ struct SearchScreen: View {
                             ),
                             chip: "学习活动"
                         )
+                    }
+                    ForEach(interpreterHits.prefix(3)) { conversation in
+                        NavigationLink {
+                            InterpreterConversationDetailView(
+                                conversationID: conversation.id,
+                                environment: environment
+                            )
+                        } label: {
+                            learningRow(
+                                symbol: "person.2.wave.2",
+                                tint: LTColors.accentCyan,
+                                title: conversation.title,
+                                subtitle: "\(conversation.scene.displayName) · \(conversation.startedAt.formatted(date: .abbreviated, time: .omitted))",
+                                chip: "随身翻译"
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -452,6 +470,10 @@ struct SearchScreen: View {
         examTopicHits = topicMatches(query)
         planItemHits = (try? environment.repository.studyPlanItems(matching: query)) ?? []
         activityHits = (try? environment.repository.studyActivities(matching: query)) ?? []
+        // 随身翻译：标题、场景、中文原文/翻译、俄语原文/回复（repository
+        // 的 matching 查询）。未保存草稿、API 错误、prompt、原始模型
+        // 响应一律不索引。
+        interpreterHits = (try? environment.repository.interpreterConversations(matching: query)) ?? []
         appliedQuery = query
     }
 

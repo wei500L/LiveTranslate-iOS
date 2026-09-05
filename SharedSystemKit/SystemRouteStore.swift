@@ -44,6 +44,9 @@ enum SystemRouteRequest: Codable, Sendable, Equatable {
     /// The new-classroom form (explicit user confirmation before the
     /// microphone starts).
     case newSession
+    /// The interpreter screen (随身翻译 — face-to-face errand dialogs).
+    /// Opens the page only; the microphone is never started by a route.
+    case interpreter
 }
 
 // MARK: - Route store

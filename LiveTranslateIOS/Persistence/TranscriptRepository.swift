@@ -620,6 +620,72 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func studyActivities(matching query: String) throws -> [StudyActivity]
     func applyRemoteStudyActivity(record: SyncServerRecordDTO, serverVersion: Int) throws
     func deleteStudyActivityByID(_ id: UUID) throws
+
+    // MARK: Interpreter (随身翻译)
+
+    /// The active draft (at most one per account; nil = none).
+    var interpreterDraft: InterpreterConversation? { get }
+    /// Creates a fresh draft (refuses while one is active). Draft rows
+    /// NEVER notify sync (device-local until saved).
+    func startInterpreterDraft(scene: InterpreterScene, contextNote: String) throws -> InterpreterConversation
+    /// The draft's turns in sequence order.
+    func interpreterTurns(conversationID: UUID) throws -> [InterpreterTurn]
+    /// Appends a counterpart (ru2zh) turn from local ASR. The Russian
+    /// source lands immediately (translation pending); draft rows never
+    /// notify sync.
+    func addInterpreterCounterpartTurn(
+        conversationID: UUID, russian: String, inputMethod: InterpreterInputMethod
+    ) throws -> InterpreterTurn
+    /// Appends a user (zh2ru) turn — the Chinese lands first, translation
+    /// pending. Draft rows never notify sync.
+    func addInterpreterUserTurn(
+        conversationID: UUID, chinese: String, inputMethod: InterpreterInputMethod
+    ) throws -> InterpreterTurn
+    /// Writes a completed structured translation onto a turn. Draft rows
+    /// never notify sync.
+    func completeInterpreterTurnTranslation(
+        _ turn: InterpreterTurn,
+        chinese: String?, russian: String?, stressedRussian: String?,
+        backTranslation: String?, details: InterpreterTurnDetails?
+    ) throws
+    /// Marks a turn's translation failed (the source text stays).
+    func failInterpreterTurnTranslation(_ turn: InterpreterTurn) throws
+    /// User edit of a turn's source text (stamps modifiedAt — the merge
+    /// tiebreak). Notifies sync only for saved conversations.
+    func updateInterpreterTurnSource(_ turn: InterpreterTurn, text: String) throws
+    /// Deletes one turn (draft delete; also delete-wins for saved rows).
+    /// Notifies sync only for saved conversations.
+    func deleteInterpreterTurn(_ turn: InterpreterTurn) throws
+    /// Persists the draft as a saved record: stamps endedAt, flips
+    /// status, notifies sync for the conversation AND its turns. Empty
+    /// conversations are deleted instead (no history garbage).
+    func saveInterpreterDraft(title: String?) throws
+    /// Discards the draft and its turns outright (no wire traffic).
+    func discardInterpreterDraft() throws
+    /// A pending-draft recovery prompt: the draft's turn count, or nil
+    /// when no draft exists.
+    func interpreterDraftTurnCount() throws -> Int?
+    /// Saved conversations, newest first (历史记录 inside 随身翻译 —
+    /// never the classroom record list).
+    func savedInterpreterConversations() throws -> [InterpreterConversation]
+    /// All saved conversations whose title/scene/turn texts match the
+    /// query (global search).
+    func interpreterConversations(matching query: String) throws -> [InterpreterConversation]
+    /// One conversation by id.
+    func interpreterConversation(id: UUID) -> InterpreterConversation?
+    /// Renames a saved conversation. Notifies sync.
+    func renameInterpreterConversation(_ conversation: InterpreterConversation, to title: String) throws
+    /// Updates scene + context note of a saved conversation. Notifies
+    /// sync (used by 继续作为新对话的上下文副本).
+    func updateInterpreterConversationMeta(
+        _ conversation: InterpreterConversation, contextNote: String
+    ) throws
+    /// Deletes a saved conversation and its turns. Notifies sync.
+    func deleteInterpreterConversation(_ conversation: InterpreterConversation) throws
+    func applyRemoteInterpreterConversation(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func applyRemoteInterpreterTurn(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteInterpreterConversationByID(_ id: UUID) throws
+    func deleteInterpreterTurnByID(_ id: UUID) throws
 }
 
 /// A new exam (title + date required). AI candidates pass

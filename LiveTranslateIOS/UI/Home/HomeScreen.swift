@@ -7,6 +7,7 @@ struct HomeScreen: View {
     @State private var viewModel = HomeViewModel()
     @State private var showNewSessionSheet = false
     @State private var showModelManagement = false
+    @State private var pushingInterpreter = false
     /// 待阅读资料 push (the restrained materials entry).
     @State private var pushingMaterials = false
     /// 智能收件箱 push (only while unprocessed items exist).
@@ -29,6 +30,7 @@ struct HomeScreen: View {
                             ongoingBanner
                         }
                         startCard
+                        interpreterCard
                         if environment.inbox.pendingCount > 0 {
                             inboxSection
                         }
@@ -61,6 +63,9 @@ struct HomeScreen: View {
             }
             .navigationDestination(isPresented: $showModelManagement) {
                 ModelManagementScreen()
+            }
+            .navigationDestination(isPresented: $pushingInterpreter) {
+                InterpreterScreen()
             }
             .navigationDestination(for: ScheduleRoute.self) { route in
                 ScheduleScreen()
@@ -111,6 +116,12 @@ struct HomeScreen: View {
             if environment.flow.pendingNewSessionForm {
                 environment.flow.consumeNewSessionForm()
                 showNewSessionSheet = true
+            }
+            // A system surface (intent / shortcut) asked to open 随身翻译 —
+            // push the page (the route never starts the microphone).
+            if environment.flow.pendingInterpreterScreen {
+                environment.flow.consumeInterpreterScreen()
+                pushingInterpreter = true
             }
             startMinuteTimer()
             environment.inbox.reload()
@@ -514,6 +525,45 @@ struct HomeScreen: View {
 
     /// Mic glyph in a green-tinted circle. A single static glow shadow —
     /// no animation loop, so it never competes with GPU work.
+    /// 随身翻译入口卡 —— 与"开始课堂"并列但视觉区分（青色，人像图标）：
+    /// 课堂是录音转写记录，随身翻译是面对面的轻量口译，用途不同。
+    private var interpreterCard: some View {
+        Button {
+            pushingInterpreter = true
+        } label: {
+            HStack(spacing: LTSpacing.m) {
+                Image(systemName: "person.2.wave.2.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(LTColors.accentCyan)
+                    .frame(width: 52, height: 52)
+                    .background(
+                        Circle().fill(
+                            LinearGradient(
+                                colors: [LTColors.accentCyan.opacity(0.24), LTColors.accentCyan.opacity(0.10)],
+                                startPoint: .topLeading, endPoint: .bottomTrailing
+                            )
+                        )
+                    )
+                    .overlay(Circle().strokeBorder(LTColors.accentCyan.opacity(0.30), lineWidth: 0.5))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("随身翻译")
+                        .font(LTTypography.cardTitle)
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text("办事对话 · 俄语工作人员 ⇄ 中文")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(LTColors.accentCyan.opacity(0.9))
+            }
+            .ltCard(padding: LTSpacing.l)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("随身翻译：面对面办事口译"))
+    }
+
     private var micIcon: some View {
         Image(systemName: "mic.fill")
             .font(.system(size: 20, weight: .semibold))

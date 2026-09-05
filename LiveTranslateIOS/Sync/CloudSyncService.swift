@@ -666,6 +666,42 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    // MARK: - Interpreter (随身翻译) enqueue
+
+    /// Draft conversations never ride the wire — the repository only
+    /// notifies for saved rows, and this guard is the second lock on the
+    /// same door (the pendingConfirm candidate convention).
+    private func enqueueInterpreterConversationUpsert(_ conversation: InterpreterConversation) {
+        guard conversation.status == .saved else { return }
+        let payload = Self.payload(for: conversation)
+        let item = SyncOutboxItem(
+            entityType: .interpreterConversation,
+            entityID: conversation.id,
+            operation: .upsert,
+            baseServerVersion: conversation.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueInterpreterTurnUpsert(_ turn: InterpreterTurn) {
+        // A turn of a still-draft conversation is still a draft row.
+        guard let conversation = repository.interpreterConversation(id: turn.conversationID),
+              conversation.status == .saved else { return }
+        var payload = Self.payload(for: turn)
+        payload.conversationId = turn.conversationID
+        let item = SyncOutboxItem(
+            entityType: .interpreterTurn,
+            entityID: turn.id,
+            operation: .upsert,
+            baseServerVersion: turn.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -1057,6 +1093,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteStudyPlanItemByID(entityID)
         case .studyActivity:
             try? repository.deleteStudyActivityByID(entityID)
+        case .interpreterConversation:
+            try? repository.deleteInterpreterConversationByID(entityID)
+        case .interpreterTurn:
+            try? repository.deleteInterpreterTurnByID(entityID)
         }
     }
 
@@ -1129,6 +1169,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteStudyPlanItem(record: record, serverVersion: serverVersion)
         case .studyActivity:
             try? repository.applyRemoteStudyActivity(record: record, serverVersion: serverVersion)
+        case .interpreterConversation:
+            try? repository.applyRemoteInterpreterConversation(record: record, serverVersion: serverVersion)
+        case .interpreterTurn:
+            try? repository.applyRemoteInterpreterTurn(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -1933,6 +1977,39 @@ final class CloudSyncService: AuthenticationService {
             activityNote: activity.note.isEmpty ? nil : activity.note
         )
     }
+
+    /// Interpreter conversation (随身翻译). context_note is full desired
+    /// state (empty string clears; the client always sends it).
+    static func payload(for conversation: InterpreterConversation) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: conversation.title,
+            interpreterScene: conversation.sceneRaw,
+            interpreterContextNote: conversation.contextNote,
+            interpreterStatus: conversation.statusRaw,
+            interpreterStartedAt: conversation.startedAt,
+            interpreterEndedAt: conversation.endedAt
+        )
+    }
+
+    /// Interpreter turn. The stressed Russian rides alongside the plain
+    /// one; details is the user-kept structured snapshot as a JSON string
+    /// (never raw model responses). modified_at is the user-edit
+    /// tiebreak. Draft turns (pending translation) never enqueue.
+    static func payload(for turn: InterpreterTurn) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            turnSpeaker: turn.speakerRaw,
+            turnDirection: turn.directionRaw,
+            turnInputMethod: turn.inputMethodRaw,
+            turnSequence: turn.sequence,
+            turnSourceText: turn.sourceText,
+            turnPlainRussian: turn.plainRussian.isEmpty ? nil : turn.plainRussian,
+            turnStressedRussian: turn.stressedRussian.isEmpty ? nil : turn.stressedRussian,
+            turnChineseText: turn.chineseText.isEmpty ? nil : turn.chineseText,
+            turnBackTranslation: turn.backTranslation.isEmpty ? nil : turn.backTranslation,
+            turnDetails: turn.detailsJSON.isEmpty ? nil : turn.detailsJSON,
+            turnModifiedAt: turn.modifiedAt
+        )
+    }
 }
 
 // MARK: - TranscriptMutationObserving
@@ -2001,6 +2078,16 @@ protocol TranscriptMutationObserving: AnyObject {
     func studyActivityCreated(_ activity: StudyActivity)
     func studyActivityUpdated(_ activity: StudyActivity)
     func studyActivityDeleted(id: UUID)
+    // 随身翻译 (interpreter). Only SAVED conversations ever notify —
+    // draft rows are device-local and never ride the wire (the
+    // repository enforces this at the mutation site, mirroring the
+    // pendingConfirm candidate convention).
+    func interpreterConversationSaved(_ conversation: InterpreterConversation)
+    func interpreterConversationUpdated(_ conversation: InterpreterConversation)
+    func interpreterConversationDeleted(id: UUID)
+    func interpreterTurnCreated(_ turn: InterpreterTurn)
+    func interpreterTurnUpdated(_ turn: InterpreterTurn)
+    func interpreterTurnDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -2238,5 +2325,29 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func studyActivityDeleted(id: UUID) {
         enqueueDelete(entityType: .studyActivity, entityID: id)
+    }
+
+    func interpreterConversationSaved(_ conversation: InterpreterConversation) {
+        enqueueInterpreterConversationUpsert(conversation)
+    }
+
+    func interpreterConversationUpdated(_ conversation: InterpreterConversation) {
+        enqueueInterpreterConversationUpsert(conversation)
+    }
+
+    func interpreterConversationDeleted(id: UUID) {
+        enqueueDelete(entityType: .interpreterConversation, entityID: id)
+    }
+
+    func interpreterTurnCreated(_ turn: InterpreterTurn) {
+        enqueueInterpreterTurnUpsert(turn)
+    }
+
+    func interpreterTurnUpdated(_ turn: InterpreterTurn) {
+        enqueueInterpreterTurnUpsert(turn)
+    }
+
+    func interpreterTurnDeleted(id: UUID) {
+        enqueueDelete(entityType: .interpreterTurn, entityID: id)
     }
 }

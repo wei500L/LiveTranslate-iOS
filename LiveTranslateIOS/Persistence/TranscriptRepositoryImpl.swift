@@ -537,6 +537,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let activity = try context.fetch(descriptor).first else { return }
             activity.serverVersion = max(activity.serverVersion, version)
+        case .interpreterConversation:
+            let descriptor = FetchDescriptor<InterpreterConversation>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let conversation = try context.fetch(descriptor).first else { return }
+            conversation.serverVersion = max(conversation.serverVersion, version)
+        case .interpreterTurn:
+            let descriptor = FetchDescriptor<InterpreterTurn>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let turn = try context.fetch(descriptor).first else { return }
+            turn.serverVersion = max(turn.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }
@@ -1026,6 +1038,30 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
                 baseServerVersion: activity.serverVersion,
                 payload: payload
             ))
+        }
+        // Interpreter (随身翻译): conversations before their turns. Draft
+        // and discarded conversations are device-local — never uploaded.
+        let interpreterConversations = (try? context.fetch(FetchDescriptor<InterpreterConversation>())) ?? []
+        for conversation in interpreterConversations where conversation.status == .saved {
+            items.append(SyncOutboxItem(
+                entityType: .interpreterConversation,
+                entityID: conversation.id,
+                operation: .upsert,
+                baseServerVersion: conversation.serverVersion,
+                payload: CloudSyncService.payload(for: conversation)
+            ))
+            let turns = (try? interpreterTurns(conversationID: conversation.id)) ?? []
+            for turn in turns {
+                var payload = CloudSyncService.payload(for: turn)
+                payload.conversationId = turn.conversationID
+                items.append(SyncOutboxItem(
+                    entityType: .interpreterTurn,
+                    entityID: turn.id,
+                    operation: .upsert,
+                    baseServerVersion: turn.serverVersion,
+                    payload: payload
+                ))
+            }
         }
         progress?(sessions.count, sessions.count)
         return items

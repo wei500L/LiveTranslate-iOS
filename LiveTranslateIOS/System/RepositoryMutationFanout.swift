@@ -265,6 +265,30 @@ final class RepositoryMutationFanout: TranscriptMutationObserving {
         primary?.studyActivityDeleted(id: id)
         auxiliaries.forEach { $0.studyActivityDeleted(id: id) }
     }
+    func interpreterConversationSaved(_ conversation: InterpreterConversation) {
+        primary?.interpreterConversationSaved(conversation)
+        auxiliaries.forEach { $0.interpreterConversationSaved(conversation) }
+    }
+    func interpreterConversationUpdated(_ conversation: InterpreterConversation) {
+        primary?.interpreterConversationUpdated(conversation)
+        auxiliaries.forEach { $0.interpreterConversationUpdated(conversation) }
+    }
+    func interpreterConversationDeleted(id: UUID) {
+        primary?.interpreterConversationDeleted(id: id)
+        auxiliaries.forEach { $0.interpreterConversationDeleted(id: id) }
+    }
+    func interpreterTurnCreated(_ turn: InterpreterTurn) {
+        primary?.interpreterTurnCreated(turn)
+        auxiliaries.forEach { $0.interpreterTurnCreated(turn) }
+    }
+    func interpreterTurnUpdated(_ turn: InterpreterTurn) {
+        primary?.interpreterTurnUpdated(turn)
+        auxiliaries.forEach { $0.interpreterTurnUpdated(turn) }
+    }
+    func interpreterTurnDeleted(id: UUID) {
+        primary?.interpreterTurnDeleted(id: id)
+        auxiliaries.forEach { $0.interpreterTurnDeleted(id: id) }
+    }
 }
 
 // MARK: - System-surface bridge
@@ -444,4 +468,10 @@ extension TranscriptMutationObserving {
     func studyActivityCreated(_ activity: StudyActivity) {}
     func studyActivityUpdated(_ activity: StudyActivity) {}
     func studyActivityDeleted(id: UUID) {}
+    func interpreterConversationSaved(_ conversation: InterpreterConversation) {}
+    func interpreterConversationUpdated(_ conversation: InterpreterConversation) {}
+    func interpreterConversationDeleted(id: UUID) {}
+    func interpreterTurnCreated(_ turn: InterpreterTurn) {}
+    func interpreterTurnUpdated(_ turn: InterpreterTurn) {}
+    func interpreterTurnDeleted(id: UUID) {}
 }

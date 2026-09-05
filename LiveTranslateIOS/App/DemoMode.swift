@@ -16,6 +16,7 @@ struct DemoLaunchOptions {
         case live
         case records
         case detail
+        case interpreter
     }
 
     let screen: Screen
@@ -212,6 +213,12 @@ extension AppEnvironment {
         case .detail:
             // RecordsScreen's onAppear pushes the seeded detail.
             flow.selectedTab = .records
+        case .interpreter:
+            // HomeScreen's onAppear consumes the interpreter pending
+            // route (the demo never opens the microphone — the canned
+            // conversation is seeded in the demo SwiftData store).
+            flow.selectedTab = .home
+            flow.requestInterpreterScreen()
         }
     }
 }
@@ -226,6 +233,17 @@ final class DemoEngineManager: ASREngineManaging {
     var loaded: ASREngineManager.LoadedEngine? { nil }
     var sessionActive: Bool { false }
     nonisolated func isInstalled(_ kind: ASRBackendKind) async -> Bool { true }
+    // The demo never starts a real listening loop — these exist so the
+    // conformance compiles; a demo tap on 听对方说 fails honestly rather
+    // than loading any model.
+    func ensureLoaded(_ kind: ASRBackendKind) async throws {
+        throw ASREngineError.engineNotLoaded
+    }
+    func beginSession() throws {}
+    func endSession() {}
+    func transcribe(_ segment: SpeechSegment) async throws -> ASRResult {
+        throw ASREngineError.engineNotLoaded
+    }
 }
 
 // MARK: - Demo model manager (no-op stand-in)
@@ -327,6 +345,19 @@ struct DemoStudyReviewService: StudyReviewModelService {
     var isConfiguredNow: Bool { true }
 
     func complete(systemPrompt: String, userPrompt: String, maxTokens: Int) async throws -> String {
+        // 随身翻译 (interpreter) demo：一次宿舍办理对话的 canned 结构化
+        // 响应 —— 驱动真实的 ViewModel / 解析 / 持久化链路。绝不进入
+        // Release（整文件 #if DEBUG）。
+        if systemPrompt.hasPrefix("你是一位现场口译助手") {
+            if userPrompt.contains("对方刚刚说") {
+                return """
+                {"chinese": "您有护照复印件吗？", "stressedRussian": "У вас есть ко́пия па́спорта?", "intent": "询问材料", "keywords": ["паспорт 护照", "копия 复印件"], "ambiguity": "", "suggestions": ["我只有原件，可以在这里复印吗？", "我明天带来复印件"]}
+                """
+            }
+            return """
+            {"russian": "У меня есть только оригинал. Мо́жно сде́лать ко́пию здесь?", "stressedRussian": "У меня есть то́лько оригина́л. Мо́жно сде́лать ко́пию здесь?", "backTranslation": "我只有原件。可以在这里复印吗？", "keywords": ["оригинал 原件", "копия 复印件"], "politeAlternative": "Не могли бы вы подсказать, где можно сделать копию документа?", "simpleAlternative": "Где можно сделать копию?", "uncertainties": []}
+            """
+        }
         if systemPrompt == StudyReviewPrompt.extractionSystemPrompt() {
             return """
             {"topic": "多元函数微分的引入", "keyPoints": [{"text": "偏导数描述多元函数沿单一方向的变化率", "cites": [1]}, {"text": "可微要求所有偏导数存在且连续", "cites": [2]}], "terms": [{"russian": "частная производная", "chinese": "偏导数", "explanation": "其余变量固定时函数对一个变量的导数", "cites": [1]}], "assignments": [{"text": "完成习题集第 4 章第 1–8 题", "cites": [2]}], "uncertainties": [{"text": "一段关于几何解释的话转录不完整", "cites": [1]}]}
@@ -1166,6 +1197,45 @@ enum DemoSeed {
         for target in bookmarkTargets {
             _ = bookmarks.toggleBookmark(sessionID: target.sessionID, entryID: target.entryID)
         }
+
+        // 随身翻译 demo：一条已保存的宿舍办理对话（canned 种子直接走
+        // context.insert —— 不经 repository → 不进 outbox，生产代码没有
+        // 任何硬编码翻译结果）。
+        let demoConversation = InterpreterConversation(
+            title: "宿舍办理 · 9月5日",
+            sceneRaw: InterpreterScene.dorm.rawValue,
+            contextNote: "我是莫斯科国立大学留学生",
+            statusRaw: InterpreterConversationStatus.saved.rawValue,
+            startedAt: day(0, hour: 10),
+            endedAt: day(0, hour: 10, minute: 12)
+        )
+        context.insert(demoConversation)
+        context.insert(InterpreterTurn(
+            conversationID: demoConversation.id,
+            speakerRaw: InterpreterSpeaker.counterpart.rawValue,
+            directionRaw: InterpreterDirection.ru2zh.rawValue,
+            inputMethodRaw: InterpreterInputMethod.audio.rawValue,
+            sequence: 1,
+            sourceText: "У вас есть копия паспорта?",
+            plainRussian: "У вас есть копия паспорта?",
+            stressedRussian: "У вас есть ко́пия па́спорта?",
+            chineseText: "您有护照复印件吗？",
+            translationStatusRaw: InterpreterTurnTranslationStatus.completed.rawValue
+        ))
+        context.insert(InterpreterTurn(
+            conversationID: demoConversation.id,
+            speakerRaw: InterpreterSpeaker.user.rawValue,
+            directionRaw: InterpreterDirection.zh2ru.rawValue,
+            inputMethodRaw: InterpreterInputMethod.text.rawValue,
+            sequence: 2,
+            sourceText: "我只有原件，可以在这里复印吗？",
+            plainRussian: "У меня есть только оригинал. Можно сделать копию здесь?",
+            stressedRussian: "У меня есть то́лько оригина́л. Мо́жно сде́лать ко́пию здесь?",
+            chineseText: "我只有原件，可以在这里复印吗？",
+            backTranslation: "我只有原件。可以在这里复印吗？",
+            translationStatusRaw: InterpreterTurnTranslationStatus.completed.rawValue
+        ))
+        try? context.save()
 
         flow.demoDetailSessionID = detailSessionID
     }
