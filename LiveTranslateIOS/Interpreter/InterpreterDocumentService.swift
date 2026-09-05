@@ -369,8 +369,9 @@ final class InterpreterDocumentService {
                 )
                 image.draw(in: CGRect(origin: origin, size: drawSize))
             }
-            let page = PDFPage(image: full)
-            pdfDocument.insert(page, at: index)
+            if let page = PDFPage(image: full) {
+                pdfDocument.insert(page, at: index)
+            }
         }
         guard pdfDocument.pageCount > 0 else { return nil }
         return pdfDocument.dataRepresentation()

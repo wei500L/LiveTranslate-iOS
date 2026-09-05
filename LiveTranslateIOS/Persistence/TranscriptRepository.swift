@@ -704,7 +704,7 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     func addInterpreterDocument(_ draft: InterpreterDocumentDraft) throws -> InterpreterDocument
     /// Status transition of the local state machine. Local-only.
     func setInterpreterDocumentStatus(
-        _ document: InterpreterDocument, status: InterpreterDocumentStatus, errorSummary: String
+        _ document: InterpreterDocument, status: InterpreterDocumentStatus, errorSummary: String?
     ) throws
     /// Records a landed extraction sidecar. Local-only.
     func setInterpreterDocumentExtraction(
@@ -735,6 +735,17 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     ) throws
     /// Row counts for the storage-management UI.
     func interpreterDocumentCounts() throws -> (documents: Int, withOriginals: Int)
+}
+
+extension ClassroomRepositoryProtocol {
+    /// Default-argument shim for protocol-existential call sites (the
+    /// implementation signature carries its own default, but dynamic
+    /// dispatch through `any ClassroomRepositoryProtocol` cannot see it).
+    func setInterpreterDocumentStatus(
+        _ document: InterpreterDocument, status: InterpreterDocumentStatus
+    ) throws {
+        try setInterpreterDocumentStatus(document, status: status, errorSummary: nil)
+    }
 }
 
 /// A new exam (title + date required). AI candidates pass

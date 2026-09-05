@@ -88,10 +88,10 @@ extension TranscriptRepository {
 
     /// Status transitions (the local state machine; never syncs).
     func setInterpreterDocumentStatus(
-        _ document: InterpreterDocument, status: InterpreterDocumentStatus, errorSummary: String = ""
+        _ document: InterpreterDocument, status: InterpreterDocumentStatus, errorSummary: String? = nil
     ) throws {
         document.statusRaw = status.rawValue
-        if !errorSummary.isEmpty {
+        if let errorSummary, !errorSummary.isEmpty {
             document.errorSummary = errorSummary
         } else if status != .failed {
             document.errorSummary = ""

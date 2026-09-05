@@ -549,7 +549,7 @@ final class InterpreterViewModel {
                 recentTurns: projections
             )
             // Scope 校验：会话已切换/删除 → 丢弃迟到结果。
-            guard conversation?.id == conversationID,
+            guard self.conversation?.id == conversationID,
                   repository.interpreterConversation(id: conversationID) != nil else { return }
             try? repository.completeInterpreterTurnTranslation(
                 turn,
@@ -565,7 +565,7 @@ final class InterpreterViewModel {
         } catch {
             // Scope 校验同样适用于失败写回。
             if repository.interpreterConversation(id: conversationID) != nil,
-               conversation?.id == conversationID {
+               self.conversation?.id == conversationID {
                 lastTranslationError = Self.describeTranslationError(error)
                 try? repository.failInterpreterTurnTranslation(turn)
                 reloadTurns()
@@ -616,7 +616,7 @@ final class InterpreterViewModel {
             let analysis = try await service.analyzeDocument(
                 sources: sources, scene: scene
             )
-            guard conversation?.id == conversationID,
+            guard self.conversation?.id == conversationID,
                   repository.interpreterConversation(id: conversationID) != nil else { return }
             try? repository.completeInterpreterTurnTranslation(
                 turn,
@@ -630,7 +630,7 @@ final class InterpreterViewModel {
         } catch is CancellationError {
         } catch {
             if repository.interpreterConversation(id: conversationID) != nil,
-               conversation?.id == conversationID {
+               self.conversation?.id == conversationID {
                 lastTranslationError = Self.describeTranslationError(error)
                 try? repository.failInterpreterTurnTranslation(turn)
                 reloadTurns()
@@ -662,7 +662,7 @@ final class InterpreterViewModel {
         let service = InterpreterDocumentAIService(model: modelService)
         do {
             let answer = try await service.checkFieldValue(field: field, userValue: value)
-            guard conversation?.id == conversationID,
+            guard self.conversation?.id == conversationID,
                   repository.interpreterConversation(id: conversationID) != nil else { return }
             try? repository.completeInterpreterTurnTranslation(
                 turn,
@@ -676,7 +676,7 @@ final class InterpreterViewModel {
         } catch is CancellationError {
         } catch {
             if repository.interpreterConversation(id: conversationID) != nil,
-               conversation?.id == conversationID {
+               self.conversation?.id == conversationID {
                 lastTranslationError = Self.describeTranslationError(error)
                 try? repository.failInterpreterTurnTranslation(turn)
                 reloadTurns()
@@ -728,7 +728,7 @@ final class InterpreterViewModel {
             let analysis = try await service.analyzePages(
                 images: images, question: question, scene: scene, imageService: imageService
             )
-            guard conversation?.id == conversationID,
+            guard self.conversation?.id == conversationID,
                   repository.interpreterConversation(id: conversationID) != nil else { return }
             try? repository.completeInterpreterTurnTranslation(
                 turn,
@@ -742,7 +742,7 @@ final class InterpreterViewModel {
         } catch is CancellationError {
         } catch {
             if repository.interpreterConversation(id: conversationID) != nil,
-               conversation?.id == conversationID {
+               self.conversation?.id == conversationID {
                 lastTranslationError = Self.describeTranslationError(error)
                 try? repository.failInterpreterTurnTranslation(turn)
                 reloadTurns()
