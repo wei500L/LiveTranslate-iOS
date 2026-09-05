@@ -68,12 +68,12 @@ final class PrivacyLockController {
 
     init(
         settings: SettingsStore = .shared,
-        authenticate: @escaping @MainActor () async -> AuthenticationResult = {
-            await Self.systemAuthenticate()
-        }
+        authenticate: (@MainActor () async -> AuthenticationResult)? = nil
     ) {
         self.settings = settings
-        self.authenticate = authenticate
+        // Self cannot be referenced in a default argument — resolve the
+        // system authenticator here instead.
+        self.authenticate = authenticate ?? Self.systemAuthenticate
         // A launch starts LOCKED when the feature is armed — a relaunch
         // is indistinguishable from a fresh entry and must not inherit a
         // previous session's authorization.
@@ -198,6 +198,11 @@ final class PrivacyLockController {
     /// custom PIN ever exists.
     @MainActor
     private static func systemAuthenticate() async -> AuthenticationResult {
+        await systemAuthenticateImpl()
+    }
+
+    @MainActor
+    private static func systemAuthenticateImpl() async -> AuthenticationResult {
         let context = LAContext()
         // Fall back to the passcode when biometry is missing/locked out.
         context.localizedFallbackTitle = String(localized: "使用密码")

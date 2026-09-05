@@ -37,8 +37,11 @@ struct KeychainStore: Sendable {
         }
     }
 
-    /// The accessibility every item of this store must carry.
-    private static let accessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    /// The accessibility every item of this store must carry. Computed —
+    /// a stored static CFString is not concurrency-safe under Swift 6.
+    private static var accessibility: CFString {
+        kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    }
 
     func set(_ value: String, forKey key: String) throws {
         guard let data = value.data(using: .utf8) else { throw KeychainError.dataConversion }

@@ -35,6 +35,7 @@ enum DataProtectionReconciler {
         var interpreterDocumentsRoot: URL
         var sessionsRoot: URL
         var modelsRoot: URL?
+        var aiActivityRoot: URL
 
         static func forActiveProfile(accountID: UUID?) -> Roots {
             let support = FileManager.default.urls(
@@ -45,6 +46,11 @@ enum DataProtectionReconciler {
             let storeRoot = accountID.map {
                 AccountScope.accountDirectory(accountID: $0)
             } ?? support
+            // The AI activity ledger's root (mirrors AIActivityLog's
+            // layout: the account dir, or the guest's global file).
+            let aiActivityRoot = storeRoot.appendingPathComponent(
+                "AIActivity", isDirectory: true
+            )
             return Roots(
                 storeRoot: storeRoot,
                 attachmentsRoot: AccountScope.attachmentsRoot(accountID: accountID),
@@ -53,7 +59,8 @@ enum DataProtectionReconciler {
                     accountID: accountID
                 ),
                 sessionsRoot: SessionRecordings.rootDirectory,
-                modelsRoot: try? ModelPaths.modelsRoot()
+                modelsRoot: try? ModelPaths.modelsRoot(),
+                aiActivityRoot: aiActivityRoot
             )
         }
     }
@@ -70,8 +77,8 @@ enum DataProtectionReconciler {
 
         func run(
             _ root: URL, _ cls: DataProtectionClass,
-            matching: ((URL) -> Bool)? = nil,
-            label: String
+            label: String,
+            matching: ((URL) -> Bool)? = nil
         ) {
             // Store-root special case: the whole account directory gets
             // the working class, but its Attachments/Materials/
