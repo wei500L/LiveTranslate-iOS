@@ -189,11 +189,14 @@ final class PrivacyHardeningTests: XCTestCase {
         let url = try store.stage(fileName: "LiveTranslate-课堂.md", data: Data("内容".utf8))
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
         XCTAssertEqual(store.entryCount, 1)
-        // 受控目录内的文件带 .complete 保护 + 排除备份。
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .complete)
+        // 受控目录内的文件带 .complete 保护 + 排除备份(备份排除在模拟器
+        // 同样生效;保护等级读回见下方设备条件断言)。
         let values = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
+        if FileProtectionTests.protectionRoundTripSupported {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .complete)
+        }
         XCTAssertGreaterThan(store.totalBytes(), 0)
 
         // 未到期:不得删除(分享面板可能还开着)。
@@ -243,6 +246,9 @@ final class PrivacyHardeningTests: XCTestCase {
             .appendingPathComponent("ai-activity-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: file) }
         let log = AIActivityLog(fileURL: file)
+        let previous = AIActivityLog.shared
+        AIActivityLog.shared = log
+        defer { AIActivityLog.shared = previous }
 
         await AICallScope.with(
             AICallContext(feature: .interpreterDocumentQA, textCategory: .documentText, masked: true)

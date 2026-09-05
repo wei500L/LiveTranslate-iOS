@@ -151,7 +151,11 @@ final class InterpreterCitationBoundaryTests: XCTestCase {
         // 标签进入本地来源;details 只剩非来源信息 + 标记。
         let localSources = try XCTUnwrap(turn.localSources)
         XCTAssertEqual(localSources.count, 2)
-        XCTAssertEqual(localSources.map(\.documentName).sorted(), ["登记表.pdf", "护照_扫描.pdf"])
+        XCTAssertEqual(
+            Set(localSources.map(\.documentName)),
+            ["登记表.pdf", "护照_扫描.pdf"],
+            "两个来源标签都迁入(顺序无关)"
+        )
         XCTAssertEqual(localSources.first?.pageNumber, 1)
         XCTAssertNil(localSources.first?.documentID, "迁移条目没有 documentID —— 如实缺省,不伪造")
         let details = try XCTUnwrap(turn.details)

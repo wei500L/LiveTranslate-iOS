@@ -16,6 +16,36 @@ final class FileProtectionTests: XCTestCase {
         try? FileManager.default.removeItem(at: workDir)
     }
 
+    /// File protection is DEVICE-only: the simulator does not persist
+    /// NSFileProtection attributes (setAttributes succeeds, but
+    /// attributesOfItem reads the key back as nil). Probe once per run;
+    /// read-back assertions skip with an explicit reason where the
+    /// runtime does not support them — backup-exclusion assertions run
+    /// everywhere.
+    static let protectionRoundTripSupported: Bool = {
+        let probe = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fp-probe-\(UUID().uuidString)")
+        try? Data("x".utf8).write(to: probe)
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.complete], ofItemAtPath: probe.path
+        )
+        let value = (try? FileManager.default.attributesOfItem(atPath: probe.path))?
+            [.protectionKey] as? FileProtectionType
+        try? FileManager.default.removeItem(at: probe)
+        return value == .complete
+    }()
+
+    /// Asserts the protection level, skipping with an explicit reason on
+    /// runtimes that do not persist protection attributes.
+    private func verifyProtection(
+        _ url: URL, expected: FileProtectionType, _ message: String
+    ) throws {
+        guard Self.protectionRoundTripSupported else {
+            throw XCTSkip("Simulator does not persist file protection attributes (device-only); write path verified, level not read-back-able here")
+        }
+        XCTAssertEqual(protection(of: url), expected, message)
+    }
+
     private func makeFile(_ name: String, protection: FileProtectionType? = nil) throws -> URL {
         let url = workDir.appendingPathComponent(name)
         try Data("x".utf8).write(to: url)
@@ -80,15 +110,16 @@ final class FileProtectionTests: XCTestCase {
     func testApplySetsProtectionAndBackupExclusion() throws {
         let url = try makeFile("original.pdf")
         XCTAssertNil(FileProtection.apply(.sensitiveLocalDocument, to: url))
-        XCTAssertEqual(protection(of: url), .complete)
         XCTAssertTrue(backupExcluded(url))
+        try verifyProtection(url, expected: .complete, "敏感文件锁屏不可读")
     }
 
     func testApplyIsIdempotent() throws {
         let url = try makeFile("original.pdf")
-        FileProtection.apply(.sensitiveLocalDocument, to: url)
         XCTAssertNil(FileProtection.apply(.sensitiveLocalDocument, to: url))
-        XCTAssertEqual(protection(of: url), .complete)
+        XCTAssertNil(FileProtection.apply(.sensitiveLocalDocument, to: url))
+        XCTAssertTrue(backupExcluded(url))
+        try verifyProtection(url, expected: .complete, "重复应用幂等")
     }
 
     func testApplyToMissingPathIsNotAnError() {
@@ -106,8 +137,8 @@ final class FileProtectionTests: XCTestCase {
         try FileProtection.write(
             Data("{}".utf8), to: url, class: .sensitiveLocalDocument
         )
-        XCTAssertEqual(protection(of: url), .complete)
         XCTAssertTrue(backupExcluded(url))
+        try verifyProtection(url, expected: .complete, "写入即带 .complete")
     }
 
     func testWriteAppliesWorkingProtection() throws {
@@ -115,10 +146,11 @@ final class FileProtectionTests: XCTestCase {
         try FileProtection.write(
             Data("[]".utf8), to: url, class: .classroomWorking
         )
-        XCTAssertEqual(
-            protection(of: url), .completeUntilFirstUserAuthentication
-        )
         XCTAssertFalse(backupExcluded(url))
+        try verifyProtection(
+            url, expected: .completeUntilFirstUserAuthentication,
+            "工作数据锁屏后台可写"
+        )
     }
 
     /// 原子改名(temp → rename)后属性仍在 —— rename 保留属性,但
@@ -133,10 +165,10 @@ final class FileProtectionTests: XCTestCase {
         _ = try FileManager.default.replaceItemAt(destination, withItemAt: temp)
         // replace 后重新应用 —— 存储层落地路径必须这么做。
         FileProtection.apply(.sensitiveLocalDocument, to: destination)
-        XCTAssertEqual(protection(of: destination), .complete)
         XCTAssertEqual(
             try String(contentsOf: destination, encoding: .utf8), "v2"
         )
+        try verifyProtection(destination, expected: .complete, "replace 后重新应用")
     }
 
     // MARK: - Reconcile 幂等升级
@@ -151,9 +183,10 @@ final class FileProtectionTests: XCTestCase {
         )
         XCTAssertEqual(result.upgraded, 2)
         XCTAssertEqual(result.failed.count, 0)
-        XCTAssertEqual(protection(of: legacy), .complete)
         XCTAssertTrue(backupExcluded(legacy))
-        XCTAssertEqual(protection(of: legacyThumb), .complete)
+        XCTAssertTrue(backupExcluded(legacyThumb))
+        try verifyProtection(legacy, expected: .complete, "旧文件升级")
+        try verifyProtection(legacyThumb, expected: .complete, "旧文件升级")
     }
 
     func testReconcileIsIdempotent() throws {
@@ -162,8 +195,11 @@ final class FileProtectionTests: XCTestCase {
         let second = FileProtection.reconcile(
             root: workDir, class: .sensitiveLocalDocument
         )
-        XCTAssertEqual(second.upgraded, 0, "第二次运行不得产生属性变更")
         XCTAssertEqual(second.failed.count, 0)
+        guard Self.protectionRoundTripSupported else {
+            throw XCTSkip("Simulator does not persist protection attributes — the no-op upgrade count is only meaningful where the level reads back")
+        }
+        XCTAssertEqual(second.upgraded, 0, "第二次运行不得产生属性变更")
     }
 
     func testReconcileWithMatcherSplitsRenditions() throws {
@@ -180,14 +216,14 @@ final class FileProtectionTests: XCTestCase {
             root: workDir, class: .regenerableCache
         ) { ["preview.jpg", "analysis.jpg"].contains($0.lastPathComponent) }
 
-        XCTAssertEqual(
-            protection(of: original), .completeUntilFirstUserAuthentication
-        )
         XCTAssertFalse(backupExcluded(original), "原件是正式数据,留在备份里")
-        XCTAssertEqual(protection(of: preview), .complete)
         XCTAssertTrue(backupExcluded(preview), "预览是可重建缓存,排除备份")
-        XCTAssertEqual(protection(of: analysis), .complete)
-        XCTAssertTrue(backupExcluded(analysis))
+        XCTAssertTrue(backupExcluded(analysis), "分析副本排除备份")
+        try verifyProtection(
+            original, expected: .completeUntilFirstUserAuthentication, "原件等级"
+        )
+        try verifyProtection(preview, expected: .complete, "预览等级")
+        try verifyProtection(analysis, expected: .complete, "分析副本等级")
     }
 
     func testReconcileNeverDeletesFilesOnFailure() throws {
@@ -247,7 +283,7 @@ final class FileProtectionTests: XCTestCase {
         _ = try store.stageTextPayload(itemID: itemID, text: "敏感文本")
         let payload = workDir
             .appendingPathComponent("inbox2/items/\(itemID.uuidString)/payload.txt")
-        XCTAssertEqual(protection(of: payload), .complete, "收件箱条目锁屏不可读")
+        try verifyProtection(payload, expected: .complete, "收件箱条目锁屏不可读")
         XCTAssertFalse(backupExcluded(payload), "未确认的收件箱是正式数据,留在备份")
     }
 }
