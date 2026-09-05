@@ -190,14 +190,16 @@ jobs:
               echo "note: no entitlements embedded in the ad-hoc simulator signature of $product — repo entitlements verified below"
             fi
           done
+          # (plutil key-paths split on dots, so dotted entitlement keys
+          # are checked by converting the whole file to JSON instead.)
           for f in LiveTranslateIOS/LiveTranslateIOS.entitlements \
                    ShareExtension/ShareExtension.entitlements \
                    Widgets/LiveTranslateWidgets.entitlements; do
             plutil -lint "$f"
-            plutil -extract com.apple.security.application-groups json -o - "$f" \
+            plutil -convert json -o - "$f" \
               | grep -q "group.com.livetranslate.ios" \
               || { echo "App Group missing in $f"; exit 1; }
-            if plutil -extract keychain-access-groups json -o - "$f" >/dev/null 2>&1; then
+            if plutil -convert json -o - "$f" | grep -q "keychain-access-groups"; then
               echo "keychain-access-groups in $f"; exit 1
             fi
           done
