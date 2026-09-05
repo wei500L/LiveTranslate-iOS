@@ -674,10 +674,10 @@ final class CourseAssistantService {
                 }
                 chunks.append(.init(
                     kind: .transcript,
-                    label: "\(sessionLabel) · \(TranscriptExporter.mmss(first.startOffset))",
+                    label: "\(sessionLabel) · \(TranscriptExporter.mmss(first.entry.startOffset))",
                     text: text,
                     sessionID: session.id,
-                    entryID: first.id
+                    entryID: first.entry.id
                 ))
                 groupEntries = []
                 groupChars = 0
