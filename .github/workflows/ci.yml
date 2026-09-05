@@ -173,6 +173,9 @@ jobs:
             # Trust the product-side dump only when it parses as a plist —
             # ad-hoc simulator signatures may emit DER or nothing.
             if plutil -lint /tmp/ents.plist >/dev/null 2>&1; then
+              echo "--- entitlements dump for $product:"
+              plutil -p /tmp/ents.plist || cat /tmp/ents.plist
+              echo "---"
               if grep -q "keychain-access-groups" /tmp/ents.plist; then
                 echo "keychain-access-groups found in $product"; exit 1
               fi
