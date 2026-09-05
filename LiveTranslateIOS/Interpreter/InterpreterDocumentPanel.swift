@@ -200,7 +200,9 @@ struct InterpreterDocumentPanel: View {
         .buttonStyle(.plain)
     }
 
-    private func importButtonLabel(symbol: String, title: String) -> some View {
+    // nonisolated: the PhotosPicker label closure is nonisolated (the
+    // button label above it too); this builder touches no instance state.
+    nonisolated private func importButtonLabel(symbol: String, title: String) -> some View {
         VStack(spacing: LTSpacing.xxs) {
             Image(systemName: symbol)
                 .font(.system(size: 20, weight: .medium))
@@ -333,6 +335,7 @@ struct InterpreterDocumentCard: View {
     @State private var isExpanded = false
     @State private var showText = false
     @State private var extraction: InterpreterDocumentExtraction?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var progress: InterpreterDocumentService.Progress? {
         documentModel.extractionProgress(for: document.id)

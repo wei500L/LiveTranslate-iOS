@@ -243,7 +243,9 @@ final class InterpreterDocumentContextModel {
 
     // MARK: - 文档操作
 
-    func deleteDocument(_ document: InterpreterDocument, conversationID: UUID) {
+    func deleteDocument(
+        _ document: InterpreterDocument, conversationID: UUID?
+    ) {
         // OCR 进行中删除：取消任务再删（状态由任务字典清理）。
         documentService.cancel(document.id)
         do {
