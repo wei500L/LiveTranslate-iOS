@@ -66,12 +66,12 @@ final class ScreenCaptureObserver {
 /// its own — nothing is destroyed, nothing is "un-recorded" (what was
 /// already captured stays captured; the copy says exactly that).
 struct ScreenCaptureMaskModifier: ViewModifier {
-    @Environment(SettingsStore.self) private var settings
+    @Environment(AppEnvironment.self) private var environment
     @State private var observer = ScreenCaptureObserver.shared
 
     func body(content: Content) -> some View {
         content.overlay {
-            if settings.screenCaptureMaskingEnabled && observer.isCaptured {
+            if environment.settings.screenCaptureMaskingEnabled && observer.isCaptured {
                 ZStack {
                     LTBackground()
                     VStack(spacing: LTSpacing.m) {
