@@ -27,7 +27,7 @@ struct InterpreterScreen: View {
     @State private var showErrandEditor = false
     /// 办事事项带入的现场问题（只填入输入框 —— 不自动翻译、不自动
     /// 朗读、不自动开麦；nil = 普通进入）。
-    var prefilledQuestion: String?
+    var prefilledQuestion: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

@@ -291,15 +291,16 @@ enum ErrandDateParser {
         // --- 时间与最近的日期候选组合（同一短语内出现时） ---
         var combined: [Candidate] = []
         for dateCandidate in result {
-            guard var dateComps = calendar.dateComponents(
-                [.year, .month, .day], from: dateCandidate.resolved ?? anchor
-            ) as DateComponents? else { continue }
+            guard let dateComps = dateCandidate.resolved.map({ date in
+                calendar.dateComponents([.year, .month, .day], from: date)
+            }) else { continue }
             if let time = timeCandidates.first {
-                dateComps.hour = time.hour
-                dateComps.minute = time.minute
+                var withTime = dateComps
+                withTime.hour = time.hour
+                withTime.minute = time.minute
                 // DST 边界：往返校验 —— 不存在/重复的本地时间会被 Calendar
                 // 归一化，往返不一致即标记歧义。
-                if let date = calendar.date(from: dateComps) {
+                if let date = calendar.date(from: withTime) {
                     let roundTrip = calendar.dateComponents(
                         [.year, .month, .day, .hour, .minute], from: date
                     )

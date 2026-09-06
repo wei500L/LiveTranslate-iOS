@@ -259,7 +259,7 @@ struct ErrandCaseDetailView: View {
         }
     }
 
-    private func pendingQuestionText: String? {
+    private var pendingQuestionText: String? {
         viewModel.detailItems
             .first { $0.kind == .question && $0.status == .pending }?
             .title
