@@ -203,10 +203,10 @@ struct InterpreterComposer: View {
     }
 
     private var documentButton: some View {
-        Button {
+        let count = viewModel.documentContext?.documents.count ?? 0
+        return Button {
             onOpenDocuments()
         } label: {
-            let count = viewModel.documentContext?.documents.count ?? 0
             Label(
                 count > 0 ? "文件 ×\(count)" : "现场文件",
                 systemImage: "doc.text.magnifyingglass"
