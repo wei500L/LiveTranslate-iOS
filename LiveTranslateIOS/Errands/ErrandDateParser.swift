@@ -204,18 +204,18 @@ enum ErrandDateParser {
         }
 
         // --- 中文星期（本周/下周前缀消歧；无前缀 = 歧义） ---
-        // 两步确定性解析：先匹配"周X"，再回看前缀（避免可选捕获组的
-        // 平台差异）；rawText 保留完整原文（含前缀）。
+        // 两步确定性解析：先匹配"周X"，再回看前缀字符（"周"本身在匹配
+        // 内 —— 前缀只回看 下/本/这）；rawText 保留完整原文（含前缀）。
         if let zhWeek = try? NSRegularExpression(pattern: "周([一二三四五六日天])") {
             for match in zhWeek.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 guard let weekdayChar = groupString(match, at: 1, in: text),
                       let weekday = zhWeekdays[weekdayChar] else { continue }
-                // 前缀回看：匹配起点之前的 6 个字符里找 下下周/下周/本周/这周。
-                let before = String(text.prefix(match.range.location).suffix(6))
+                // 前缀回看：匹配起点之前的字符里找 下下/下/本/这。
+                let before = String(text.prefix(match.range.location).suffix(3))
                 var prefix: String? = nil
-                if before.hasSuffix("下下周") { prefix = "下下周" }
-                else if before.hasSuffix("下周") { prefix = "下周" }
-                else if before.hasSuffix("本周") || before.hasSuffix("这周") { prefix = "本周" }
+                if before.hasSuffix("下下") { prefix = "下下周" }
+                else if before.hasSuffix("下") { prefix = "下周" }
+                else if before.hasSuffix("本") || before.hasSuffix("这") { prefix = "本周" }
                 var uncertain = false
                 var days = weekday - calendar.component(.weekday, from: anchor)
                 if let prefix {
@@ -232,7 +232,7 @@ enum ErrandDateParser {
                     uncertain = true
                 }
                 let date = calendar.date(byAdding: .day, value: days, to: anchor) ?? anchor
-                // 原文包含前缀（"下周四" 保留为 "下周四"）。
+                // 原文包含前缀字符（"下周四" 保留为 "下周四"）。
                 let prefixLength = prefix?.count ?? 0
                 let rawStart = text.index(
                     text.startIndex,
