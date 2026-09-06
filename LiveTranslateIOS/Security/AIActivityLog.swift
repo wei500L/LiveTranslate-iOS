@@ -60,6 +60,7 @@ enum AIFeature: String, Codable, Sendable, CaseIterable, Equatable {
     case examParsing              // 考试信息识别
     case scheduleImport           // 课表图片导入
     case learningCard             // 学习卡片生成
+    case errandOrganizing         // 办事事项 AI 整理
 
     var displayName: String {
         switch self {
@@ -78,6 +79,7 @@ enum AIFeature: String, Codable, Sendable, CaseIterable, Equatable {
         case .examParsing: return "考试识别"
         case .scheduleImport: return "课表导入"
         case .learningCard: return "学习卡片"
+        case .errandOrganizing: return "办事整理"
         }
     }
 }

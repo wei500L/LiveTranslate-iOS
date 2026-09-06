@@ -57,8 +57,14 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
             intentIdentifiers: [],
             options: []
         )
+        let errandCategory = UNNotificationCategory(
+            identifier: ErrandReminderScheduler.categoryID,
+            actions: [],
+            intentIdentifiers: [],
+            options: []
+        )
         UNUserNotificationCenter.current().setNotificationCategories(
-            [classCategory, examCategory, studyCategory]
+            [classCategory, examCategory, studyCategory, errandCategory]
         )
     }
 
@@ -73,7 +79,8 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         let category = notification.request.content.categoryIdentifier
         if category == ClassReminderScheduler.categoryID
             || category == ExamReminderScheduler.categoryID
-            || category == ExamReminderScheduler.studyCategoryID {
+            || category == ExamReminderScheduler.studyCategoryID
+            || category == ErrandReminderScheduler.categoryID {
             completionHandler([.banner, .list])
         } else {
             completionHandler([.banner, .list, .sound])
@@ -99,6 +106,8 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         let classKey = userInfo[ClassReminderScheduler.occurrenceKeyUserInfo] as? String
         let examIDString = userInfo[ExamReminderScheduler.examIDUserInfo] as? String
         let examID = examIDString.flatMap(UUID.init(uuidString:))
+        let errandCaseIDString = userInfo[ErrandReminderScheduler.caseIDUserInfo] as? String
+        let errandCaseID = errandCaseIDString.flatMap(UUID.init(uuidString:))
 
         await MainActor.run {
             // Cold start: App.onAppear attaches the flow; if the delegate
@@ -115,6 +124,12 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
                 }
             case ExamReminderScheduler.studyCategoryID:
                 flowBox?.flow?.openStudyPlanReminder()
+            case ErrandReminderScheduler.categoryID:
+                // The case may have been deleted since scheduling — the
+                // landing screen shows the honest 事项已不存在 state.
+                if let errandCaseID {
+                    flowBox?.flow?.openErrandCaseReminder(caseID: errandCaseID)
+                }
             default:
                 break
             }

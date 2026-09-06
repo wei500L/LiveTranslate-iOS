@@ -754,6 +754,82 @@ protocol ClassroomRepositoryProtocol: AnyObject {
     ) throws
     /// Row counts for the storage-management UI.
     func interpreterDocumentCounts() throws -> (documents: Int, withOriginals: Int)
+
+    // MARK: Errand cases (办事事项)
+
+    /// All draft cases (multiple concurrent drafts allowed — drafts are
+    /// device-local and never notify sync).
+    var errandCaseDrafts: [ErrandCase] { get }
+    /// Creates a fresh draft (device-local; never notifies sync).
+    func startErrandCaseDraft(scene: InterpreterScene, title: String) throws -> ErrandCase
+    /// Promotes a draft into a formal, syncing case: the case AND its
+    /// confirmed items ride the wire together. Empty drafts are deleted
+    /// instead (no history garbage). Status transitions are validated.
+    func saveErrandCaseDraft(_ errandCase: ErrandCase, status: ErrandCaseStatus) throws
+    /// Discards a draft and its items outright (no wire traffic).
+    func discardErrandCaseDraft(_ errandCase: ErrandCase) throws
+    /// One case by id.
+    func errandCase(id: UUID) -> ErrandCase?
+    /// One case's checklist items in sequence order.
+    func errandCaseItems(caseID: UUID) throws -> [ErrandCaseItem]
+    /// One item by id.
+    func errandCaseItem(id: UUID) -> ErrandCaseItem?
+    /// Formal (non-draft) cases; archived only when asked. Pinned first,
+    /// then most recently updated.
+    func errandCases(includeArchived: Bool) throws -> [ErrandCase]
+    /// Formal cases whose title/purpose/user note/CONFIRMED checklist
+    /// text match the query (global search — drafts, local-source file
+    /// names and date raw text are never searched).
+    func errandCases(matching query: String) throws -> [ErrandCase]
+    /// Field updates (nil = keep; purpose/userNote are full desired
+    /// state, '' clears). Notifies sync for formal cases only.
+    func updateErrandCaseMeta(
+        _ errandCase: ErrandCase,
+        title: String?, purpose: String?, userNote: String?,
+        timezoneID: String?, location: String?, contact: String?,
+        expectedResultAt: Date?, pinned: Bool?, scene: InterpreterScene?
+    ) throws
+    /// Validated status transition (throws ErrandTransitionError).
+    func setErrandCaseStatus(_ errandCase: ErrandCase, to: ErrandCaseStatus) throws
+    /// Deletes a case and its item rows. Wire delete is one case op (the
+    /// server cascades tombstones); system surfaces clean via fanout.
+    func deleteErrandCase(_ errandCase: ErrandCase) throws
+    /// Appends a checklist item. `.unconfirmed` rows (AI/rule candidates)
+    /// stay device-local even in a formal case until confirmed.
+    @discardableResult
+    func addErrandCaseItem(_ draft: ErrandItemDraft) throws -> ErrandCaseItem
+    /// Text edits (stamp modifiedAt — the merge tiebreak).
+    func updateErrandCaseItem(
+        _ item: ErrandCaseItem,
+        title: String?, detail: String?, kind: ErrandCaseItemKind?,
+        feeText: String?, feeAmount: Double?, feeCurrency: String?
+    ) throws
+    /// Status flip (done stamps completedAt; reopening stamps modifiedAt).
+    func setErrandCaseItemStatus(_ item: ErrandCaseItem, to: ErrandCaseItemStatus) throws
+    /// Confirms an AI/rule candidate (per-item 确认). Idempotent.
+    func confirmErrandCaseItem(_ item: ErrandCaseItem) throws
+    /// Sets the user-CONFIRMED time (nil = none). Date wording and
+    /// conversion flags ride alongside for honest display.
+    func setErrandCaseItemDate(
+        _ item: ErrandCaseItem, dueAt: Date?,
+        dateText: String?, isRelative: Bool?, uncertain: Bool?
+    ) throws
+    /// Sort order inside the case.
+    func setErrandCaseItemSequence(_ item: ErrandCaseItem, sequence: Int) throws
+    /// Deletes one item (local delete; delete-wins for saved rows).
+    func deleteErrandCaseItem(_ item: ErrandCaseItem) throws
+    /// Adds a device-local source link (idempotent per dedup key; returns
+    /// false for a duplicate). Flips the syncable hasLocalSources flag.
+    @discardableResult
+    func addErrandLocalSource(to errandCase: ErrandCase, _ source: ErrandLocalSource) throws -> Bool
+    /// Removes one local source link (never deletes the origin
+    /// conversation/document; the hasLocalSources flag stays — another
+    /// device may still hold sources).
+    func removeErrandLocalSource(from errandCase: ErrandCase, id: UUID) throws
+    func applyRemoteErrandCase(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func applyRemoteErrandCaseItem(record: SyncServerRecordDTO, serverVersion: Int) throws
+    func deleteErrandCaseByID(_ id: UUID) throws
+    func deleteErrandCaseItemByID(_ id: UUID) throws
 }
 
 extension ClassroomRepositoryProtocol {
@@ -783,6 +859,27 @@ struct ExamDraft: Sendable, Equatable {
     var status: ExamStatus = .scheduled
     var origin: ExamOrigin = .manual
     var source: ExamSource? = nil
+}
+
+/// A new errand checklist item (办事事项清单项). AI/rule candidates pass
+/// `status: .unconfirmed, origin: .ai, confirmed: false` — the row stays
+/// device-local (never syncs) until the user confirms it one by one.
+struct ErrandItemDraft: Sendable, Equatable {
+    var caseID: UUID
+    var title: String
+    var kind: ErrandCaseItemKind = .action
+    var status: ErrandCaseItemStatus = .pending
+    var detail: String = ""
+    var dueAt: Date? = nil
+    var dateText: String = ""
+    var dateIsRelative: Bool = false
+    var dateUncertain: Bool = false
+    var origin: ErrandCaseItemOrigin = .manual
+    var confirmed: Bool = true
+    var feeText: String = ""
+    var feeAmount: Double? = nil
+    var feeCurrency: String = ""
+    var modifiedAt: Date? = nil
 }
 
 /// A new exam topic.

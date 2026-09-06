@@ -95,6 +95,14 @@ final class AppEnvironment {
     /// Exam-center reminders (考试提醒 + 每日学习提醒汇总; device-only,
     /// account-scoped defaults; never synced).
     let examReminders: ExamReminderScheduler
+    /// Errand-case reminders (办事事项预约/截止/跟进提醒; device-only,
+    /// account-scoped defaults; never synced). Injectable center so the
+    /// demo and tests never touch the real notification center.
+    let errandReminders: ErrandReminderScheduler
+    /// Errand-appointment calendar mirroring (write-only EventKit layer,
+    /// the ExamCalendarService pattern; identifiers are device-local and
+    /// never sync). Injectable store so demo/tests never touch EventKit.
+    let errandCalendar: ErrandCalendarMirror
     /// The real learning-timer controller (真实学习计时) — one per profile;
     /// elapsed time is computed from timestamps, never a per-second task.
     let studyActivityTracker: StudyActivityTracker
@@ -264,6 +272,11 @@ final class AppEnvironment {
         let taskReminders = TaskReminderScheduler(defaults: syncDefaults)
         let classReminders = ClassReminderScheduler(defaults: syncDefaults)
         let examReminders = ExamReminderScheduler(defaults: syncDefaults)
+        // 办事事项提醒/日历镜像：同样的账号域隔离（通知状态与 EventKit
+        // identifier 都是设备本地，绝不同步）。demo 组合通过注入参数换
+        // fake —— 生产路径始终用系统实现。
+        let errandReminders = ErrandReminderScheduler(defaults: syncDefaults)
+        let errandCalendar = ErrandCalendarMirror(defaults: syncDefaults)
         let studyActivityTracker = StudyActivityTracker(
             repository: repository, defaults: syncDefaults
         )
@@ -393,6 +406,8 @@ final class AppEnvironment {
             taskReminders: taskReminders,
             classReminders: classReminders,
             examReminders: examReminders,
+            errandReminders: errandReminders,
+            errandCalendar: errandCalendar,
             studyActivityTracker: studyActivityTracker,
             cloudSync: cloudSync,
             guestMigration: guestMigration,
@@ -443,6 +458,8 @@ final class AppEnvironment {
         taskReminders: TaskReminderScheduler? = nil,
         classReminders: ClassReminderScheduler? = nil,
         examReminders: ExamReminderScheduler? = nil,
+        errandReminders: ErrandReminderScheduler? = nil,
+        errandCalendar: ErrandCalendarMirror? = nil,
         studyActivityTracker: StudyActivityTracker? = nil,
         cloudSync: CloudSyncService?,
         guestMigration: GuestDataMigration? = nil,
@@ -488,6 +505,8 @@ final class AppEnvironment {
         self.taskReminders = taskReminders ?? TaskReminderScheduler(defaults: .standard)
         self.classReminders = classReminders ?? ClassReminderScheduler(defaults: .standard)
         self.examReminders = examReminders ?? ExamReminderScheduler(defaults: .standard)
+        self.errandReminders = errandReminders ?? ErrandReminderScheduler(defaults: .standard)
+        self.errandCalendar = errandCalendar ?? ErrandCalendarMirror(defaults: .standard)
         self.studyActivityTracker = studyActivityTracker ?? StudyActivityTracker(
             repository: repository, defaults: .standard
         )
@@ -620,7 +639,11 @@ final class AppEnvironment {
             // point). Registered as an AUXILIARY observer; the sync
             // service's own observer slot is untouched.
             repository.auxiliaryMutationObservers = [
-                SystemMutationBridge(coordinator: coordinator)
+                SystemMutationBridge(
+                    coordinator: coordinator,
+                    errandReminders: errandReminders,
+                    errandCalendar: errandCalendar
+                )
             ]
         }
     }
@@ -652,7 +675,8 @@ final class AppEnvironment {
         Exam.self, ExamTopic.self, StudyPlan.self, StudyPlanItem.self,
         StudyActivity.self,
         InterpreterConversation.self, InterpreterTurn.self,
-        InterpreterDocument.self
+        InterpreterDocument.self,
+        ErrandCase.self, ErrandCaseItem.self
     ])
 
     // MARK: - Translation configuration (single source of truth)
@@ -871,6 +895,41 @@ final class AppEnvironment {
         ) { courseID in names[courseID] }
     }
 
+    /// Rebuilds the errand-reminder layer (launch, foreground entry,
+    /// privacy-level change): forgets reminders whose items vanished,
+    /// cancels terminal cases' reminders, and re-arms live ones under the
+    /// CURRENT system-surface privacy policy (idempotent remove-then-add).
+    /// Also prunes calendar mirrors whose events the user deleted
+    /// system-side (honest state, never recreated behind the user's back).
+    func refreshErrandReminders() async {
+        guard let cases = try? repository.errandCases(includeArchived: true) else { return }
+        var liveItemIDs: Set<UUID> = []
+        var armed: [(item: ErrandCaseItem, caseTitle: String, kind: ErrandReminderScheduler.Kind)] = []
+        for errandCase in cases {
+            let items = (try? repository.errandCaseItems(caseID: errandCase.id)) ?? []
+            // Terminal cases keep rows but lose their reminders.
+            if errandCase.status.isTerminal {
+                errandReminders.cancelCase(caseID: errandCase.id)
+                continue
+            }
+            for item in items where item.status != .unconfirmed {
+                liveItemIDs.insert(item.id)
+                if let kind = errandReminders.armedKind(itemID: item.id) {
+                    armed.append((item, errandCase.title, kind))
+                }
+            }
+        }
+        errandReminders.pruneMissingItems(liveItemIDs: liveItemIDs)
+        for entry in armed {
+            let lead = errandReminders.lead(itemID: entry.item.id)
+            _ = await errandReminders.enable(
+                item: entry.item, caseTitle: entry.caseTitle,
+                kind: entry.kind, lead: lead
+            )
+        }
+        errandCalendar.pruneStaleMirrors()
+    }
+
     // MARK: - 随身翻译 (interpreter)
 
     /// The shared study-model service box (the interpreter translation
@@ -1049,6 +1108,23 @@ final class AppFlow {
 
     func consumeStudyPlanReminder() {
         pendingTodayStudy = false
+    }
+
+    // MARK: - Errand-case routing (办事事项)
+
+    /// An errand-reminder notification tapped. Non-nil means "land on the
+    /// home tab and open that case's detail" — IN-MEMORY ONLY, consumed
+    /// exactly once by HomeScreen. A deleted case shows the honest
+    /// 事项已不存在 state in the detail screen.
+    var pendingErrandCaseID: UUID?
+
+    func openErrandCaseReminder(caseID: UUID) {
+        selectedTab = .home
+        pendingErrandCaseID = caseID
+    }
+
+    func consumeErrandCaseReminder() {
+        pendingErrandCaseID = nil
     }
 
     // MARK: - Inbox routing (智能收件箱)

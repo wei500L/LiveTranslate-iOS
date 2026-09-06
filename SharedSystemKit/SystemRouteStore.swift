@@ -47,6 +47,12 @@ enum SystemRouteRequest: Codable, Sendable, Equatable {
     /// The interpreter screen (随身翻译 — face-to-face errand dialogs).
     /// Opens the page only; the microphone is never started by a route.
     case interpreter
+    /// The errand-case list (办事事项 — 导航 only; nothing is created or
+    /// armed by a route).
+    case errandCaseList
+    /// One errand case's detail page. The id resolves at consumption
+    /// time (a deleted case shows the honest empty state).
+    case errandCase(UUID)
 }
 
 // MARK: - Route store

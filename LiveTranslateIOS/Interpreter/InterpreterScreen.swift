@@ -23,6 +23,11 @@ struct InterpreterScreen: View {
     @State private var showDocumentPanel = false
     /// 结束保存时的文件处理选择。
     @State private var endFileDisposition: InterpreterViewModel.EndFileDisposition = .discardDocuments
+    /// 整理为办事事项（当前对话 → 事项草稿的本地来源链接）。
+    @State private var showErrandEditor = false
+    /// 办事事项带入的现场问题（只填入输入框 —— 不自动翻译、不自动
+    /// 朗读、不自动开麦；nil = 普通进入）。
+    var prefilledQuestion: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -49,11 +54,27 @@ struct InterpreterScreen: View {
                     }
                     .accessibilityLabel("最近记录")
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // 整理为办事事项：用当前对话创建事项草稿（默认只建
+                    // 立本地来源链接 —— 不复制对话、不修改原对话）。
+                    Button {
+                        showErrandEditor = true
+                    } label: {
+                        Image(systemName: "checklist")
+                    }
+                    .accessibilityLabel("整理为办事事项")
+                    .disabled(viewModel?.conversation == nil)
+                }
             }
         }
         .task {
             if viewModel == nil {
                 viewModel = InterpreterViewModel(environment: environment)
+                // 办事事项带入的问题只填入输入框（applySuggestion 的
+                // 语义：不自动翻译、不自动朗读）。
+                if let prefilledQuestion, !prefilledQuestion.isEmpty {
+                    viewModel?.applySuggestion(prefilledQuestion)
+                }
             }
             await viewModel?.reload()
         }
@@ -84,6 +105,13 @@ struct InterpreterScreen: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showErrandEditor) {
+            // 当前对话 → 事项草稿（本地来源链接，不复制/不修改原对话）。
+            ErrandCaseEditorView(
+                sourceConversationID: viewModel?.conversation?.id
+            )
+            .environment(environment)
         }
         .confirmationDialog(
             "结束本次翻译",

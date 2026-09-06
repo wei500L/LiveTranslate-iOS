@@ -27,6 +27,9 @@ enum SpotlightEntityKind: String, CaseIterable, Sendable {
     case exam = "exam"
     case task = "task"
     case planItem = "planItem"
+    /// 办事事项 (formal cases only — drafts and unconfirmed candidates
+    /// never reach Spotlight; titles are policy-gated).
+    case errandCase = "errandCase"
 
     /// Domain identifier (namespaces the index per entity type).
     var domain: String { "com.livetranslate.ios.spotlight.\(rawValue)" }
@@ -61,6 +64,7 @@ final class SpotlightIndexer {
         case .exam: return .exam(id)
         case .task: return .inbox(nil)
         case .planItem: return .planItem(id)
+        case .errandCase: return .errandCase(id)
         }
     }
 
@@ -159,6 +163,10 @@ final class SpotlightIndexer {
             for task in tasks where task.status != .pendingConfirm {
                 if let item = self.item(for: .task, task: task, repository: repository) { batch.append(item); if batch.count >= 50 { flush() } }
             }
+            let errandCases = (try? repository.errandCases(includeArchived: false)) ?? []
+            for errandCase in errandCases {
+                if let item = self.item(for: .errandCase, errandCase: errandCase) { batch.append(item); if batch.count >= 50 { flush() } }
+            }
             flush()
         }
     }
@@ -190,6 +198,10 @@ final class SpotlightIndexer {
             // Plan items surface via in-app search; plan-item indexing is
             // intentionally skipped (keeps the system index lean).
             return nil
+        case .errandCase:
+            guard let errandCase = repository.errandCase(id: id),
+                  errandCase.status.isFormal else { return nil }
+            return item(for: .errandCase, errandCase: errandCase)
         }
     }
 
@@ -265,6 +277,25 @@ final class SpotlightIndexer {
         return item
     }
 
+    /// 办事事项条目：标题 + 状态 + 场景（绝不带材料清单、地点、费用、
+    /// 医院或签证细节 —— Spotlight 描述保持短而非敏感）。
+    private func item(
+        for kind: SpotlightEntityKind, errandCase: ErrandCase
+    ) -> CSSearchableItem? {
+        guard errandCase.status.isFormal else { return nil }
+        let attributes = CSSearchableItemAttributeSet(contentType: UTType.item)
+        attributes.title = errandCase.title
+        attributes.contentDescription = errandCaseDescription(errandCase)
+        let item = CSSearchableItem(
+            uniqueIdentifier: SpotlightEntityKind.identifier(kind: kind, id: errandCase.id),
+            domainIdentifier: kind.domain,
+            attributeSet: attributes
+        )
+        // 终态事项从 Spotlight 过期（历史仍可在 App 内搜索）。
+        if errandCase.status.isTerminal { item.expirationDate = .distantPast }
+        return item
+    }
+
     // MARK: - Descriptions (short, non-sensitive)
 
     private func courseDescription(_ course: Course) -> String {
@@ -305,6 +336,13 @@ final class SpotlightIndexer {
             formatter.dateFormat = "M月d日"
             parts.append(formatter.string(from: dueAt))
         }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 短而非敏感的事项描述（状态 + 场景名 —— 不带材料/地点/费用）。
+    private func errandCaseDescription(_ errandCase: ErrandCase) -> String {
+        var parts: [String] = ["办事事项", errandCase.status.displayName]
+        if errandCase.scene != .general { parts.append(errandCase.scene.displayName) }
         return parts.joined(separator: " · ")
     }
 

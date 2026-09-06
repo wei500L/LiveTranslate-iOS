@@ -87,6 +87,7 @@ struct RootTabView: View {
             environment.modelManager.refreshStates()
             environment.cloudSync?.start()
             await environment.refreshClassReminders()
+            await environment.refreshErrandReminders()
             // Shared inbox: launch-time reconciliation (interrupted
             // receives, orphan temp files, missing payloads).
             environment.inbox.reconcile()
@@ -117,7 +118,10 @@ struct RootTabView: View {
                 // the authentication.
                 let needsAuth = environment.privacyLock.handleForegroundEntry()
                 environment.cloudSync?.syncNow()
-                Task { await environment.refreshClassReminders() }
+                Task {
+                    await environment.refreshClassReminders()
+                    await environment.refreshErrandReminders()
+                }
                 environment.inbox.reconcile()
                 // A backgrounded learning timer keeps counting by
                 // timestamps; the checkpoint folds the elapsed stretch

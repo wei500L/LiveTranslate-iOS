@@ -153,6 +153,9 @@ struct PrivacyDataScreen: View {
                 // The live activity's title is immutable — the
                 // coordinator recreates it under the new policy.
                 environment.systemCoordinator?.handleSurfacePrivacyChange()
+                // 办事事项通知内容按三档生成 —— 级别变化时重建所有待
+                // 发送通知（幂等 remove-then-add）。
+                Task { await environment.refreshErrandReminders() }
             }
         )
     }

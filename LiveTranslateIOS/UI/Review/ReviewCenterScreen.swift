@@ -207,6 +207,11 @@ struct TodayView: View {
     @State private var plannedTaskIDs: Set<UUID> = []
     /// Upcoming exams within 14 days (scheduled only — real near exams).
     @State private var upcomingExams: [Exam] = []
+    /// Today's errand-case items (预约/截止/跟进 — 只聚合同一个 case
+    /// item；点击回到同一事项；完成聚合项即完成原 item；不复制为
+    /// StudyTask；与考试/学习任务在视觉与 VoiceOver 文案上区分)。
+    @State private var todayErrandEntries: [ErrandViewModel.TodayEntry] = []
+    @State private var errandViewModel = ErrandViewModel()
     @State private var todayStudyMinutes = 0
     @State private var isLoaded = false
 
@@ -220,6 +225,9 @@ struct TodayView: View {
                 )
             } else if isLoaded {
                 StudyActivityCard()
+                if !todayErrandEntries.isEmpty {
+                    errandCard
+                }
                 if !dueTasks.isEmpty || !overdueTasks.isEmpty {
                     taskCard
                 }
@@ -257,7 +265,7 @@ struct TodayView: View {
             && pendingExamCandidateCount == 0
             && recentNewTerms.isEmpty && staleSessions.isEmpty
             && todayPlanItems.isEmpty && missedPlanItems.isEmpty
-            && upcomingExams.isEmpty
+            && upcomingExams.isEmpty && todayErrandEntries.isEmpty
             && !environment.studyActivityTracker.hasActiveActivity
     }
 
@@ -539,10 +547,70 @@ struct TodayView: View {
 
     // MARK: Data
 
+    /// 办事事项聚合卡：只显示有用户确认日期的预约/截止/跟进步骤（普通
+    /// 材料项和没有日期的事项不挤进今天）。与考试/学习任务在视觉与
+    /// VoiceOver 文案上区分（"办事" 前缀）。
+    private var errandCard: some View {
+        VStack(alignment: .leading, spacing: LTSpacing.s) {
+            LTSectionHeader(title: "办事事项 · 今天")
+            VStack(spacing: LTSpacing.xs) {
+                ForEach(todayErrandEntries) { entry in
+                    errandEntryRow(entry)
+                }
+            }
+        }
+    }
+
+    private func errandEntryRow(_ entry: ErrandViewModel.TodayEntry) -> some View {
+        // 完成聚合项 = 完成原 item（幂等取消通知）；点击行回到同一事项。
+        Button {
+            if let item = environment.repository.errandCaseItem(id: entry.itemID) {
+                try? environment.repository.setErrandCaseItemStatus(item, to: .done)
+                environment.errandReminders.disable(itemID: item.id)
+                reload()
+            }
+        } label: {
+            HStack(spacing: LTSpacing.s) {
+                Image(systemName: entry.kind.symbol)
+                    .foregroundStyle(errandTint(entry.kind))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("办事 · \(entry.itemTitle)")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text("\(entry.caseTitle) · \(entry.kind.displayName) \(entry.dueAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(LTColors.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "circle")
+                    .foregroundStyle(LTColors.textTertiary)
+            }
+            .ltCard(padding: LTSpacing.m)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(
+            "办事事项：\(entry.itemTitle)，属于\(entry.caseTitle)，\(entry.kind.displayName)，点按完成"
+        ))
+    }
+
+    private func errandTint(_ kind: ErrandCaseItemKind) -> Color {
+        switch kind {
+        case .appointment: return LTColors.accentCyan
+        case .deadline: return LTColors.destructive
+        case .followUp: return LTColors.warning
+        default: return LTColors.accentBlue
+        }
+    }
+
     private func reload() {
         let allCards = (try? environment.repository.cards(courseID: nil)) ?? []
         dueCardCount = allCards.filter(\.isDueNow).count
         newCardCount = allCards.filter { $0.stageRaw == StudyCardStage.new.rawValue }.count
+
+        // 办事事项：今天的预约/截止/跟进（只聚合同一个 case item）。
+        errandViewModel.attach(environment)
+        errandViewModel.reload()
+        todayErrandEntries = errandViewModel.todayEntries(on: .now)
 
         let tasks = (try? environment.repository.tasks(courseID: nil, includeDone: false)) ?? []
         overdueTasks = tasks.filter { task in

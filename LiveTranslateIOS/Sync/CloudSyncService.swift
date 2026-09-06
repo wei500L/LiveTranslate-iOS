@@ -738,6 +738,43 @@ final class CloudSyncService: AuthenticationService {
         refreshPendingCount()
     }
 
+    // MARK: - Errand case (办事事项) enqueue
+
+    /// Draft cases never ride the wire — the repository only notifies for
+    /// formal rows, and this guard is the second lock on the same door
+    /// (the pendingConfirm candidate convention).
+    private func enqueueErrandCaseUpsert(_ errandCase: ErrandCase) {
+        guard errandCase.status.isFormal else { return }
+        let item = SyncOutboxItem(
+            entityType: .errandCase,
+            entityID: errandCase.id,
+            operation: .upsert,
+            baseServerVersion: errandCase.serverVersion,
+            payload: Self.payload(for: errandCase)
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
+    private func enqueueErrandCaseItemUpsert(_ itemRow: ErrandCaseItem) {
+        // An unconfirmed candidate row (or one of a still-draft case) is
+        // device-local — never pushed.
+        guard itemRow.status != .unconfirmed,
+              let parent = repository.errandCase(id: itemRow.caseID),
+              parent.status.isFormal else { return }
+        var payload = Self.payload(for: itemRow)
+        payload.caseId = itemRow.caseID
+        let item = SyncOutboxItem(
+            entityType: .errandCaseItem,
+            entityID: itemRow.id,
+            operation: .upsert,
+            baseServerVersion: itemRow.serverVersion,
+            payload: payload
+        )
+        Task { await outbox.enqueue(item) }
+        refreshPendingCount()
+    }
+
     private func enqueueDelete(entityType: SyncEntityType, entityID: UUID) {
         let item = SyncOutboxItem(
             entityType: entityType,
@@ -1049,7 +1086,8 @@ final class CloudSyncService: AuthenticationService {
              .material, .materialPage, .materialAnnotation,
              .assistantThread, .assistantMessage,
              .exam, .examTopic, .studyPlan, .studyPlanItem, .studyActivity,
-             .interpreterConversation, .interpreterTurn:
+             .interpreterConversation, .interpreterTurn,
+             .errandCase, .errandCaseItem:
             try? repository.recordServerVersion(
                 entityType: entityType, entityID: entityID, version: version
             )
@@ -1134,6 +1172,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.deleteInterpreterConversationByID(entityID)
         case .interpreterTurn:
             try? repository.deleteInterpreterTurnByID(entityID)
+        case .errandCase:
+            try? repository.deleteErrandCaseByID(entityID)
+        case .errandCaseItem:
+            try? repository.deleteErrandCaseItemByID(entityID)
         }
     }
 
@@ -1210,6 +1252,10 @@ final class CloudSyncService: AuthenticationService {
             try? repository.applyRemoteInterpreterConversation(record: record, serverVersion: serverVersion)
         case .interpreterTurn:
             try? repository.applyRemoteInterpreterTurn(record: record, serverVersion: serverVersion)
+        case .errandCase:
+            try? repository.applyRemoteErrandCase(record: record, serverVersion: serverVersion)
+        case .errandCaseItem:
+            try? repository.applyRemoteErrandCaseItem(record: record, serverVersion: serverVersion)
         }
     }
 
@@ -2055,6 +2101,48 @@ final class CloudSyncService: AuthenticationService {
             turnModifiedAt: turn.modifiedAt
         )
     }
+
+    /// Errand case. 出站防御（第十七轮边界）：localSourcesJSON（设备本地
+    /// 来源链接 —— 文件名/页码/引文/documentID）从不读取 —— wire 上只有
+    /// 无内容的 hasLocalSources 布尔标志。
+    static func payload(for errandCase: ErrandCase) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: errandCase.title,
+            errandScene: errandCase.sceneRaw,
+            errandStatus: errandCase.statusRaw,
+            errandPurpose: errandCase.purpose,
+            errandNote: errandCase.userNote,
+            errandTimezone: errandCase.timezoneID.isEmpty ? nil : errandCase.timezoneID,
+            errandLocation: errandCase.location.isEmpty ? nil : errandCase.location,
+            errandContact: errandCase.contact.isEmpty ? nil : errandCase.contact,
+            errandExpectedResultAt: errandCase.expectedResultAt,
+            errandPinned: errandCase.pinned,
+            errandHasLocalSources: errandCase.hasLocalSources
+        )
+    }
+
+    /// Errand checklist item. modifiedAt is the user-edit tiebreak;
+    /// unconfirmed candidates never enqueue (the enqueue guard).
+    static func payload(for item: ErrandCaseItem) -> SyncPushPayloadDTO {
+        SyncPushPayloadDTO(
+            title: item.title,
+            errandItemKind: item.kindRaw,
+            errandItemStatus: item.statusRaw,
+            errandItemSequence: item.sequence,
+            errandItemDetail: item.detail.isEmpty ? nil : item.detail,
+            errandItemDueAt: item.dueAt,
+            errandItemDateText: item.dateText.isEmpty ? nil : item.dateText,
+            errandItemDateIsRelative: item.dateIsRelative,
+            errandItemDateUncertain: item.dateUncertain,
+            errandItemOrigin: item.originRaw,
+            errandItemConfirmed: item.confirmed,
+            errandItemFeeText: item.feeText.isEmpty ? nil : item.feeText,
+            errandItemFeeAmount: item.feeAmount,
+            errandItemFeeCurrency: item.feeCurrency.isEmpty ? nil : item.feeCurrency,
+            errandItemModifiedAt: item.modifiedAt,
+            errandItemCompletedAt: item.completedAt
+        )
+    }
 }
 
 // MARK: - TranscriptMutationObserving
@@ -2133,6 +2221,12 @@ protocol TranscriptMutationObserving: AnyObject {
     func interpreterTurnCreated(_ turn: InterpreterTurn)
     func interpreterTurnUpdated(_ turn: InterpreterTurn)
     func interpreterTurnDeleted(id: UUID)
+    func errandCaseSaved(_ errandCase: ErrandCase)
+    func errandCaseUpdated(_ errandCase: ErrandCase)
+    func errandCaseDeleted(id: UUID)
+    func errandCaseItemCreated(_ item: ErrandCaseItem)
+    func errandCaseItemUpdated(_ item: ErrandCaseItem)
+    func errandCaseItemDeleted(id: UUID)
 }
 
 extension CloudSyncService: TranscriptMutationObserving {
@@ -2394,5 +2488,29 @@ extension CloudSyncService: TranscriptMutationObserving {
 
     func interpreterTurnDeleted(id: UUID) {
         enqueueDelete(entityType: .interpreterTurn, entityID: id)
+    }
+
+    func errandCaseSaved(_ errandCase: ErrandCase) {
+        enqueueErrandCaseUpsert(errandCase)
+    }
+
+    func errandCaseUpdated(_ errandCase: ErrandCase) {
+        enqueueErrandCaseUpsert(errandCase)
+    }
+
+    func errandCaseDeleted(id: UUID) {
+        enqueueDelete(entityType: .errandCase, entityID: id)
+    }
+
+    func errandCaseItemCreated(_ item: ErrandCaseItem) {
+        enqueueErrandCaseItemUpsert(item)
+    }
+
+    func errandCaseItemUpdated(_ item: ErrandCaseItem) {
+        enqueueErrandCaseItemUpsert(item)
+    }
+
+    func errandCaseItemDeleted(id: UUID) {
+        enqueueDelete(entityType: .errandCaseItem, entityID: id)
     }
 }

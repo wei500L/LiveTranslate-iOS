@@ -184,6 +184,50 @@ struct OpenInterpreterIntent: AppIntent {
     }
 }
 
+/// 打开办事事项列表 —— 只导航，不自动建事项、不自动开麦。
+struct OpenErrandCasesIntent: AppIntent {
+    static let title: LocalizedStringResource = "打开办事事项"
+    static let description = IntentDescription("查看办事事项的材料清单、预约与跟进。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult {
+        await AppIntentHost.open(.errandCaseList)
+        return .result()
+    }
+}
+
+/// 打开下一个需要行动的办事事项 —— 只导航；标题受系统界面隐私策略
+/// 门控（仅状态档不回显标题）。
+struct OpenNextErrandIntent: AppIntent {
+    static let title: LocalizedStringResource = "打开下一个办事事项"
+    static let description = IntentDescription("直接打开最近有预约、逾期或需要跟进的办事事项。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult {
+        let outcome: (route: SystemRouteRequest, dialog: IntentDialog)? =
+            await AppIntentHost.withEnvironment { environment in
+                let viewModel = ErrandViewModel()
+                viewModel.attach(environment)
+                viewModel.reload()
+                let showsTitles = SettingsStore.shared.systemSurfacePrivacy.showsTitles
+                if let highlight = viewModel.homeHighlights().first {
+                    return (
+                        SystemRouteRequest.errandCase(highlight.errandCase.id),
+                        showsTitles
+                            ? IntentDialog("已打开：\(highlight.errandCase.title)")
+                            : IntentDialog("已打开办事事项")
+                    )
+                }
+                return (SystemRouteRequest.errandCaseList, IntentDialog("当前没有需要处理的办事事项"))
+            }
+        if let outcome {
+            await AppIntentHost.open(outcome.route)
+            return .result(dialog: outcome.dialog)
+        }
+        return .result()
+    }
+}
+
 // MARK: - Create task (real repository write)
 
 /// 快速创建任务 — title (required), optional course, optional due date.
@@ -302,6 +346,15 @@ struct LiveTranslateShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "随身翻译",
             systemImageName: "person.2.wave.2"
+        ),
+        AppShortcut(
+            intent: OpenNextErrandIntent(),
+            phrases: [
+                "在 \(.applicationName) 打开下一个办事事项",
+                "用 \(.applicationName) 看办事清单"
+            ],
+            shortTitle: "办事事项",
+            systemImageName: "checklist"
         )
     ]
 }

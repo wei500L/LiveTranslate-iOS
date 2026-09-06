@@ -23,6 +23,9 @@ struct InterpreterDocumentPanel: View {
     @State private var showInboxPicker = false
     @State private var showSendPreview = false
     @State private var analysisQuestion = ""
+    /// 加入办事事项：文件分析结果 → 新建事项草稿（本地来源链接）。
+    @State private var showErrandEditor = false
+    @State private var errandDocumentID: UUID?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -127,6 +130,14 @@ struct InterpreterDocumentPanel: View {
                         question: analysisQuestion
                     )
                 }
+            }
+            .sheet(isPresented: $showErrandEditor) {
+                // 文件分析结果 → 事项草稿（本地来源链接 + 结构化候选）。
+                ErrandCaseEditorView(
+                    sourceConversationID: conversationID,
+                    sourceDocumentID: errandDocumentID
+                )
+                .environment(environment)
             }
         }
         .onAppear {
@@ -273,6 +284,19 @@ struct InterpreterDocumentPanel: View {
                         showSendPreview = true
                     }
                 }
+            }
+            // 加入办事事项：文件分析已确认的结构化结果（材料/期限/费用）
+            // 直读为候选 —— 无 AI 路径同样可用。
+            if let document = model.documents.first(where: { $0.status == .ready }) {
+                Button {
+                    errandDocumentID = document.id
+                    showErrandEditor = true
+                } label: {
+                    Label("加入办事事项", systemImage: "checklist")
+                        .font(LTTypography.button)
+                        .foregroundStyle(LTColors.accentBlue)
+                }
+                .accessibilityHint(Text("用这份文件的分析结果新建一个事项草稿"))
             }
             if model.lastAIError != nil {
                 Text(model.lastAIError ?? "")

@@ -289,6 +289,30 @@ final class RepositoryMutationFanout: TranscriptMutationObserving {
         primary?.interpreterTurnDeleted(id: id)
         auxiliaries.forEach { $0.interpreterTurnDeleted(id: id) }
     }
+    func errandCaseSaved(_ errandCase: ErrandCase) {
+        primary?.errandCaseSaved(errandCase)
+        auxiliaries.forEach { $0.errandCaseSaved(errandCase) }
+    }
+    func errandCaseUpdated(_ errandCase: ErrandCase) {
+        primary?.errandCaseUpdated(errandCase)
+        auxiliaries.forEach { $0.errandCaseUpdated(errandCase) }
+    }
+    func errandCaseDeleted(id: UUID) {
+        primary?.errandCaseDeleted(id: id)
+        auxiliaries.forEach { $0.errandCaseDeleted(id: id) }
+    }
+    func errandCaseItemCreated(_ item: ErrandCaseItem) {
+        primary?.errandCaseItemCreated(item)
+        auxiliaries.forEach { $0.errandCaseItemCreated(item) }
+    }
+    func errandCaseItemUpdated(_ item: ErrandCaseItem) {
+        primary?.errandCaseItemUpdated(item)
+        auxiliaries.forEach { $0.errandCaseItemUpdated(item) }
+    }
+    func errandCaseItemDeleted(id: UUID) {
+        primary?.errandCaseItemDeleted(id: id)
+        auxiliaries.forEach { $0.errandCaseItemDeleted(id: id) }
+    }
 }
 
 // MARK: - System-surface bridge
@@ -301,14 +325,25 @@ final class RepositoryMutationFanout: TranscriptMutationObserving {
 @MainActor
 final class SystemMutationBridge: TranscriptMutationObserving {
     private weak var coordinator: SystemIntegrationCoordinator?
+    /// Errand system surfaces (reminders + calendar mirrors + Spotlight)
+    /// — weak: the environment owns them; the bridge must never keep a
+    /// dead profile alive.
+    private weak var errandReminders: ErrandReminderScheduler?
+    private weak var errandCalendar: ErrandCalendarMirror?
     /// sessionUpdated fires on EVERY transcript entry (the session's
     /// entryCount moves) — re-indexing per line would be absurd. At most
     /// one session re-index per minute; creates and deletes are always
     /// immediate.
     private var lastSessionReindex = Date.distantPast
 
-    init(coordinator: SystemIntegrationCoordinator) {
+    init(
+        coordinator: SystemIntegrationCoordinator,
+        errandReminders: ErrandReminderScheduler? = nil,
+        errandCalendar: ErrandCalendarMirror? = nil
+    ) {
         self.coordinator = coordinator
+        self.errandReminders = errandReminders
+        self.errandCalendar = errandCalendar
     }
 
     // Spotlight-backed entities (index on create/update, delete on
@@ -381,6 +416,42 @@ final class SystemMutationBridge: TranscriptMutationObserving {
     func taskDeleted(id: UUID) {
         coordinator?.removeEntity(id: id, kind: .task)
         coordinator?.refreshSnapshotAndWidgets()
+    }
+
+    // Errand cases (办事事项): formal cases are Spotlight-indexable
+    // (drafts and unconfirmed candidates never reach Spotlight — the
+    // StudyTask pendingConfirm convention); deletes cancel the case's
+    // reminders. All under the system-surface privacy policy
+    // (hideSensitiveContent keeps Spotlight off entirely).
+
+    func errandCaseSaved(_ errandCase: ErrandCase) {
+        indexErrandCase(errandCase)
+        coordinator?.refreshSnapshotAndWidgets()
+    }
+    func errandCaseUpdated(_ errandCase: ErrandCase) {
+        indexErrandCase(errandCase)
+    }
+    func errandCaseDeleted(id: UUID) {
+        coordinator?.removeEntity(id: id, kind: .errandCase)
+        errandReminders?.cancelCase(caseID: id)
+        coordinator?.refreshSnapshotAndWidgets()
+    }
+    func errandCaseItemCreated(_ item: ErrandCaseItem) {
+        // Items are not individually indexed (the case is the unit); a
+        // dated item may matter to the today aggregate → refresh.
+        coordinator?.refreshSnapshotAndWidgets()
+    }
+    func errandCaseItemUpdated(_ item: ErrandCaseItem) {
+        coordinator?.refreshSnapshotAndWidgets()
+    }
+    func errandCaseItemDeleted(id: UUID) {
+        errandReminders?.disable(itemID: id)
+        errandCalendar?.removeMirroredAppointment(itemID: id)
+    }
+
+    private func indexErrandCase(_ errandCase: ErrandCase) {
+        guard errandCase.status.isFormal else { return }
+        coordinator?.indexEntity(errandCase.id, kind: .errandCase)
     }
 
     // Snapshot-relevant mutations without Spotlight indexing.
@@ -474,4 +545,10 @@ extension TranscriptMutationObserving {
     func interpreterTurnCreated(_ turn: InterpreterTurn) {}
     func interpreterTurnUpdated(_ turn: InterpreterTurn) {}
     func interpreterTurnDeleted(id: UUID) {}
+    func errandCaseSaved(_ errandCase: ErrandCase) {}
+    func errandCaseUpdated(_ errandCase: ErrandCase) {}
+    func errandCaseDeleted(id: UUID) {}
+    func errandCaseItemCreated(_ item: ErrandCaseItem) {}
+    func errandCaseItemUpdated(_ item: ErrandCaseItem) {}
+    func errandCaseItemDeleted(id: UUID) {}
 }

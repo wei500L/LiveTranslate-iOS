@@ -999,7 +999,8 @@ struct GuestLibraryReader {
         Exam.self, ExamTopic.self, StudyPlan.self, StudyPlanItem.self,
         StudyActivity.self,
         InterpreterConversation.self, InterpreterTurn.self,
-        InterpreterDocument.self
+        InterpreterDocument.self,
+        ErrandCase.self, ErrandCaseItem.self
     ])
 
     /// Sendable snapshot of one guest course schedule (the pre-class

@@ -183,6 +183,11 @@ final class AppSession {
         // and already live in its rows) and the reminder state rebuilds
         // with the new profile.
         environment.examReminders.cancelAll()
+        // 办事事项提醒同样跨账号全取消（新账号的提醒在其启动链里重
+        // 建）；日历镜像放弃本机跟踪（旧账号的系统日历事件留给用户
+        // 在系统侧处理 —— 绝不删除另一个账号的数据）。
+        environment.errandReminders.cancelAll()
+        environment.errandCalendar.clearAll()
         environment.studyActivityTracker.checkpoint()
         // The old profile's system surfaces (snapshot, Live Activities,
         // Spotlight, queued routes/commands) clear before the new profile

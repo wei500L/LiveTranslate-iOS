@@ -55,6 +55,11 @@ enum SyncEntityType: String, Codable, Sendable {
     // only saved ones are ever pushed.
     case interpreterConversation = "interpreter_conversation"
     case interpreterTurn = "interpreter_turn"
+    // Errand cases (办事事项, 00015). Wire names are 11/16 chars.
+    // DRAFT cases and unconfirmed candidate items never ride the wire;
+    // only user-saved cases and confirmed items are ever pushed.
+    case errandCase = "errand_case"
+    case errandCaseItem = "errand_case_item"
 }
 
 enum SyncOperation: String, Codable, Sendable {
@@ -484,6 +489,40 @@ struct SyncPushPayloadDTO: Codable, Sendable, Equatable {
     var turnBackTranslation: String?
     var turnDetails: String?
     var turnModifiedAt: Date?
+    // Errand cases (00015, 办事事项). The case title and the item title
+    // both ride the shared `title`. The scene reuses the interpreter
+    // allowlist. The case reference rides `caseId` (plain required
+    // reference — items may arrive before their case). LOCAL SOURCE
+    // LINKS NEVER RIDE THE WIRE: only the content-free
+    // errandHasLocalSources flag does (the round-17 boundary — file
+    // names, page numbers, snippets, document ids stay device-local;
+    // payload(for:) never reads localSourcesJSON).
+    var errandScene: String?
+    var errandStatus: String?
+    var errandPurpose: String?
+    var errandNote: String?
+    var errandTimezone: String?
+    var errandLocation: String?
+    var errandContact: String?
+    var errandExpectedResultAt: Date?
+    var errandPinned: Bool?
+    var errandHasLocalSources: Bool?
+    var caseId: UUID?
+    var errandItemKind: String?
+    var errandItemStatus: String?
+    var errandItemSequence: Int?
+    var errandItemDetail: String?
+    var errandItemDueAt: Date?
+    var errandItemDateText: String?
+    var errandItemDateIsRelative: Bool?
+    var errandItemDateUncertain: Bool?
+    var errandItemOrigin: String?
+    var errandItemConfirmed: Bool?
+    var errandItemFeeText: String?
+    var errandItemFeeAmount: Double?
+    var errandItemFeeCurrency: String?
+    var errandItemModifiedAt: Date?
+    var errandItemCompletedAt: Date?
 }
 
 struct SyncPushItemDTO: Codable, Sendable {
@@ -725,6 +764,36 @@ struct SyncServerRecordDTO: Codable, Sendable {
     var turnBackTranslation: String?
     var turnDetails: String?
     var turnModifiedAt: Date?
+    // errand (办事事项) — names mirror the push payload (the errandXxx /
+    // errandItemXxx families) so one CodingKeys set covers records and
+    // conflict payloads. Only the content-free hasLocalSources flag
+    // reflects local sources; the links themselves never ride.
+    var errandScene: String?
+    var errandStatus: String?
+    var errandPurpose: String?
+    var errandNote: String?
+    var errandTimezone: String?
+    var errandLocation: String?
+    var errandContact: String?
+    var errandExpectedResultAt: Date?
+    var errandPinned: Bool?
+    var errandHasLocalSources: Bool?
+    var caseId: UUID?
+    var errandItemKind: String?
+    var errandItemStatus: String?
+    var errandItemSequence: Int?
+    var errandItemDetail: String?
+    var errandItemDueAt: Date?
+    var errandItemDateText: String?
+    var errandItemDateIsRelative: Bool?
+    var errandItemDateUncertain: Bool?
+    var errandItemOrigin: String?
+    var errandItemConfirmed: Bool?
+    var errandItemFeeText: String?
+    var errandItemFeeAmount: Double?
+    var errandItemFeeCurrency: String?
+    var errandItemModifiedAt: Date?
+    var errandItemCompletedAt: Date?
     var serverVersion: Int
     var deleted: Bool
 

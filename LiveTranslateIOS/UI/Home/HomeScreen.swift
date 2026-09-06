@@ -8,6 +8,9 @@ struct HomeScreen: View {
     @State private var showNewSessionSheet = false
     @State private var showModelManagement = false
     @State private var pushingInterpreter = false
+    /// 办事事项列表 push（有需要行动的事项时显示入口卡）。
+    @State private var pushingErrands = false
+    @State private var errandViewModel = ErrandViewModel()
     /// 待阅读资料 push (the restrained materials entry).
     @State private var pushingMaterials = false
     /// 智能收件箱 push (only while unprocessed items exist).
@@ -31,6 +34,9 @@ struct HomeScreen: View {
                         }
                         startCard
                         interpreterCard
+                        if !errandViewModel.homeHighlights().isEmpty {
+                            errandCard
+                        }
                         if environment.inbox.pendingCount > 0 {
                             inboxSection
                         }
@@ -67,6 +73,10 @@ struct HomeScreen: View {
             .navigationDestination(isPresented: $pushingInterpreter) {
                 InterpreterScreen()
             }
+            .navigationDestination(isPresented: $pushingErrands) {
+                ErrandCaseListView()
+                    .environment(environment)
+            }
             .navigationDestination(for: ScheduleRoute.self) { route in
                 ScheduleScreen()
             }
@@ -92,6 +102,8 @@ struct HomeScreen: View {
         .task {
             viewModel.attach(environment)
             scheduleViewModel.attach(environment)
+            errandViewModel.attach(environment)
+            errandViewModel.reload()
             #if DEBUG
             if let greeting = environment.flow.demoGreeting {
                 viewModel.greetingOverride = greeting
@@ -122,6 +134,17 @@ struct HomeScreen: View {
             if environment.flow.pendingInterpreterScreen {
                 environment.flow.consumeInterpreterScreen()
                 pushingInterpreter = true
+            }
+            // 系统面（Intent/Spotlight/通知）要求打开办事事项列表或某个
+            // 事项 —— 消费一次性路由。
+            if environment.flow.pendingErrandCaseList {
+                environment.flow.consumeErrandCaseListRoute()
+                pushingErrands = true
+            }
+            if let caseID = environment.flow.pendingErrandCaseID {
+                environment.flow.consumeErrandCaseReminder()
+                pushingErrands = true
+                _ = caseID // the list screen resolves & pushes the detail
             }
             startMinuteTimer()
             environment.inbox.reload()
@@ -562,6 +585,48 @@ struct HomeScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("随身翻译：面对面办事口译"))
+    }
+
+    /// 办事事项入口卡 —— 只在有事需要行动时出现（今日/近期预约、逾期
+    /// 截止、到达跟进时间、置顶、等待超期）；无相关事项时保持首页简洁。
+    private var errandCard: some View {
+        let highlights = errandViewModel.homeHighlights()
+        return Button {
+            pushingErrands = true
+        } label: {
+            HStack(spacing: LTSpacing.m) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(LTColors.accentBlue)
+                    .frame(width: 52, height: 52)
+                    .background(
+                        Circle().fill(
+                            LinearGradient(
+                                colors: [LTColors.accentBlue.opacity(0.24), LTColors.accentBlue.opacity(0.10)],
+                                startPoint: .topLeading, endPoint: .bottomTrailing
+                            )
+                        )
+                    )
+                    .overlay(Circle().strokeBorder(LTColors.accentBlue.opacity(0.30), lineWidth: 0.5))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("办事事项")
+                        .font(LTTypography.cardTitle)
+                        .foregroundStyle(LTColors.textPrimary)
+                    Text(highlights.first?.reason ?? "需要跟进")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(
+                            highlights.first?.isOverdue == true ? LTColors.warning : LTColors.textSecondary
+                        )
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(LTColors.accentBlue.opacity(0.9))
+            }
+            .ltCard(padding: LTSpacing.l)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("办事事项：\(highlights.first?.reason ?? "需要跟进")"))
     }
 
     private var micIcon: some View {

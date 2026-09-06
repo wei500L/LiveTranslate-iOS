@@ -424,6 +424,64 @@ enum SyncConflictResolver {
             if (merged.turnBackTranslation ?? "").isEmpty, let serverBack = server.turnBackTranslation {
                 merged.turnBackTranslation = serverBack
             }
+        case .errandCase:
+            // Case metadata: local (newer user intent) wins, server
+            // fallback so a rebase never blanks a field; an empty title
+            // keeps the server's (a merge must never blank the name).
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.errandPurpose ?? "").isEmpty, let serverPurpose = server.errandPurpose {
+                merged.errandPurpose = serverPurpose
+            }
+            if (merged.errandLocation ?? "").isEmpty, let serverLocation = server.errandLocation {
+                merged.errandLocation = serverLocation
+            }
+            // Terminal case statuses never regress through a rebase
+            // (the exam done convention).
+            if server.errandStatus == ErrandCaseStatus.completed.rawValue
+                || server.errandStatus == ErrandCaseStatus.cancelled.rawValue
+                || server.errandStatus == ErrandCaseStatus.archived.rawValue {
+                merged.errandStatus = server.errandStatus
+            }
+            // hasLocalSources is an OR-fact ("some device holds local
+            // sources") — a server true never regresses to false.
+            if server.errandHasLocalSources == true {
+                merged.errandHasLocalSources = true
+            }
+        case .errandCaseItem:
+            // Item user edits resolve by modified_at newer-wins server-side
+            // (the turn convention); local wins with empty-field
+            // fallbacks. done/skipped are sticky (the plan-item rule) —
+            // only a genuinely newer local edit reopens the item.
+            if (merged.title ?? "").isEmpty, let serverTitle = server.title {
+                merged.title = serverTitle
+            }
+            if (merged.errandItemDetail ?? "").isEmpty, let serverDetail = server.errandItemDetail {
+                merged.errandItemDetail = serverDetail
+            }
+            if (merged.errandItemDateText ?? "").isEmpty, let serverDateText = server.errandItemDateText {
+                merged.errandItemDateText = serverDateText
+            }
+            if (merged.errandItemFeeText ?? "").isEmpty, let serverFee = server.errandItemFeeText {
+                merged.errandItemFeeText = serverFee
+            }
+            if server.errandItemStatus == ErrandCaseItemStatus.done.rawValue
+                || server.errandItemStatus == ErrandCaseItemStatus.skipped.rawValue {
+                let localReopening = merged.errandItemStatus == ErrandCaseItemStatus.pending.rawValue
+                    || merged.errandItemStatus == ErrandCaseItemStatus.unconfirmed.rawValue
+                let localEditIsNewer = (merged.errandItemModifiedAt ?? .distantPast)
+                    > (server.errandItemModifiedAt ?? .distantPast)
+                if localReopening && !localEditIsNewer {
+                    merged.errandItemStatus = server.errandItemStatus
+                    merged.errandItemCompletedAt = server.errandItemCompletedAt
+                }
+            }
+            // Confirmed is sticky: a server-confirmed candidate never
+            // un-confirms through a rebase.
+            if server.errandItemConfirmed == true {
+                merged.errandItemConfirmed = true
+            }
         }
         return merged
     }

@@ -115,6 +115,10 @@ final class SystemRouteCoordinator {
             flow.openPlanDetail(id, in: environment)
         case .inbox(let itemID):
             flow.openInboxRoute(itemID: itemID)
+        case .errandCaseList:
+            flow.requestErrandCaseList()
+        case .errandCase(let id):
+            flow.openErrandCaseDetail(id, in: environment)
         }
     }
 }
@@ -176,6 +180,35 @@ extension AppFlow {
         }
     }
 
+    /// One errand case's detail (Spotlight / intent / widget tap).
+    /// Validates the id against the repository first — deleted targets
+    /// land on the errand list with honest feedback.
+    func openErrandCaseDetail(_ id: UUID, in environment: AppEnvironment) {
+        guard environment.repository.errandCase(id: id) != nil else {
+            requestErrandCaseList()
+            environment.reportMissingTarget("这个办事事项已不存在")
+            return
+        }
+        selectedTab = .home
+        pendingErrandCaseID = id
+    }
+
+    /// The errand-case list (a surface asked to show 办事事项 — navigation
+    /// only, nothing is created or armed).
+    func requestErrandCaseList() {
+        selectedTab = .home
+        pendingErrandCaseList = true
+    }
+
+    func consumeErrandCaseListRoute() {
+        pendingErrandCaseList = false
+    }
+
+    var pendingErrandCaseList: Bool {
+        get { systemRouteStorage.errandCaseList }
+        set { systemRouteStorage.errandCaseList = newValue }
+    }
+
     // MARK: Pending ids (consume-once, in-memory only)
 
     var pendingSystemSessionID: UUID? {
@@ -209,4 +242,5 @@ struct SystemRouteStorage {
     var materialID: UUID?
     var materialPage: Int?
     var planID: UUID?
+    var errandCaseList: Bool = false
 }

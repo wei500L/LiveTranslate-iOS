@@ -556,6 +556,18 @@ final class TranscriptRepository: ClassroomRepositoryProtocol {
             )
             guard let turn = try context.fetch(descriptor).first else { return }
             turn.serverVersion = max(turn.serverVersion, version)
+        case .errandCase:
+            let descriptor = FetchDescriptor<ErrandCase>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let errandCase = try context.fetch(descriptor).first else { return }
+            errandCase.serverVersion = max(errandCase.serverVersion, version)
+        case .errandCaseItem:
+            let descriptor = FetchDescriptor<ErrandCaseItem>(
+                predicate: #Predicate { $0.id == entityID }
+            )
+            guard let item = try context.fetch(descriptor).first else { return }
+            item.serverVersion = max(item.serverVersion, version)
         case .bookmark, .favorite:
             break // tracked by BookmarkStore
         }

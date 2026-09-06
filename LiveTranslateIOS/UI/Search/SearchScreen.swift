@@ -26,6 +26,7 @@ struct SearchScreen: View {
     @State private var planItemHits: [StudyPlanItem] = []
     @State private var activityHits: [StudyActivity] = []
     @State private var interpreterHits: [InterpreterConversation] = []
+    @State private var errandHits: [ErrandCase] = []
     @State private var viewingTerm: GlossaryTerm?
     @State private var viewingTask: StudyTask?
     @State private var viewingCard: StudyCard?
@@ -139,7 +140,7 @@ struct SearchScreen: View {
         let learningCount = termHits.count + cardHits.count + taskHits.count
             + materialHits.count + assistantHits.count
             + examHits.count + examTopicHits.count + planItemHits.count
-            + activityHits.count + interpreterHits.count
+            + activityHits.count + interpreterHits.count + errandHits.count
         let sessionPart = results.isEmpty ? "没有匹配的课堂" : "共 \(results.count) 堂课匹配"
         let learningPart = learningCount > 0 ? " · 学习资料 \(learningCount) 条" : ""
         return Text(sessionPart + learningPart)
@@ -154,7 +155,7 @@ struct SearchScreen: View {
         if !termHits.isEmpty || !cardHits.isEmpty || !taskHits.isEmpty
             || !materialHits.isEmpty || !assistantHits.isEmpty
             || !examHits.isEmpty || !examTopicHits.isEmpty || !planItemHits.isEmpty
-            || !activityHits.isEmpty || !interpreterHits.isEmpty {
+            || !activityHits.isEmpty || !interpreterHits.isEmpty || !errandHits.isEmpty {
             VStack(alignment: .leading, spacing: LTSpacing.s) {
                 LTSectionHeader(title: "学习资料")
                 VStack(spacing: LTSpacing.xs) {
@@ -294,6 +295,23 @@ struct SearchScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    // 办事事项：正式事项的标题/目的/备注/已确认清单文字
+                    // （草稿、本地来源文件名、日期原文绝不被搜索）。
+                    ForEach(errandHits.prefix(3)) { errandCase in
+                        NavigationLink {
+                            ErrandCaseDetailView(caseID: errandCase.id)
+                                .environment(environment)
+                        } label: {
+                            learningRow(
+                                symbol: "checklist",
+                                tint: LTColors.accentBlue,
+                                title: errandCase.title,
+                                subtitle: "\(errandCase.scene.displayName) · \(errandCase.status.displayName)",
+                                chip: "办事事项"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
@@ -426,6 +444,8 @@ struct SearchScreen: View {
             examTopicHits = []
             planItemHits = []
             activityHits = []
+            interpreterHits = []
+            errandHits = []
             return
         }
         debounceTask = Task {
@@ -474,6 +494,7 @@ struct SearchScreen: View {
         // 的 matching 查询）。未保存草稿、API 错误、prompt、原始模型
         // 响应一律不索引。
         interpreterHits = (try? environment.repository.interpreterConversations(matching: query)) ?? []
+        errandHits = (try? environment.repository.errandCases(matching: query)) ?? []
         appliedQuery = query
     }
 

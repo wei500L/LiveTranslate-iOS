@@ -1,7 +1,9 @@
 #if DEBUG
+import EventKit
 import Foundation
 import SwiftData
 import UIKit
+import UserNotifications
 
 // MARK: - Launch options
 
@@ -20,6 +22,10 @@ struct DemoLaunchOptions {
         /// 随身翻译现场文件 demo：一份虚构的宿舍登记表 + canned OCR/AI
         /// 驱动真实 ViewModel 状态机（绝不打开相机/相册/App Group）。
         case interpreterDocument = "interpreter-document"
+        /// 办事事项 demo：完全虚构的宿舍登记案例（候选材料/已确认预约/
+        /// 现场问题/不确定费用/跟进 + 本地来源两种状态），fake 通知与
+        /// 日历（绝不触真实 UNUserNotificationCenter / EventKit）。
+        case administrativeCase = "administrative-case"
     }
 
     let screen: Screen
@@ -167,6 +173,16 @@ extension AppEnvironment {
             // Demo reminders use the wiped demo defaults (and never fire:
             // the demo never grants notification permission).
             taskReminders: TaskReminderScheduler(defaults: defaults),
+            // Demo errand reminders/calendar: FAKE centers — the demo
+            // never touches the real UNUserNotificationCenter or EventKit
+            // (the injectable protocols make the same real ViewModel and
+            // real UI run against in-memory stand-ins).
+            errandReminders: ErrandReminderScheduler(
+                defaults: defaults, center: DemoErrandNotificationCenter()
+            ),
+            errandCalendar: ErrandCalendarMirror(
+                defaults: defaults, store: DemoErrandEventStore()
+            ),
             // Demo mode never touches the production sync server.
             cloudSync: nil,
             studyReviewService: studyService,
@@ -188,6 +204,9 @@ extension AppEnvironment {
             bookmarks: environment.bookmarks,
             flow: environment.flow
         )
+        // The errand demo seeds its fictional dorm-registration case into
+        // the same in-memory container (real repository, fake surfaces).
+        DemoSeed.populateErrandDemo(container: container)
         environment.flow.pendingDemoScreen = options.screen
         return environment
     }
@@ -235,6 +254,12 @@ extension AppEnvironment {
             // the demo never opens camera/photos/real App Group).
             flow.selectedTab = .home
             flow.requestInterpreterScreen()
+        case .administrativeCase:
+            // The seeded dorm-registration case opens from the errand
+            // list (seeded in the demo SwiftData store; the demo never
+            // arms real notifications or EventKit).
+            flow.selectedTab = .home
+            flow.requestErrandCaseList()
         }
     }
 }
@@ -1376,6 +1401,175 @@ enum DemoSeed {
                 withAttributes: attrs
             )
         }
+    }
+}
+
+// MARK: - Errand demo (办事事项 · fake 通知/日历 + 虚构宿舍登记案例)
+
+/// Fake notification center — in-memory pending requests only; the demo
+/// NEVER touches the real UNUserNotificationCenter (no permission prompt,
+/// no real delivery).
+@MainActor
+final class DemoErrandNotificationCenter: ErrandNotificationScheduling {
+    private var pending: [ErrandNotificationRequest] = []
+
+    var authorizationState: UNAuthorizationStatus { .notDetermined }
+
+    func requestAuthorization() async -> Bool {
+        // The demo never grants: arming honestly reports 未创建.
+        false
+    }
+
+    func add(_ request: ErrandNotificationRequest) async throws {
+        pending.removeAll { $0.identifier == request.identifier }
+        pending.append(request)
+    }
+
+    func removePending(withIdentifiers identifiers: [String]) {
+        pending.removeAll { identifiers.contains($0.identifier) }
+    }
+
+    func pendingIdentifiers() async -> [String] {
+        pending.map(\.identifier)
+    }
+}
+
+/// Fake EventKit store — in-memory events; the demo NEVER touches the
+/// real EKEventStore (no calendar permission, no real writes).
+@MainActor
+final class DemoErrandEventStore: ErrandEventStoring {
+    private var events: [String: ErrandEventInfo] = [:]
+
+    var authorizationStatus: EKAuthorizationStatus { .notDetermined }
+
+    func requestWriteOnlyAccess() async -> Bool { false }
+
+    func writableCalendars() -> [ErrandCalendarInfo] {
+        [ErrandCalendarInfo(id: "demo-calendar", title: "演示日历")]
+    }
+
+    func event(identifier: String) -> ErrandEventInfo? { events[identifier] }
+
+    func save(
+        title: String, location: String, notes: String,
+        start: Date, duration: TimeInterval,
+        calendarIdentifier: String, existingIdentifier: String?
+    ) -> String? {
+        let identifier = existingIdentifier ?? "demo-event-\(UUID().uuidString.prefix(8))"
+        events[identifier] = ErrandEventInfo(
+            identifier: identifier, title: title, location: location,
+            notes: notes, startDate: start,
+            endDate: start.addingTimeInterval(duration)
+        )
+        return identifier
+    }
+
+    func remove(identifier: String) -> Bool {
+        events.removeValue(forKey: identifier) != nil
+    }
+}
+
+extension DemoSeed {
+    /// The fictional 宿舍登记 case: two pending materials, one confirmed
+    /// appointment, two questions to ask, one uncertain fee, one follow-up,
+    /// local sources in both states (present + origin-deleted), and the
+    /// AI-candidate vs user-confirmed distinction. Fully canned data in
+    /// the in-memory container — nothing here is a real record.
+    @MainActor
+    static func populateErrandDemo(container: ModelContainer) {
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+
+        // A fictional source conversation (本地来源"存在"状态) — plain
+        // canned text, the same fictional dorm scenario.
+        let conversation = InterpreterConversation(
+            title: "宿舍管理处 · 登记咨询",
+            sceneRaw: InterpreterScene.dorm.rawValue,
+            contextNote: "我是莫斯科国立大学留学生",
+            statusRaw: InterpreterConversationStatus.saved.rawValue,
+            startedAt: calendar.date(byAdding: .day, value: -1, to: today) ?? .now
+        )
+        context.insert(conversation)
+
+        let errandCase = ErrandCase(
+            title: "宿舍入住登记",
+            sceneRaw: InterpreterScene.dorm.rawValue,
+            statusRaw: ErrandCaseStatus.preparing.rawValue,
+            purpose: "办理宿舍入住登记并领取门禁卡",
+            userNote: "带好全部材料的原件与复印件",
+            timezoneID: "Europe/Moscow",
+            location: "宿舍管理处 203 室（虚构地址）",
+            contact: "管理处值班电话（虚构）",
+            hasLocalSources: true
+        )
+        context.insert(errandCase)
+        errandCase.storeLocalSources([
+            ErrandLocalSource(
+                kind: .conversation, conversationID: conversation.id
+            ),
+            ErrandLocalSource(
+                kind: .document, documentID: UUID(),
+                documentName: "已删除的登记表扫描件", pageNumber: 1
+            )
+        ])
+
+        func item(
+            _ title: String, kind: ErrandCaseItemKind, sequence: Int,
+            status: ErrandCaseItemStatus = .pending,
+            detail: String = "", dateText: String = "",
+            isRelative: Bool = false, uncertain: Bool = false,
+            origin: ErrandCaseItemOrigin = .manual,
+            dueAt: Date? = nil, feeText: String = ""
+        ) {
+            context.insert(ErrandCaseItem(
+                caseID: errandCase.id,
+                title: title,
+                kindRaw: kind.rawValue,
+                statusRaw: status.rawValue,
+                sequence: sequence,
+                detail: detail,
+                dueAt: dueAt,
+                dateText: dateText,
+                dateIsRelative: isRelative,
+                dateUncertain: uncertain,
+                originRaw: origin.rawValue,
+                confirmed: status != .unconfirmed,
+                feeText: feeText
+            ))
+        }
+
+        // 用户已确认的材料（手动加入 —— 与 AI 候选视觉区分）。
+        item("护照原件", kind: .requiredDocument, sequence: 0, detail: "原件 + 复印件两份")
+        item("落地签复印件", kind: .requiredDocument, sequence: 1)
+        // 已确认预约（周四上午 —— 相对日期换算，用户已确认时间）。
+        item(
+            "宿舍登记预约", kind: .appointment, sequence: 2,
+            dateText: "周四上午", isRelative: true,
+            dueAt: calendar.date(
+                byAdding: .day, value: 2, to: today
+            )?.addingTimeInterval(10 * 3600)
+        )
+        // 现场要问的两个问题。
+        item("登记完成后多久能拿到门禁卡？", kind: .question, sequence: 3)
+        item("是否需要缴纳押金（Какой залог）？", kind: .question, sequence: 4)
+        // 不确定费用（原文保留，未换算 —— 持续可见，不用漂亮 UI 隐藏）。
+        item(
+            "登记费用", kind: .payment, sequence: 5,
+            feeText: "工作人员口头提到 200₽，单据上未写金额 —— 待核对"
+        )
+        // 办理后跟进。
+        item(
+            "下周四回管理处领取门禁卡", kind: .followUp, sequence: 6,
+            dateText: "下周四", isRelative: true
+        )
+        // AI 候选（未确认 —— 设备本地，不入同步；与用户确认内容区分）。
+        item(
+            "通常需要的居住证明（通常需要，请核实）", kind: .requiredDocument,
+            sequence: 7, status: .unconfirmed, origin: .ai
+        )
+
+        try? context.save()
     }
 }
 #endif

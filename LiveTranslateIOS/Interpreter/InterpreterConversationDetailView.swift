@@ -10,6 +10,8 @@ struct InterpreterConversationDetailView: View {
     @State private var turns: [InterpreterTurn] = []
     @State private var availableDocumentIDs: Set<UUID> = []
     @State private var shareURL: URL?
+    /// 整理为办事事项（草稿编辑器）。
+    @State private var showErrandEditor = false
 
     private var conversation: InterpreterConversation? {
         environment.repository.interpreterConversation(id: conversationID)
@@ -46,6 +48,16 @@ struct InterpreterConversationDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                // 已保存对话 → 事项草稿（本地来源链接）。
+                Button {
+                    showErrandEditor = true
+                } label: {
+                    Image(systemName: "checklist")
+                }
+                .accessibilityLabel("整理为办事事项")
+                .disabled(conversation == nil)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
                         export(markdown: false)
@@ -62,6 +74,10 @@ struct InterpreterConversationDetailView: View {
                 }
                 .accessibilityLabel("导出")
             }
+        }
+        .sheet(isPresented: $showErrandEditor) {
+            ErrandCaseEditorView(sourceConversationID: conversationID)
+                .environment(environment)
         }
         .task {
             turns = (try? environment.repository.interpreterTurns(
