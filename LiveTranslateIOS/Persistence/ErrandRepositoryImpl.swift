@@ -276,9 +276,9 @@ extension TranscriptRepository {
         try saveErrandCaseItem(item)
     }
 
-    /// Status flips. done stamps completedAt; a reopen (done → pending)
-    /// stamps modifiedAt so the server-side terminal-stickiness sees a
-    /// genuinely newer edit.
+    /// Status flips. done stamps completedAt AND modifiedAt（重开走
+    /// wasTerminal 分支；首次完成的时间戳让服务器端终态粘滞与排序
+    /// 都有真实依据）。
     func setErrandCaseItemStatus(
         _ item: ErrandCaseItem, to next: ErrandCaseItemStatus
     ) throws {
@@ -286,6 +286,7 @@ extension TranscriptRepository {
         item.status = next
         if next == .done, item.completedAt == nil {
             item.completedAt = .now
+            item.modifiedAt = .now
         }
         if wasTerminal && (next == .pending || next == .unconfirmed) {
             item.modifiedAt = .now

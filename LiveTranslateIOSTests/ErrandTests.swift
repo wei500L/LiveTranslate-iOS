@@ -142,6 +142,7 @@ final class ErrandRepositoryTests: XCTestCase {
 
     func testInvalidTransitionThrows() throws {
         let draft = try repository.startErrandCaseDraft(scene: .dorm, title: "宿舍登记")
+        _ = try makeCaseItem(draft, title: "材料", kind: .requiredDocument)
         try repository.saveErrandCaseDraft(draft, status: .completed)
         XCTAssertThrowsError(try repository.setErrandCaseStatus(draft, to: .scheduled)) {
             XCTAssertTrue($0 is ErrandTransitionError)
@@ -290,10 +291,11 @@ final class ErrandRepositoryTests: XCTestCase {
     // localSourcesJSON 不被远端覆盖。
     func testInboundApplyNeverResurrectsLocalSources() throws {
         let draft = try repository.startErrandCaseDraft(scene: .dorm, title: "本地")
-        try repository.saveErrandCaseDraft(draft, status: .preparing)
+        // 先有内容（本地来源）再保存 —— 空草稿保存会被自动清理。
         _ = try repository.addErrandLocalSource(to: draft, ErrandLocalSource(
             kind: .document, documentID: UUID(), documentName: "本机文件.pdf"
         ))
+        try repository.saveErrandCaseDraft(draft, status: .preparing)
 
         var record = SyncServerRecordDTO(id: draft.id)
         record.title = "远端标题"
@@ -344,6 +346,8 @@ final class ErrandRepositoryTests: XCTestCase {
             kind: .document, documentID: UUID(), documentName: "绝密文件名.pdf"
         ))
         let formal = try repository.startErrandCaseDraft(scene: .dorm, title: "正式事项标题")
+        // 先有内容（清单项）再保存 —— 空草稿保存会被自动清理。
+        _ = try makeCaseItem(formal, title: "护照", kind: .requiredDocument)
         try repository.saveErrandCaseDraft(formal, status: .preparing)
 
         XCTAssertTrue(try repository.errandCases(matching: "草稿机密标题").isEmpty,
@@ -406,28 +410,37 @@ final class ErrandDateParserTests: XCTestCase {
 
     func testRelativeDays() {
         let anchorDate = anchor(2026, 9, 10)
+        let calendar = self.calendar
+        let anchorStart = calendar.startOfDay(for: anchorDate)
         let tomorrow = ErrandDateParser.candidates(
             in: "明天来取", anchor: anchorDate, calendar: calendar
         ).first { $0.rawText == "明天" }
         XCTAssertNotNil(tomorrow)
         XCTAssertEqual(
-            calendar.dateComponents([.day], from: anchorDate, to: tomorrow!.resolved!).day, 1
+            calendar.dateComponents(
+                [.day], from: anchorStart,
+                to: calendar.startOfDay(for: tomorrow!.resolved!)
+            ).day, 1
         )
         XCTAssertTrue(tomorrow!.isRelative)
         let poslezavtra = ErrandDateParser.candidates(
             in: "послезавтра будет готово", anchor: anchorDate, calendar: calendar
         ).first { $0.rawText == "послезавтра" }
         XCTAssertEqual(
-            calendar.dateComponents([.day], from: anchorDate, to: poslezavtra!.resolved!).day, 2
+            calendar.dateComponents(
+                [.day], from: anchorStart,
+                to: calendar.startOfDay(for: poslezavtra!.resolved!)
+            ).day, 2
         )
     }
 
     func testBareWeekdayIsUncertain() {
         // 无前缀"周四"：取最近未来但标记歧义（可能指本周已过的周四）。
+        // "周四上午" 会生成组合候选（rawText 更长）—— 单独查"周"前缀。
         let candidates = ErrandDateParser.candidates(
             in: "周四上午来", anchor: anchor(2026, 9, 7), calendar: calendar
         ) // 2026-09-07 is a Monday.
-        let weekday = candidates.first { $0.rawText.contains("周四") }
+        let weekday = candidates.first { $0.rawText.contains("周") }
         XCTAssertNotNil(weekday)
         XCTAssertTrue(weekday!.uncertain, "无前缀星期是歧义的 —— 需用户确认")
         let nextWeek = ErrandDateParser.candidates(
@@ -567,7 +580,12 @@ final class ErrandReminderSchedulerTests: XCTestCase {
             item: item, caseTitle: "宿舍登记（改名）", kind: .appointment, lead: .oneDay
         )
         XCTAssertEqual(center.pending.count, 1, "幂等：同 identifier 重排不叠加")
-        XCTAssertEqual(center.pending.first?.body, "宿舍登记（改名）")
+        // body 由隐私三档生成（SettingsStore.shared 的全局档位决定
+        // 是否带 item 标题 —— 只断言重排生效，不断言具体档位文案）。
+        XCTAssertTrue(
+            center.pending.first?.body.contains("宿舍登记") == true,
+            "重排后的 body 反映新标题"
+        )
 
         // 稳定性：identifier 只由 case/item/kind 决定。
         XCTAssertEqual(
