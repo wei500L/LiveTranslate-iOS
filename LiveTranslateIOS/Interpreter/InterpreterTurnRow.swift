@@ -40,17 +40,17 @@ struct InterpreterTurnRow: View {
 
     private var primaryFont: Font {
         switch emphasis {
-        case .current: return .interpreterPrimaryCurrent
-        case .recent: return .interpreterPrimaryRecent
-        case .history: return .interpreterPrimaryHistory
+        case .current: return LTTypography.interpreterPrimaryCurrent
+        case .recent: return LTTypography.interpreterPrimaryRecent
+        case .history: return LTTypography.interpreterPrimaryHistory
         }
     }
 
     private var secondaryFont: Font {
         switch emphasis {
-        case .current: return .interpreterSecondaryCurrent
-        case .recent: return .interpreterSecondaryRecent
-        case .history: return .interpreterSecondaryHistory
+        case .current: return LTTypography.interpreterSecondaryCurrent
+        case .recent: return LTTypography.interpreterSecondaryRecent
+        case .history: return LTTypography.interpreterSecondaryHistory
         }
     }
 
