@@ -102,7 +102,7 @@ final class InterpreterFormDraftModel {
     /// 用户输入值（原样保存 —— 绝不自动翻译、改大小写/空格/标点）。
     /// "必填"只是提示：不阻止保存真实值，也不虚构默认值。
     func setValue(fieldID: UUID, value: String) {
-        mutate(fieldID) { field in
+        mutate(fieldID: fieldID) { field in
             field.userValue = value
             field.status = InterpreterFormDraftField.effectiveStatus(field: field)
             if value.isEmpty { field.chineseSourceText = "" }
@@ -110,7 +110,7 @@ final class InterpreterFormDraftModel {
     }
 
     func setNote(fieldID: UUID, note: String) {
-        mutate(fieldID) { $0.userNote = note }
+        mutate(fieldID: fieldID) { $0.userNote = note }
     }
 
     /// 翻译结果写入（用户明确确认后调用）：正式表单值永远用普通俄语
@@ -119,7 +119,7 @@ final class InterpreterFormDraftModel {
         let plain = RussianStressValidator.stripStress(russian)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !plain.isEmpty else { return }
-        mutate(fieldID) { field in
+        mutate(fieldID: fieldID) { field in
             field.chineseSourceText = chinese
             field.userValue = plain
             field.status = .needsConfirmation // 翻译值默认待确认 —— 用户核对后才算已填
@@ -132,7 +132,7 @@ final class InterpreterFormDraftModel {
     }
 
     func markNeedsConfirmation(fieldID: UUID) {
-        mutate(fieldID) { field in
+        mutate(fieldID: fieldID) { field in
             guard !field.userValue.isEmpty else { return }
             field.status = .needsConfirmation
         }
@@ -140,14 +140,14 @@ final class InterpreterFormDraftModel {
 
     /// 用户核对翻译值后确认无误 → 已填。
     func confirmFilled(fieldID: UUID) {
-        mutate(fieldID) { field in
+        mutate(fieldID: fieldID) { field in
             guard !field.userValue.isEmpty else { return }
             field.status = .filled
         }
     }
 
     func markNotApplicable(fieldID: UUID, notApplicable: Bool) {
-        mutate(fieldID) { field in
+        mutate(fieldID: fieldID) { field in
             if notApplicable {
                 field.status = .notApplicable
             } else {

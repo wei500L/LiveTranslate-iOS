@@ -1815,6 +1815,9 @@ extension DemoSeed {
         switch state {
         case "failure": seedFailureOnly()
         case "longtext": seedLongTextOnly()
+        // form-filling：只种表单填写 demo（不与柜台对话种子共存 ——
+        // interpreterDraft 一次只认一个草稿会话）。
+        case "form-filling": break
         default: seedFullConversation()
         }
 

@@ -876,7 +876,7 @@ struct InterpreterFormFieldPage: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") {
-                        showTranslationConfirm = false
+                        showTranslationResult = false
                         pendingTranslation = nil
                     }
                 }
@@ -889,7 +889,7 @@ struct InterpreterFormFieldPage: View {
                                 chinese: field.userValue
                             )
                         }
-                        showTranslationConfirm = false
+                        showTranslationResult = false
                         pendingTranslation = nil
                     }
                 }

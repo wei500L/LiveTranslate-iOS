@@ -51,7 +51,10 @@ struct InterpreterFormFillingFlow: View {
                 InterpreterFormFieldPage(
                     model: model,
                     viewModel: viewModel,
-                    currentFieldID: $currentFieldID,
+                    currentFieldID: Binding(
+                        get: { currentFieldID },
+                        set: { newValue in self.currentFieldID = newValue }
+                    ),
                     onAskStaff: { field in
                         askStaff(field, prefilled: defaultAskQuestion(for: field))
                     }
