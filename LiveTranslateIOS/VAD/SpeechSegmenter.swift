@@ -304,6 +304,14 @@ final class SpeechSegmenter: @unchecked Sendable {
         return absoluteSampleIndex
     }
 
+    /// Whether speech is currently being accumulated into an open segment
+    /// (thread-safe — the interpreter's UI reads it per chunk to show
+    /// "对方正在说话" truthfully).
+    var isAccumulatingSpeech: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return inSpeech
+    }
+
     // MARK: - Overlap dedup (text level)
 
     /// Conservative removal of duplicated text at a forced-split boundary.

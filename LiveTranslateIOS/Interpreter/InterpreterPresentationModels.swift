@@ -43,6 +43,11 @@ enum InterpreterTurnAction: Equatable, Hashable, Sendable {
     case retryTranslation
     case editSource
     case deleteTurn
+    /// 记入当前办事事项（第二十轮：只在聚焦的最新对方回合显示）。
+    case recordToErrand
+    /// 快速回复（第二十轮：聚焦的最新对方回合 —— 暂停连续听并聚焦
+    /// 中文输入框）。
+    case beginReply
 }
 
 /// 一个回合的完整排版决策（从 InterpreterTurn 派生，纯函数）。
@@ -98,7 +103,8 @@ struct InterpreterTurnPresentation: Equatable, Sendable {
     static func make(
         turn: InterpreterTurn,
         isTranslating: Bool,
-        showStress: Bool
+        showStress: Bool,
+        isFocused: Bool = false
     ) -> InterpreterTurnPresentation {
         let phase = Self.phase(of: turn, isTranslating: isTranslating)
         let isCounterpart = turn.direction == .ru2zh
@@ -181,6 +187,13 @@ struct InterpreterTurnPresentation: Equatable, Sendable {
             if !isCounterpart && !turn.plainRussian.isEmpty {
                 primaryActions.append(.presentToCounterpart)
             }
+            // 快速回复 + 记入事项：只在聚焦的最新对方回合直接可见
+            // （历史回合经 overflow 菜单访问 —— 不给每条历史回合常驻
+            // 按钮）。
+            if isCounterpart && isFocused {
+                primaryActions.append(.beginReply)
+                primaryActions.append(.recordToErrand)
+            }
         } else if phase == .failed {
             // 失败：重试必须直接可见（不藏在展开区）。
             primaryActions.append(.retryTranslation)
@@ -188,6 +201,10 @@ struct InterpreterTurnPresentation: Equatable, Sendable {
         var overflowActions: [InterpreterTurnAction] = []
         if phase == .completed || phase == .failed {
             overflowActions.append(contentsOf: [.editSource, .retryTranslation, .deleteTurn])
+            if isCounterpart && !isFocused {
+                // 历史对方回合的记入事项入口（低频路径）。
+                overflowActions.append(.recordToErrand)
+            }
         }
 
         let copyText = primaryText.isEmpty ? turn.sourceText : primaryText

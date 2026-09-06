@@ -21,6 +21,10 @@ struct InterpreterTurnActions {
     var onEditSource: (String) -> Void = { _ in }
     var onDelete: () -> Void = {}
     var onToggleExpanded: () -> Void = {}
+    /// 记入当前办事事项（第二十轮：确认 sheet 由页面持有）。
+    var onRecordToErrand: (() -> Void)? = nil
+    /// 快速回复（第二十轮：暂停连续听 + 聚焦输入框；nil = 不提供）。
+    var onBeginReply: (() -> Void)? = nil
 }
 
 struct InterpreterTurnRow: View {
@@ -141,6 +145,13 @@ struct InterpreterTurnRow: View {
                         actions.onDelete()
                     } label: {
                         Label("删除回合", systemImage: "trash")
+                    }
+                case .recordToErrand:
+                    // 历史对方回合的记入事项（低频路径）。
+                    if let onRecordToErrand = actions.onRecordToErrand {
+                        Button(action: onRecordToErrand) {
+                            Label("记入事项", systemImage: "checklist")
+                        }
                     }
                 default:
                     EmptyView()
@@ -269,6 +280,26 @@ struct InterpreterTurnRow: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("给对方看这条俄语")
+                case .recordToErrand:
+                    if let onRecordToErrand = actions.onRecordToErrand {
+                        Button(action: onRecordToErrand) {
+                            Label("记入事项", systemImage: "checklist")
+                                .font(LTTypography.interpreterStatus)
+                                .foregroundStyle(LTColors.accentBlue)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("把这条现场要求记入当前办事事项")
+                    }
+                case .beginReply:
+                    if let onBeginReply = actions.onBeginReply {
+                        Button(action: onBeginReply) {
+                            Label("回复", systemImage: "arrowshape.turn.up.left")
+                                .font(LTTypography.interpreterStatus)
+                                .foregroundStyle(LTColors.accentGreen)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("回复对方，暂停连续收听并聚焦输入框")
+                    }
                 default:
                     EmptyView()
                 }

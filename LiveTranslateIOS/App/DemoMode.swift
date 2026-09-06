@@ -1615,7 +1615,9 @@ extension DemoSeed {
     /// 结果）。全部为虚构数据：不使用真实护照、地址、电话或对话。
     ///
     /// state 选择确定性视觉状态：
-    /// - conversation / listening / showmode / facing / sheet：完整对话；
+    /// - conversation / listening / continuous / showmode / facing / sheet：
+    ///   完整对话（continuous 注入连续听状态机 + "对方在说"指示，两条
+    ///   连续虚构对方回合展示连续分句排版）；
     /// - failure：仅失败 + 等待回合（首屏即见失败重试）；
     /// - longtext：仅超长中俄文本回合。
     @MainActor

@@ -56,10 +56,38 @@ final class InterpreterViewModel {
     }
 
     private(set) var listeningPhase: ListeningPhase = .idle
+    /// 连续收听模式（第二十轮）：capture session 保活，VAD 持续分句，
+    /// 每句独立落 turn。单句模式（听对方说）保持既有语义。
+    private(set) var isContinuousListening = false
+    /// 连续模式暂停原因（UI 展示"已暂停 + 继续听"；nil = 未暂停）。
+    private(set) var continuousPauseReason: ContinuousPauseReason?
+    /// 对方正在说话（segmenter 正在积累语音 —— 句子尚未闭合）。
+    private(set) var counterpartIsSpeaking = false
     /// 真实电平（仅真实音量数据驱动显示；无数据时不显示波形）。
     private(set) var audioLevel: Float = 0
     private(set) var micPermissionDenied = false
     private(set) var asrModelInstalled = true
+
+    /// 连续模式暂停原因（运行时状态 —— 绝不入库、不进 outbox）。
+    enum ContinuousPauseReason: Equatable {
+        /// 用户点击暂停 / 进入回复。
+        case user
+        /// 开始朗读或进入给对方看。
+        case speaking
+        /// 音频被系统中断（不自动恢复）。
+        case audioInterrupted
+        /// 收音管线故障（如实展示，用户可重试）。
+        case captureFailed
+
+        var displayName: String {
+            switch self {
+            case .user: return "已暂停"
+            case .speaking: return "朗读时暂停"
+            case .audioInterrupted: return "音频被中断"
+            case .captureFailed: return "收音中断"
+            }
+        }
+    }
 
     private var capture: AudioCaptureService?
     private var processingTask: Task<Void, Never>?
@@ -299,16 +327,106 @@ final class InterpreterViewModel {
         }
     }
 
+    /// 快捷接话：暂停连续听并请求聚焦中文输入框（UI-only token ——
+    /// composer 观察 ID 变化执行聚焦；不入库、不进 outbox）。
+    private(set) var replyFocusRequestID: UUID?
+
+    /// 开始回复（快速接话入口）：连续听暂停；输入框聚焦由 composer
+    /// 响应 replyFocusRequestID。
+    func beginReply() {
+        if isContinuousListening, continuousPauseReason == nil {
+            pauseContinuousListening(reason: .user)
+        }
+        replyFocusRequestID = UUID()
+    }
+
+    // MARK: - 连续收听（第二十轮）
+
+    /// 开始连续收听。与单句模式共用同一条链路（同一 AudioCaptureService
+    /// / VAD / SpeechSegmenter / ASREngineManager / turn 落库 / 翻译回填）。
+    func startContinuousListening() async {
+        // 已在连续模式（含暂停中）：恢复即可。
+        if isContinuousListening {
+            resumeContinuousListening(reason: .user)
+            return
+        }
+        isContinuousListening = true
+        continuousPauseReason = nil
+        await startListening()
+        // 启动失败（含权限拒绝回到 idle）时不留在连续模式。
+        if listeningPhase != .listening {
+            isContinuousListening = false
+        }
+    }
+
+    /// 暂停连续收听。session、segmenter 与 ASR 引擎全部保活；已形成的
+    /// segment 照常完成，尚未形成有效语音的缓冲被丢弃 —— 不创建伪 turn。
+    func pauseContinuousListening(reason: ContinuousPauseReason) {
+        guard isContinuousListening, continuousPauseReason == nil else { return }
+        // 捕获真实中断/故障状态（如实展示，不假装修好）。
+        var effectiveReason = reason
+        if let capture {
+            switch capture.state {
+            case .interrupted, .recovering: effectiveReason = .audioInterrupted
+            case .failed: effectiveReason = .captureFailed
+            default: break
+            }
+        }
+        pauseGate.isPaused = true
+        // 丢弃尚未形成有效语音的缓冲（诚实收尾：语音积累不足一段的
+        // 尾巴直接结束，不落伪 turn）。
+        _ = segmenter?.flush()
+        continuousPauseReason = effectiveReason
+        counterpartIsSpeaking = false
+        audioLevel = 0
+        listeningPhase = .idle
+        Self.logger.info("interpreter continuous listening paused (\(String(describing: effectiveReason), privacy: .public))")
+    }
+
+    /// 用户明确点击"继续听"恢复（音频中断后绝不自动恢复）。
+    func resumeContinuousListening(reason: ContinuousPauseReason = .user) {
+        guard isContinuousListening, continuousPauseReason != nil else { return }
+        guard let capture else {
+            // session 已不存在（停止/失败后）：回到普通入口。
+            isContinuousListening = false
+            continuousPauseReason = nil
+            return
+        }
+        switch capture.state {
+        case .running:
+            // 收音前停止 TTS（朗读让路 —— 与开始收音同一规则）。
+            speech.stop()
+            pauseGate.isPaused = false
+            continuousPauseReason = nil
+            listeningPhase = .listening
+            Self.logger.info("interpreter continuous listening resumed")
+        case .interrupted, .recovering:
+            // 中断未恢复：保持暂停（显示"音频被中断"，用户可稍后再试）。
+            continuousPauseReason = .audioInterrupted
+        case .failed:
+            // 管线已死：结束连续模式，用户从"听一句/连续听"重新开始。
+            continuousPauseReason = .captureFailed
+        case .idle:
+            // session 已被停止（suspend/结束）：回到普通入口。
+            isContinuousListening = false
+            continuousPauseReason = nil
+        }
+    }
+
+    /// 暂停门（原子标志 —— detached 音频循环读，主线程写）。
+    private let pauseGate = InterpreterPauseGate()
+
     /// 收音主循环：VAD → 分句 → ASR（串行）。每个完成回合立即落本地
     /// 并触发翻译。
     private func startListeningLoop(chunks: AsyncStream<AudioChunk>) {
-        let settings = environment.settings
         do {
             vad = try SherpaSileroVAD()
         } catch {
+            await teardownListening()
             listeningPhase = .failed("语音活动检测初始化失败")
             return
         }
+        let settings = environment.settings
         var parameters = SpeechSegmenter.Parameters()
         parameters.minSpeechSeconds = TimeInterval(settings.vadMinSpeechMs) / 1000
         parameters.silenceEndSeconds = TimeInterval(settings.vadSilenceEndMs) / 1000
@@ -316,14 +434,28 @@ final class InterpreterViewModel {
 
         let vad = self.vad!
         let segmenter = self.segmenter!
+        let pauseFlag = pauseGate
         processingTask = Task.detached(priority: .userInitiated) { [weak self] in
             for await chunk in chunks {
                 guard let self else { break }
+                // 暂停窗口：丢弃音频（麦克风仍在运行，VAD 状态重置 ——
+                // 恢复后从干净的语音起点重新分句）。
+                if pauseFlag.isPaused {
+                    vad.reset()
+                    continue
+                }
                 // 真实电平（仅真实数据驱动 UI 波形）。
                 let rms = chunk.rms
-                await MainActor.run { self.audioLevel = rms }
+                let wasSpeaking = segmenter.isAccumulatingSpeech
                 let isSpeech = vad.process(window: chunk.samples[...])
                 let segments = segmenter.push(window: chunk.samples[...], isSpeech: isSpeech)
+                let nowSpeaking = segmenter.isAccumulatingSpeech
+                await MainActor.run {
+                    self.audioLevel = rms
+                    if nowSpeaking != wasSpeaking {
+                        self.counterpartIsSpeaking = nowSpeaking
+                    }
+                }
                 for segment in segments {
                     await self.handleSpeechSegment(segment)
                 }
@@ -353,6 +485,18 @@ final class InterpreterViewModel {
         speech.isSpeaking
     }
 
+    /// 课堂是否正在运行（收音入口禁用 + 现有提示）。
+    var classroomActive: Bool {
+        environment.coordinator.isRunning
+    }
+
+    /// 收音管线是否被系统中断/正在恢复（如实透出 —— AudioCaptureService
+    /// 的 observable state，View 直接读取即可随真实状态刷新）。
+    var captureInterrupted: Bool {
+        guard let capture else { return false }
+        return capture.state == .interrupted || capture.state == .recovering
+    }
+
     /// 一个语音段完成：本地 ASR → 落本地俄语回合 → 翻译。
     private func handleSpeechSegment(_ segment: SpeechSegment) async {
         guard listeningPhase == .listening || listeningPhase == .transcribing else { return }
@@ -377,7 +521,18 @@ final class InterpreterViewModel {
             Self.logger.error("asr failed: \(error)")
             // ASR 失败：回到收音，不创建回合。
         }
-        listeningPhase = (capture?.state.isDeliveringAudio ?? false) ? .listening : .idle
+        // 收音相位收尾：单句模式（听一句）一句完成即停 —— capture 一并
+        // 拆除（正在积累的下一句缓冲直接丢弃，不创建伪 turn）；连续模式
+        // 继续监听下一句（暂停中保持 idle —— 暂停窗口的门已挡住新音频）。
+        if isContinuousListening {
+            if continuousPauseReason == nil {
+                listeningPhase = (capture?.state.isDeliveringAudio ?? false) ? .listening : .idle
+            } else {
+                listeningPhase = .idle
+            }
+        } else {
+            await teardownListening()
+        }
     }
 
     /// 对方回合落本地 + 触发翻译（失败保留原文）。
@@ -394,7 +549,7 @@ final class InterpreterViewModel {
         }
     }
 
-    /// 停止收音（保留草稿与回合）。
+    /// 停止收音（保留草稿与回合）。连续模式状态一并清除。
     func stopListening() async {
         processingTask?.cancel()
         processingTask = nil
@@ -408,14 +563,24 @@ final class InterpreterViewModel {
                 await handleSpeechSegment(segment)
             }
         }
+        await teardownListening()
+        Self.logger.info("interpreter listening stopped")
+    }
+
+    /// 拆除收音链（capture 停止、VAD/segmenter 释放、ASR session 释放、
+    /// 连续模式状态清零）。暂停不经过这里 —— 只有真正停止才拆。
+    private func teardownListening() async {
+        pauseGate.isPaused = false
         await capture?.stop()
         capture = nil
         vad = nil
         segmenter = nil
         environment.engineManager.endSession()
+        isContinuousListening = false
+        continuousPauseReason = nil
+        counterpartIsSpeaking = false
         audioLevel = 0
         listeningPhase = .idle
-        Self.logger.info("interpreter listening stopped")
     }
 
     // MARK: - 翻译：对方俄语 → 中文
@@ -905,13 +1070,15 @@ final class InterpreterViewModel {
     }
 
     /// 一个回合的排版决策（纯函数派生 —— 视图不自行猜测主次语言）。
+    /// isFocused = 该回合是当前聚焦（最新）回合。
     func presentation(
         for turn: InterpreterTurn, isTranslating: Bool
     ) -> InterpreterTurnPresentation {
         InterpreterTurnPresentation.make(
             turn: turn,
             isTranslating: isTranslating,
-            showStress: environment.settings.interpreterShowStress
+            showStress: environment.settings.interpreterShowStress,
+            isFocused: turn.id == focusedTurnID
         )
     }
 
@@ -939,6 +1106,11 @@ final class InterpreterViewModel {
     func speakTurn(_ turn: InterpreterTurn) {
         let russian = turn.plainRussian.isEmpty ? turn.stressedRussian : turn.plainRussian
         guard !russian.isEmpty else { return }
+        // 朗读前暂停连续收听（麦克风与扬声器让路；用户明确点"继续听"
+        // 恢复 —— 绝不自动恢复）。单句收音保持既有语义：用户控制。
+        if isContinuousListening, continuousPauseReason == nil {
+            pauseContinuousListening(reason: .speaking)
+        }
         // 收音时先停收音再朗读由用户控制；朗读前停止正在进行的朗读。
         speech.speak(russian)
     }
@@ -948,8 +1120,12 @@ final class InterpreterViewModel {
     }
 
     /// 进入"给对方看"：锁定该回合并停止正在播放的旧句（展示期间新
-    /// 回合、同步或后台翻译完成都不得替换锁定内容）。
+    /// 回合、同步或后台翻译完成都不得替换锁定内容）。连续收听同时
+    /// 暂停（展示期间不收音；用户明确点"继续听"恢复）。
     func presentTurn(_ turn: InterpreterTurn) {
+        if isContinuousListening, continuousPauseReason == nil {
+            pauseContinuousListening(reason: .speaking)
+        }
         speech.stop()
         presentedTurnID = turn.id
     }
@@ -1004,9 +1180,11 @@ final class InterpreterViewModel {
         documentContext?.reload(conversationID: nil)
     }
 
-    /// 离开页面（不打断草稿 —— 切后台/误退出不丢对话）。
+    /// 离开页面（不打断草稿 —— 切后台/误退出不丢对话）。连续模式暂停中
+    /// 也一并停止（capture session 不得在页面外存活）。
     func suspend() async {
-        if listeningPhase == .listening || listeningPhase == .transcribing {
+        if listeningPhase == .listening || listeningPhase == .transcribing
+            || isContinuousListening {
             await stopListening()
         }
         speech.stop()
@@ -1115,10 +1293,16 @@ final class InterpreterViewModel {
     // MARK: - Demo 注入点（Debug 构建；Release 无此路径）
 
     #if DEBUG
-    /// UI-demo（--demo-interpreter-state listening）：把收音状态置为
-    /// 真实状态机的 listening，并用确定性脚本驱动真实电平显示
+    /// UI-demo（--demo-interpreter-state listening/continuous）：把收音
+    /// 状态置为真实状态机的对应相位，并用确定性脚本驱动真实电平显示
     /// （无麦克风、无音频 —— 状态机本身与真实路径完全一致）。
-    func debugApplyDemoListeningState() {
+    func debugApplyDemoListeningState(continuous: Bool = false) {
+        if continuous {
+            isContinuousListening = true
+            continuousPauseReason = nil
+            // "对方正在说"指示（真实 VAD 派生状态的确定性注入）。
+            counterpartIsSpeaking = true
+        }
         guard listeningPhase == .idle else { return }
         listeningPhase = .listening
         debugDemoLevelTask?.cancel()
@@ -1138,4 +1322,22 @@ final class InterpreterViewModel {
 
     private var debugDemoLevelTask: Task<Void, Never>?
     #endif
+}
+
+/// 连续收听暂停门（原子布尔 —— detached 音频循环无锁读取，主线程
+/// 暂停/恢复时翻转）。
+final class InterpreterPauseGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var paused = false
+
+    var isPaused: Bool {
+        get {
+            lock.lock(); defer { lock.unlock() }
+            return paused
+        }
+        set {
+            lock.lock(); defer { lock.unlock() }
+            paused = newValue
+        }
+    }
 }

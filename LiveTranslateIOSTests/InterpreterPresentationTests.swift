@@ -220,6 +220,44 @@ final class InterpreterPresentationTests: XCTestCase {
         XCTAssertEqual(failed.primaryActions, [.retryTranslation])
     }
 
+    // 8b. 快速接话/记入事项（第二十轮）：只在聚焦的最新对方回合直接
+    // 可见；历史对方回合经 overflow；我的回合即使聚焦也不带。
+    func testFocusedCounterpartQuickActions() {
+        let turn = counterpartTurn(status: .completed, chinese: "请带护照原件。")
+
+        let focused = InterpreterTurnPresentation.make(
+            turn: turn, isTranslating: false, showStress: false, isFocused: true
+        )
+        XCTAssertEqual(
+            focused.primaryActions,
+            [.speakRussian, .copyPrimary, .beginReply, .recordToErrand]
+        )
+
+        let history = InterpreterTurnPresentation.make(
+            turn: turn, isTranslating: false, showStress: false, isFocused: false
+        )
+        XCTAssertEqual(history.primaryActions, [.speakRussian, .copyPrimary])
+        XCTAssertEqual(
+            history.overflowActions,
+            [.editSource, .retryTranslation, .deleteTurn, .recordToErrand]
+        )
+        // 聚焦的等待翻译回合不带快捷动作（翻译完成后才提供）。
+        let pendingFocused = InterpreterTurnPresentation.make(
+            turn: counterpartTurn(status: .pending),
+            isTranslating: false, showStress: false, isFocused: true
+        )
+        XCTAssertTrue(pendingFocused.primaryActions.isEmpty)
+
+        // 我的回合（即使聚焦）不带这两个动作。
+        let userFocused = InterpreterTurnPresentation.make(
+            turn: userTurn(), isTranslating: false, showStress: false, isFocused: true
+        )
+        XCTAssertEqual(
+            userFocused.primaryActions,
+            [.speakRussian, .copyPrimary, .presentToCounterpart]
+        )
+    }
+
     // 9. 低频动作进入 overflow（编辑/重译/删除）。
     func testOverflowActionsForCompletedTurns() {
         let completed = InterpreterTurnPresentation.make(
@@ -623,6 +661,56 @@ final class InterpreterCounterViewModelTests: XCTestCase {
         let viewModel = InterpreterViewModel(environment: environment)
         // 空的 studyServiceBox（默认）→ 未配置。
         XCTAssertFalse(viewModel.isModelConfigured)
+    }
+
+    // 连续收听（第二十轮）：朗读 / Show Mode / 回复都会暂停连续听；
+    // 继续听只由用户明确触发（capture 不存在时回到普通入口 —— 绝不
+    // 假装有可恢复的 session）。
+    func testContinuousListeningPausesForSpeechShowModeAndReply() async throws {
+        _ = try seedDraftTurns(count: 2)
+        let viewModel = InterpreterViewModel(environment: environment)
+        await viewModel.reload()
+
+        // DEBUG 注入连续模式（真实状态机路径；测试环境无麦克风 ——
+        // DemoEngineManager 使真实 startListening 在引擎加载处失败，
+        // 这里只验证暂停/继续的状态语义）。
+        viewModel.debugApplyDemoListeningState(continuous: true)
+        XCTAssertTrue(viewModel.isContinuousListening)
+        XCTAssertNil(viewModel.continuousPauseReason)
+
+        // 朗读 → 暂停（speaking 原因）；回合内容不受影响。
+        viewModel.speakTurn(viewModel.turns[0])
+        XCTAssertEqual(viewModel.continuousPauseReason, .speaking)
+        XCTAssertEqual(viewModel.listeningPhase, .idle)
+        XCTAssertFalse(viewModel.counterpartIsSpeaking)
+
+        // 继续（capture 不存在 → 诚实回到普通入口，不假装恢复）。
+        viewModel.resumeContinuousListening()
+        XCTAssertFalse(viewModel.isContinuousListening)
+        XCTAssertNil(viewModel.continuousPauseReason)
+
+        // Show Mode → 暂停 + 锁定回合。
+        viewModel.debugApplyDemoListeningState(continuous: true)
+        viewModel.presentTurn(viewModel.turns[0])
+        XCTAssertEqual(viewModel.continuousPauseReason, .speaking)
+        XCTAssertEqual(viewModel.presentedTurnID, viewModel.turns[0].id)
+        XCTAssertEqual(viewModel.listeningPhase, .idle)
+
+        // 快速回复 → 暂停（user 原因）+ 聚焦请求（UI-only token）。
+        viewModel.resumeContinuousListening()
+        viewModel.debugApplyDemoListeningState(continuous: true)
+        viewModel.beginReply()
+        XCTAssertEqual(viewModel.continuousPauseReason, .user)
+        XCTAssertEqual(viewModel.listeningPhase, .idle)
+        XCTAssertNotNil(viewModel.replyFocusRequestID)
+
+        // 非连续模式：beginReply 不改变收音状态（单句模式由用户控制）。
+        let plain = InterpreterViewModel(environment: environment)
+        await plain.reload()
+        plain.beginReply()
+        XCTAssertFalse(plain.isContinuousListening)
+        XCTAssertNil(plain.continuousPauseReason)
+        XCTAssertNotNil(plain.replyFocusRequestID)
     }
 }
 

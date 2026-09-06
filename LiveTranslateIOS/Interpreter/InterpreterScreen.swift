@@ -21,6 +21,12 @@ struct InterpreterScreen: View {
     @State private var showDocumentPanel = false
     /// 办事上下文 sheet（待问问题/材料/已确认信息）。
     @State private var showErrandContextSheet = false
+    /// 记入事项确认 sheet（对方 turn → ErrandCaseItem）。
+    @State private var turnErrandTarget: InterpreterTurn?
+    /// 围绕文件提问的模板 sheet。
+    @State private var showDocumentQuestionTemplates = false
+    /// 模板 sheet 转入文件面板时预填的问题（AI 按文件回答链）。
+    @State private var docPanelPendingQuestion: String?
     /// 结束保存时的文件处理选择。
     @State private var endFileDisposition: InterpreterViewModel.EndFileDisposition = .discardDocuments
     /// 整理为办事事项（当前对话 → 事项草稿的本地来源链接）。
@@ -158,12 +164,14 @@ struct InterpreterScreen: View {
             if let viewModel {
                 InterpreterDocumentPanel(
                     viewModel: viewModel,
-                    isPresented: $showDocumentPanel
+                    isPresented: $showDocumentPanel,
+                    pendingQuestion: docPanelPendingQuestion ?? ""
                 )
                 .environment(environment)
                 .onDisappear {
                     // 文件上下文变化后刷新上下文条（就绪数/选中状态）。
                     viewModel.refreshCounterContext()
+                    docPanelPendingQuestion = nil
                 }
             }
         }
@@ -176,6 +184,38 @@ struct InterpreterScreen: View {
                         viewModel.applySuggestion(question)
                     },
                     onOpenDocuments: { showDocumentPanel = true }
+                )
+                .environment(environment)
+            }
+        }
+        .sheet(isPresented: $showDocumentQuestionTemplates, onDismiss: {
+            // 模板 sheet 关闭后再打开文件面板（同一时间只呈现一个
+            // sheet；pendingQuestion 预填 AI 按文件回答的问题）。
+            if docPanelPendingQuestion != nil {
+                showDocumentPanel = true
+            }
+        }) {
+            if let viewModel {
+                InterpreterDocumentQuestionTemplateSheet(
+                    viewModel: viewModel,
+                    documentCount: viewModel.documentContext?.documents.count ?? 0,
+                    onAskWithAI: { question in
+                        docPanelPendingQuestion = question
+                        showDocumentQuestionTemplates = false
+                    }
+                )
+                .environment(environment)
+            }
+        }
+        .sheet(item: $turnErrandTarget) { turn in
+            if let viewModel {
+                InterpreterTurnErrandSheet(
+                    viewModel: viewModel,
+                    turn: turn,
+                    onSaved: {
+                        // 写入成功后刷新上下文条与未完成计数。
+                        viewModel.refreshCounterContext()
+                    }
                 )
                 .environment(environment)
             }
@@ -218,8 +258,17 @@ struct InterpreterScreen: View {
                         Task { await viewModel.startListening() }
                     }
                 },
+                onToggleContinuousListening: {
+                    Task { await viewModel.startContinuousListening() }
+                },
+                onBeginReply: {
+                    // 快速接话：暂停连续听（ViewModel 处理）；输入框聚焦
+                    // 由 composer 观察 replyFocusRequestID 完成。
+                    viewModel.beginReply()
+                },
                 onOpenDocuments: { showDocumentPanel = true },
                 onOpenQuestions: { showErrandContextSheet = true },
+                onOpenDocumentQuestionTemplates: { showDocumentQuestionTemplates = true },
                 onEndRequested: {
                     if environment.settings.interpreterAskToSave {
                         showEndConfirmation = true
@@ -227,12 +276,22 @@ struct InterpreterScreen: View {
                         Task { await endConversation(save: true) }
                     }
                 },
-                pendingQuestionCount: viewModel.counterContext?.pendingQuestionCount ?? 0
+                pendingQuestionCount: viewModel.counterContext?.pendingQuestionCount ?? 0,
+                hasDocumentSelection: documentSummary(viewModel)?.hasSelection ?? false
             )
         }
         .onChange(of: viewModel.documentContext?.documents.count) { _, _ in
             // 文件导入/删除后刷新上下文条。
             viewModel.refreshCounterContext()
+        }
+        .onChange(of: viewModel.captureInterrupted) { _, interrupted in
+            // 音频被系统中断（来电/Siri）：连续听立即暂停（显示"音频被
+            // 中断"+ 继续听）—— 绝不自动恢复；单句模式保持既有行为
+            // （capture 服务自身的恢复链路）。
+            if interrupted, viewModel.isContinuousListening,
+               viewModel.continuousPauseReason == nil {
+                viewModel.pauseContinuousListening(reason: .audioInterrupted)
+            }
         }
         .fullScreenCover(item: Binding(
             get: {
@@ -282,7 +341,15 @@ struct InterpreterScreen: View {
                 } else {
                     viewModel.expandedTurnIDs.insert(turn.id)
                 }
-            }
+            },
+            // 记入事项：对方回合提供（确认 sheet 由本页面持有）。
+            onRecordToErrand: turn.direction == .ru2zh ? {
+                turnErrandTarget = turn
+            } : nil,
+            // 快速回复：对方回合提供（暂停连续听 + 聚焦输入框）。
+            onBeginReply: turn.direction == .ru2zh ? {
+                viewModel.beginReply()
+            } : nil
         )
     }
 
@@ -332,6 +399,10 @@ struct InterpreterScreen: View {
         switch args[index + 1] {
         case "listening":
             viewModel.debugApplyDemoListeningState()
+        case "continuous":
+            // 连续听：真实状态机 listening + 连续模式标志（两条虚构对方
+            // 回合由种子对话提供 —— 展示连续分句排版）。
+            viewModel.debugApplyDemoListeningState(continuous: true)
         case "showmode":
             // 锁定最近一条我的回复（给对方看的语义 —— 普通俄语主文本）。
             if let turn = viewModel.turns.last(where: {

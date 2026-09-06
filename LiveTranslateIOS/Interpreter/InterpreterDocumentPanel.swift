@@ -142,6 +142,11 @@ struct InterpreterDocumentPanel: View {
         }
         .onAppear {
             documentModel?.reload(conversationID: conversationID)
+            // 围绕文件提问带入的问题（AI 按文件回答链）：预填到问题
+            // 输入框 —— 不自动发送、不自动开麦。
+            if !pendingQuestion.isEmpty, analysisQuestion.isEmpty {
+                analysisQuestion = pendingQuestion
+            }
         }
     }
 

@@ -14,17 +14,36 @@ struct InterpreterComposer: View {
     let viewModel: InterpreterViewModel
     let onSubmitReply: () -> Void
     let onToggleListening: () -> Void
+    /// 连续听（开/暂停/继续）。
+    let onToggleContinuousListening: () -> Void
+    /// 快速接话：暂停连续听并聚焦中文输入框（由 ViewModel 处理暂停；
+    /// 聚焦状态在本视图内）。
+    let onBeginReply: () -> Void
     let onOpenDocuments: () -> Void
     let onOpenQuestions: () -> Void
+    /// 围绕文件提问（模板 sheet；有选中的文件上下文时显示）。
+    let onOpenDocumentQuestionTemplates: () -> Void
     /// 结束本次翻译（确认对话框由页面持有）。
     let onEndRequested: () -> Void
     /// 待问问题数（无事项上下文时入口隐藏）。
     var pendingQuestionCount: Int = 0
+    /// 当前是否有选中的文件上下文（chip）。
+    var hasDocumentSelection: Bool = false
 
     @FocusState private var replyFieldFocused: Bool
 
     private var isListening: Bool {
         viewModel.listeningPhase == .listening || viewModel.listeningPhase == .transcribing
+    }
+
+    /// 连续听运行中（未暂停）。
+    private var isContinuousActive: Bool {
+        viewModel.isContinuousListening && viewModel.continuousPauseReason == nil
+    }
+
+    /// 连续模式暂停中（显示醒目"继续听"）。
+    private var isContinuousPaused: Bool {
+        viewModel.isContinuousListening && viewModel.continuousPauseReason != nil
     }
 
     private var canSubmit: Bool {
@@ -55,6 +74,10 @@ struct InterpreterComposer: View {
             Rectangle()
                 .fill(LTColors.separator)
                 .frame(height: 0.5)
+        }
+        // 快速接话：VM 的聚焦请求（回复按钮 / 暂停行的"回复对方"）。
+        .onChange(of: viewModel.replyFocusRequestID) { _, _ in
+            replyFieldFocused = true
         }
     }
 
@@ -139,6 +162,14 @@ struct InterpreterComposer: View {
             ), axis: .vertical)
             .lineLimit(1...4)
             .focused($replyFieldFocused)
+            // 快速接话：点输入框聚焦即暂停连续听（session 保活，用户
+            // 完成后明确点"继续听"—— 绝不自动恢复）。
+            .onChange(of: replyFieldFocused) { _, focused in
+                if focused, viewModel.isContinuousListening,
+                   viewModel.continuousPauseReason == nil {
+                    viewModel.pauseContinuousListening(reason: .user)
+                }
+            }
             .textFieldStyle(.plain)
             .font(LTTypography.body)
             .padding(LTSpacing.s)
@@ -172,6 +203,19 @@ struct InterpreterComposer: View {
         HStack(spacing: LTSpacing.m) {
             compactMicButton
             documentButton
+            if hasDocumentSelection {
+                Button {
+                    onOpenDocumentQuestionTemplates()
+                } label: {
+                    Label("围绕这项提问", systemImage: "text.magnifyingglass")
+                        .font(LTTypography.interpreterStatus)
+                        .foregroundStyle(LTColors.accentBlue)
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: LTSpacing.minTouchTarget)
+                .contentShape(Rectangle())
+                .accessibilityLabel("围绕选中的文件提问")
+            }
             if pendingQuestionCount > 0 {
                 Button {
                     onOpenQuestions()
@@ -188,18 +232,54 @@ struct InterpreterComposer: View {
     }
 
     private var compactMicButton: some View {
-        Button(action: onToggleListening) {
+        Button(action: compactMicAction) {
             Label(
-                isListening ? "停止收音" : "收音",
-                systemImage: isListening ? "stop.circle.fill" : "mic.circle"
+                compactMicLabel,
+                systemImage: compactMicSymbol
             )
             .font(LTTypography.interpreterStatus)
-            .foregroundStyle(isListening ? LTColors.warning : LTColors.accentCyan)
+            .foregroundStyle(compactMicTint)
             .frame(minHeight: LTSpacing.minTouchTarget)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isListening ? "停止收音" : "开始收音")
+        .accessibilityLabel(compactMicAccessibility)
+    }
+
+    /// 键盘弹出时的紧凑收音开关：连续模式 → 暂停/继续；单句 → 停止/
+    /// 开始。
+    private var compactMicAction: () -> Void {
+        if isContinuousActive {
+            return { viewModel.pauseContinuousListening(reason: .user) }
+        }
+        if isContinuousPaused {
+            return { viewModel.resumeContinuousListening() }
+        }
+        return onToggleListening
+    }
+
+    private var compactMicLabel: String {
+        if isContinuousActive { return "暂停连续听" }
+        if isContinuousPaused { return "继续听" }
+        return isListening ? "停止收音" : "收音"
+    }
+
+    private var compactMicSymbol: String {
+        if isContinuousActive { return "pause.circle.fill" }
+        if isContinuousPaused { return "play.circle.fill" }
+        return isListening ? "stop.circle.fill" : "mic.circle"
+    }
+
+    private var compactMicTint: Color {
+        if isContinuousActive { return LTColors.warning }
+        if isContinuousPaused { return LTColors.accentGreen }
+        return isListening ? LTColors.warning : LTColors.accentCyan
+    }
+
+    private var compactMicAccessibility: String {
+        if isContinuousActive { return "暂停连续收听" }
+        if isContinuousPaused { return "继续连续收听" }
+        return isListening ? "停止收音" : "开始收音"
     }
 
     private var documentButton: some View {
@@ -224,11 +304,22 @@ struct InterpreterComposer: View {
 
     private var listeningRow: some View {
         VStack(spacing: LTSpacing.xs) {
-            if viewModel.listeningPhase == .listening {
+            if isContinuousPaused {
+                continuousPausedRow
+            } else if viewModel.listeningPhase == .listening {
                 // 真实电平指示（仅真实音量数据；无数据不显示波形）。
-                ListeningIndicator(level: viewModel.audioLevel) {
-                    Task { await viewModel.finishCurrentUtteranceManually() }
-                }
+                ListeningIndicator(
+                    level: viewModel.audioLevel,
+                    isContinuous: viewModel.isContinuousListening,
+                    counterpartSpeaking: viewModel.counterpartIsSpeaking,
+                    pendingTranslationCount: viewModel.translatingTurnIDs.count,
+                    onManualFinish: {
+                        Task { await viewModel.finishCurrentUtteranceManually() }
+                    },
+                    onPauseContinuous: {
+                        viewModel.pauseContinuousListening(reason: .user)
+                    }
+                )
             } else if case .failed(let message) = viewModel.listeningPhase {
                 Text(message)
                     .font(LTTypography.interpreterStatus)
@@ -236,11 +327,71 @@ struct InterpreterComposer: View {
                     .lineLimit(2)
             }
             HStack(spacing: LTSpacing.m) {
-                Button(action: onToggleListening) {
+                if isContinuousActive {
+                    continuousActiveButtons
+                } else if isListening {
+                    stopListeningButton
+                    if viewModel.turns.contains(where: { !$0.sourceText.isEmpty }) {
+                        endButton
+                    }
+                } else {
+                    listeningButton
+                    if viewModel.turns.contains(where: { !$0.sourceText.isEmpty }) {
+                        endButton
+                    }
+                }
+            }
+        }
+    }
+
+    /// 连续听运行中：突出"暂停"，保留"结束这句"。
+    private var continuousActiveButtons: some View {
+        HStack(spacing: LTSpacing.m) {
+            Button {
+                viewModel.pauseContinuousListening(reason: .user)
+            } label: {
+                HStack(spacing: LTSpacing.s) {
+                    Image(systemName: "pause.circle.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("暂停连续听")
+                        .font(LTTypography.button)
+                }
+                .foregroundStyle(Color.black.opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, LTSpacing.m)
+                .background(
+                    Capsule().fill(
+                        LinearGradient(
+                            colors: [LTColors.warning.opacity(0.9), LTColors.warning],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                    )
+                )
+            }
+            .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.warning))
+            .accessibilityLabel("暂停连续收听")
+        }
+    }
+
+    /// 连续听暂停中：醒目"继续听" + 回到普通入口。
+    private var continuousPausedRow: some View {
+        VStack(spacing: LTSpacing.xs) {
+            HStack(spacing: LTSpacing.s) {
+                Image(systemName: "pause.circle")
+                    .foregroundStyle(LTColors.textSecondary)
+                Text(viewModel.continuousPauseReason?.displayName ?? "已暂停")
+                    .font(LTTypography.interpreterStatus)
+                    .foregroundStyle(LTColors.textSecondary)
+                Spacer()
+            }
+            HStack(spacing: LTSpacing.m) {
+                Button {
+                    viewModel.resumeContinuousListening()
+                } label: {
                     HStack(spacing: LTSpacing.s) {
-                        Image(systemName: isListening ? "stop.circle.fill" : "ear.fill")
+                        Image(systemName: "play.circle.fill")
                             .font(.system(size: 22, weight: .semibold))
-                        Text(listeningButtonLabel)
+                        Text("继续听")
                             .font(LTTypography.button)
                     }
                     .foregroundStyle(Color.black.opacity(0.85))
@@ -249,22 +400,91 @@ struct InterpreterComposer: View {
                     .background(
                         Capsule().fill(
                             LinearGradient(
-                                colors: isListening
-                                    ? [LTColors.warning.opacity(0.9), LTColors.warning]
-                                    : [LTColors.accentCyan.opacity(0.9), LTColors.accentCyan],
+                                colors: [LTColors.accentGreen.opacity(0.9), LTColors.accentGreen],
                                 startPoint: .leading, endPoint: .trailing
                             )
                         )
                     )
                 }
-                .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentCyan))
-                .accessibilityLabel(listeningButtonLabel)
+                .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentGreen))
+                .accessibilityLabel("继续连续收听")
+
+                // 回复入口（暂停下的主路径：聚焦输入框准备回复）。
+                Button(action: onBeginReply) {
+                    Text("回复对方")
+                        .font(LTTypography.button)
+                        .foregroundStyle(LTColors.accentCyan)
+                        .padding(.horizontal, LTSpacing.l)
+                        .padding(.vertical, LTSpacing.m)
+                        .background(Capsule().fill(LTColors.accentCyan.opacity(0.14)))
+                        .frame(minHeight: LTSpacing.minTouchTarget)
+                }
+                .accessibilityLabel("回复对方，聚焦中文输入框")
 
                 if viewModel.turns.contains(where: { !$0.sourceText.isEmpty }) {
                     endButton
                 }
             }
         }
+    }
+
+    /// 空闲收音入口：听一句 + 连续听。
+    private var listeningButton: some View {
+        HStack(spacing: LTSpacing.m) {
+            Button(action: onToggleListening) {
+                HStack(spacing: LTSpacing.s) {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("听一句")
+                        .font(LTTypography.button)
+                }
+                .foregroundStyle(Color.black.opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, LTSpacing.m)
+                .background(
+                    Capsule().fill(
+                        LinearGradient(
+                            colors: [LTColors.accentCyan.opacity(0.9), LTColors.accentCyan],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                    )
+                )
+            }
+            .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentCyan))
+            .accessibilityLabel("听对方说一句")
+            .disabled(captureUnavailable)
+
+            Button(action: onToggleContinuousListening) {
+                HStack(spacing: LTSpacing.s) {
+                    Image(systemName: "ear.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("连续听")
+                        .font(LTTypography.button)
+                }
+                .foregroundStyle(Color.black.opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, LTSpacing.m)
+                .background(
+                    Capsule().fill(
+                        LinearGradient(
+                            colors: [LTColors.accentGreen.opacity(0.9), LTColors.accentGreen],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                    )
+                )
+            }
+            .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentGreen))
+            .accessibilityLabel("开启连续收听")
+            .disabled(captureUnavailable)
+        }
+    }
+
+    /// 收音入口禁用条件（权限拒绝 / ASR 未装 / 课堂占用）。
+    private var captureUnavailable: Bool {
+        viewModel.micPermissionDenied
+            || !viewModel.asrModelInstalled
+            || viewModel.classroomActive
+            || viewModel.listeningPhase == .requestingPermission
     }
 
     private var endButton: some View {
@@ -280,14 +500,29 @@ struct InterpreterComposer: View {
         .accessibilityLabel("结束本次翻译")
     }
 
-    private var listeningButtonLabel: String {
-        switch viewModel.listeningPhase {
-        case .requestingPermission: return "请求权限…"
-        case .listening: return "正在听对方说…"
-        case .transcribing: return "识别中…"
-        case .failed: return "重试收音"
-        case .idle: return "听对方说"
+    /// 单句模式收音中的主按钮（停止）。
+    private var stopListeningButton: some View {
+        Button(action: onToggleListening) {
+            HStack(spacing: LTSpacing.s) {
+                Image(systemName: "stop.circle.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                Text("停止收音")
+                    .font(LTTypography.button)
+            }
+            .foregroundStyle(Color.black.opacity(0.85))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, LTSpacing.m)
+            .background(
+                Capsule().fill(
+                    LinearGradient(
+                        colors: [LTColors.warning.opacity(0.9), LTColors.warning],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                )
+            )
         }
+        .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.warning))
+        .accessibilityLabel("停止收音")
     }
 
     private var micPermissionHint: some View {
@@ -315,7 +550,12 @@ struct InterpreterComposer: View {
 /// 时整条不显示 —— 绝不做假声波动画）。
 struct ListeningIndicator: View {
     var level: Float
+    /// 连续模式（显示"对方正在说话"与翻译积压计数）。
+    var isContinuous: Bool = false
+    var counterpartSpeaking: Bool = false
+    var pendingTranslationCount: Int = 0
     var onManualFinish: () -> Void
+    var onPauseContinuous: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -327,14 +567,53 @@ struct ListeningIndicator: View {
                 .fill(LTColors.accentCyan.opacity(0.7))
                 .frame(width: 120, height: 4 + CGFloat(min(0.3, max(0, level))) * 60)
                 .animation(reduceMotion ? nil : LTMotion.quick, value: level)
-            Spacer()
-            Button("结束这句", action: onManualFinish)
-                .font(LTTypography.interpreterStatus)
-                .foregroundStyle(LTColors.accentBlue)
-                .frame(minHeight: LTSpacing.minTouchTarget)
-                .contentShape(Rectangle())
+            if isContinuous {
+                // 真实 VAD 派生状态：对方正在说话 / 识别上一句。
+                Text(counterpartSpeaking ? "对方正在说" : "连续听中")
+                    .font(LTTypography.interpreterStatus)
+                    .foregroundStyle(LTColors.textSecondary)
+                    .lineLimit(1)
+                if pendingTranslationCount > 0 {
+                    Text("翻译中 ×\(pendingTranslationCount)")
+                        .font(LTTypography.interpreterStatus)
+                        .foregroundStyle(LTColors.accentBlue)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button("结束这句", action: onManualFinish)
+                    .font(LTTypography.interpreterStatus)
+                    .foregroundStyle(LTColors.accentBlue)
+                    .frame(minHeight: LTSpacing.minTouchTarget)
+                    .contentShape(Rectangle())
+                Button(action: onPauseContinuous) {
+                    Image(systemName: "pause.circle.fill")
+                        .font(.system(size: 17))
+                        .foregroundStyle(LTColors.warning)
+                        .frame(minWidth: LTSpacing.minTouchTarget, minHeight: LTSpacing.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("暂停连续收听")
+            } else {
+                Spacer()
+                Button("结束这句", action: onManualFinish)
+                    .font(LTTypography.interpreterStatus)
+                    .foregroundStyle(LTColors.accentBlue)
+                    .frame(minHeight: LTSpacing.minTouchTarget)
+                    .contentShape(Rectangle())
+            }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("正在收音，电平 \(Int(min(1, max(0, level)) * 100))%")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        var parts = ["正在收音，电平 \(Int(min(1, max(0, level)) * 100))%"]
+        if isContinuous {
+            parts.append(counterpartSpeaking ? "对方正在说话" : "连续收听中")
+            if pendingTranslationCount > 0 {
+                parts.append("\(pendingTranslationCount) 句等待翻译")
+            }
+        }
+        return parts.joined(separator: "，")
     }
 }

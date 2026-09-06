@@ -70,6 +70,26 @@ struct InterpreterStatusBar: View {
         if viewModel.micPermissionDenied {
             return ("mic.slash", "麦克风未授权", LTColors.warning)
         }
+        if viewModel.classroomActive {
+            return ("person.2.wave.2", "课堂占用", LTColors.warning)
+        }
+        // 连续模式优先展示（暂停/中断是用户最需要知道的状态）。
+        if viewModel.isContinuousListening {
+            if let reason = viewModel.continuousPauseReason {
+                return ("pause.circle", reason.displayName, LTColors.textSecondary)
+            }
+            if viewModel.captureInterrupted {
+                return ("exclamationmark.triangle", "音频中断", LTColors.warning)
+            }
+            if viewModel.listeningPhase == .transcribing {
+                return ("text.bubble", "识别中", LTColors.accentCyan)
+            }
+            return (
+                "waveform",
+                viewModel.counterpartIsSpeaking ? "对方在说" : "连续听中",
+                LTColors.accentCyan
+            )
+        }
         switch viewModel.listeningPhase {
         case .idle:
             return ("mic", "未收音", LTColors.textTertiary)
