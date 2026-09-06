@@ -10,12 +10,17 @@ import CryptoKit
 ///     <root>/<documentID>/original.<ext>
 ///     <root>/<documentID>/extraction.json      (sidecar — page texts,
 ///                                               OCR results, confidence)
+///     <root>/<documentID>/form-draft.json      (sidecar — 俄语表单逐项
+///                                               填写草稿，第二十一轮)
 ///     <root>/<documentID>/page-<n>.jpg         (~600px thumbnail cache)
 ///
 /// Rendition rules:
 ///   - original: the untouched imported bytes (PDF / image / text);
 ///   - extraction.json: the local text-extraction sidecar (page text
 ///     layers + Vision OCR output). Device-local, NEVER synced;
+///   - form-draft.json: the local form-filling draft (field list, user
+///     values, statuses). Device-local, NEVER synced — the same contract
+///     as extraction.json;
 ///   - page-n.jpg: regenerable thumbnail cache, reaped on delete.
 ///
 /// All writes go temp-file → atomic rename (the MaterialFileStore
@@ -198,6 +203,53 @@ struct InterpreterDocumentStore: Sendable {
         guard let data = try? Data(contentsOf: extractionURL(documentID: documentID)),
               let json = String(data: data, encoding: .utf8) else { return nil }
         return InterpreterDocumentExtraction.decode(json)
+    }
+
+    // MARK: - Form-draft sidecar (第二十一轮：俄语表单逐项填写)
+
+    /// 表单填写草稿 sidecar（字段清单、用户值、状态 —— 全部设备本地，
+    /// 绝不进 wire / outbox / 备份之外的第二份存储）。同一文档只有这
+    /// 一份活动草稿；随文档目录一起被 removeFiles 删除。
+    func formDraftURL(documentID: UUID) -> URL {
+        directory(for: documentID)
+            .appendingPathComponent(InterpreterFormDraft.fileName)
+    }
+
+    /// Persists the form-draft sidecar (temp file → atomic rename, the
+    /// extraction-sidecar contract).
+    func writeFormDraft(_ draft: InterpreterFormDraft, documentID: UUID) throws {
+        guard let json = draft.encodedJSON() else {
+            throw ImportError.createFailed
+        }
+        let dir = directory(for: documentID)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileProtection.apply(.sensitiveLocalDocument, to: dir)
+        let temp = dir.appendingPathComponent(".tmp-form-draft-\(UUID().uuidString)")
+        do {
+            try json.data(using: .utf8)?.write(to: temp, options: .atomic)
+            let destination = formDraftURL(documentID: documentID)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: temp)
+            } else {
+                try FileManager.default.moveItem(at: temp, to: destination)
+            }
+            FileProtection.apply(.sensitiveLocalDocument, to: destination)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+    }
+
+    /// Reads the form draft back (nil when missing, unreadable or not
+    /// belonging to this document).
+    func readFormDraft(documentID: UUID) -> InterpreterFormDraft? {
+        guard let data = try? Data(contentsOf: formDraftURL(documentID: documentID)),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return InterpreterFormDraft.decode(json, documentID: documentID)
+    }
+
+    func formDraftExists(documentID: UUID) -> Bool {
+        FileManager.default.fileExists(atPath: formDraftURL(documentID: documentID).path)
     }
 
     // MARK: - Page thumbnails
