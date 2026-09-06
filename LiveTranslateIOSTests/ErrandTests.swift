@@ -209,9 +209,15 @@ final class ErrandRepositoryTests: XCTestCase {
     // 12. source link：多对多、重复关联幂等、删除事项不删原对话、删除
     // 文件不删事项。
     func testLocalSourcesManyToManyAndIdempotent() throws {
-        // 通过仓库正规链路建一个已保存对话（source 原件）。
+        // 通过仓库正规链路建一个已保存对话（source 原件；保存要求至少
+        // 一个回合）。
         let conversation = try repository.startInterpreterDraft(
             scene: .dorm, contextNote: ""
+        )
+        _ = try repository.addInterpreterCounterpartTurn(
+            conversationID: conversation.id,
+            russian: "Принесите паспорт",
+            inputMethod: .text
         )
         try repository.saveInterpreterDraft(title: "对话")
 

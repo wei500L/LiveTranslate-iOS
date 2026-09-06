@@ -364,7 +364,8 @@ struct ErrandExportSheet: View {
             }
             .sheet(isPresented: $showShare) {
                 if let exportedURL {
-                    ShareSheet(url: exportedURL)
+                    // 现有系统分享桥（Export/ShareSheet.swift）。
+                    ShareSheet(items: [exportedURL])
                 }
             }
         }
@@ -440,13 +441,4 @@ struct ErrandExportSheet: View {
             showShare = true
         }
     }
-}
-
-/// 系统分享 sheet（UIKit 桥）。
-struct ShareSheet: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
-    }
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

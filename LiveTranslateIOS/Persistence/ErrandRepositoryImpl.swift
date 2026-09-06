@@ -430,7 +430,10 @@ extension TranscriptRepository {
         }
         if let pinned = record.errandPinned { errandCase.pinned = pinned }
         if let hasLocal = record.errandHasLocalSources {
-            errandCase.hasLocalSources = hasLocal
+            // OR 语义：该标志是"某些设备持有本地来源"的事实 —— 本机已有
+            // 来源（true）时，远端 false 不把它抹掉（否则下一次本机 push
+            // 会让其他设备失去"来源资料仅保存在原设备"的诚实提示）。
+            errandCase.hasLocalSources = errandCase.hasLocalSources || hasLocal
         }
         // 本机 localSourcesJSON 不被远端覆盖（wire 上没有这个字段 ——
         // 其他设备的来源链接永远到不了这里）。
