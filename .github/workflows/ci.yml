@@ -260,8 +260,11 @@ jobs:
       # Round 19: deterministic UI screenshots of the counter-interpreter
       # demo (Debug Demo path only — no production data). Screenshot
       # generation failure FAILS this step; nothing is silently skipped.
-      # If the runner cannot set content size / has no narrow device, the
-      # affected shot is reported as a warning and excluded from the count.
+      # The seven demo states are visually distinct BY DESIGN — the step
+      # also FAILS if any two state screenshots are pixel-identical (a
+      # stale-session snapshot means the state did not apply). If the
+      # runner cannot set content size / has no narrow device, the
+      # affected shot is reported as a warning and excluded from checks.
       - name: UI demo screenshots (counter interpreter)
         run: |
           set -euo pipefail
@@ -283,9 +286,17 @@ jobs:
           shot() {
             local name="$1"; shift
             xcrun simctl terminate "$udid" com.livetranslate.ios >/dev/null 2>&1 || true
-            sleep 1
+            # Wait until the process is REALLY dead (a half-dead app keeps
+            # owning the screen and the relaunch races the teardown).
+            for _ in $(seq 1 15); do
+              xcrun simctl spawn "$udid" launchctl list 2>/dev/null | grep -q com.livetranslate.ios || break
+              sleep 1
+            done
             xcrun simctl launch "$udid" com.livetranslate.ios --ui-demo "$@"
-            sleep 12
+            # Cold start to first rendered frame can exceed 20s on slow
+            # runners — capture before that only freezes the PREVIOUS
+            # session's snapshot.
+            sleep 30
             xcrun simctl io "$udid" screenshot "build/screenshots/$name.png"
             test -s "build/screenshots/$name.png" || { echo "screenshot $name missing/empty"; exit 1; }
             echo "captured $name.png"
@@ -298,6 +309,23 @@ jobs:
           shot interpreter-counter-facing --demo-screen interpreter-counter --demo-interpreter-state facing
           shot interpreter-counter-sheet --demo-screen interpreter-counter --demo-interpreter-state sheet
           shot interpreter-counter-longtext --demo-screen interpreter-counter --demo-interpreter-state longtext
+
+          # State-application gate: the seven states are visually distinct
+          # by design; identical pixels mean a stale snapshot leaked in.
+          md5s=$(md5 -q \
+            build/screenshots/interpreter-counter-conversation.png \
+            build/screenshots/interpreter-counter-failure.png \
+            build/screenshots/interpreter-counter-listening.png \
+            build/screenshots/interpreter-counter-showmode.png \
+            build/screenshots/interpreter-counter-facing.png \
+            build/screenshots/interpreter-counter-sheet.png \
+            build/screenshots/interpreter-counter-longtext.png)
+          unique=$(echo "$md5s" | sort -u | wc -l | tr -d ' ')
+          echo "distinct state screenshots: $unique/7"
+          test "$unique" -eq 7 || {
+            echo "state screenshots are not pairwise distinct — a demo state failed to apply (stale snapshot)"
+            exit 1
+          }
 
           # Large Dynamic Type: set content size if the runner supports it;
           # otherwise report honestly and do not fake the shot.
@@ -327,7 +355,7 @@ jobs:
             xcrun simctl bootstatus "$narrow_udid" -b
             xcrun simctl install "$narrow_udid" "$app"
             xcrun simctl launch "$narrow_udid" com.livetranslate.ios --ui-demo --demo-screen interpreter-counter
-            sleep 12
+            sleep 30
             xcrun simctl io "$narrow_udid" screenshot build/screenshots/interpreter-counter-narrow.png
             test -s build/screenshots/interpreter-counter-narrow.png
             xcrun simctl shutdown "$narrow_udid" || true
