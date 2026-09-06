@@ -204,13 +204,18 @@ enum ErrandDateParser {
         }
 
         // --- 中文星期（本周/下周前缀消歧；无前缀 = 歧义） ---
-        if let zhWeek = try? NSRegularExpression(pattern: #"(本周|这周|下周|下下周)?周([一二三四五六日天])"#) {
+        // 两步确定性解析：先匹配"周X"，再回看前缀（避免可选捕获组的
+        // 平台差异）；rawText 保留完整原文（含前缀）。
+        if let zhWeek = try? NSRegularExpression(pattern: "周([一二三四五六日天])") {
             for match in zhWeek.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                guard match.numberOfRanges == 3,
-                      let weekdayChar = groupString(match, at: 2, in: text),
+                guard let weekdayChar = groupString(match, at: 1, in: text),
                       let weekday = zhWeekdays[weekdayChar] else { continue }
-                let prefix = match.range(at: 1).location == NSNotFound
-                    ? nil : groupString(match, at: 1, in: text)
+                // 前缀回看：匹配起点之前的 6 个字符里找 下下周/下周/本周/这周。
+                let before = String(text.prefix(match.range.location).suffix(6))
+                var prefix: String? = nil
+                if before.hasSuffix("下下周") { prefix = "下下周" }
+                else if before.hasSuffix("下周") { prefix = "下周" }
+                else if before.hasSuffix("本周") || before.hasSuffix("这周") { prefix = "本周" }
                 var uncertain = false
                 var days = weekday - calendar.component(.weekday, from: anchor)
                 if let prefix {
@@ -227,8 +232,16 @@ enum ErrandDateParser {
                     uncertain = true
                 }
                 let date = calendar.date(byAdding: .day, value: days, to: anchor) ?? anchor
+                // 原文包含前缀（"下周四" 保留为 "下周四"）。
+                let prefixLength = prefix?.count ?? 0
+                let rawStart = text.index(
+                    text.startIndex,
+                    offsetBy: max(0, match.range.location - prefixLength)
+                )
+                let rawEnd = text.index(text.startIndex, offsetBy: match.range.location + match.range.length)
+                let raw = String(text[rawStart..<rawEnd])
                 result.append(Candidate(
-                    rawText: substring(match.range, in: text),
+                    rawText: raw,
                     resolved: calendar.startOfDay(for: date),
                     isRelative: true, uncertain: uncertain, hasTime: false,
                     reason: uncertain
