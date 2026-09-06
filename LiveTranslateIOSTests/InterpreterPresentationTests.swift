@@ -354,8 +354,8 @@ final class InterpreterTimelineLogicTests: XCTestCase {
 
 // MARK: - 办事上下文与快捷回复（纯模型）
 
+@MainActor
 final class InterpreterCounterContextTests: XCTestCase {
-    @MainActor
     private func makeCase() -> (ErrandCase, [ErrandCaseItem]) {
         let errandCase = ErrandCase(
             title: "宿舍入住登记",
@@ -503,7 +503,7 @@ final class InterpreterCounterViewModelTests: XCTestCase {
     }
 
     // Show Mode 锁定：新回合落地不替换展示内容。
-    func testPresentedTurnLockSurvivesNewTurns() throws {
+    func testPresentedTurnLockSurvivesNewTurns() async throws {
         _ = try seedDraftTurns(count: 2)
         let viewModel = InterpreterViewModel(environment: environment)
         await viewModel.reload()
@@ -529,7 +529,7 @@ final class InterpreterCounterViewModelTests: XCTestCase {
     }
 
     // 快捷回复/待问问题：只填输入框，不自动翻译、不发送。
-    func testApplySuggestionOnlyFillsDraft() throws {
+    func testApplySuggestionOnlyFillsDraft() async throws {
         _ = try seedDraftTurns(count: 0)
         let viewModel = InterpreterViewModel(environment: environment)
         await viewModel.reload()
@@ -541,7 +541,7 @@ final class InterpreterCounterViewModelTests: XCTestCase {
     }
 
     // 删除聚焦回合 → 聚焦邻近回合。
-    func testDeleteFocusedTurnFocusesNeighbor() throws {
+    func testDeleteFocusedTurnFocusesNeighbor() async throws {
         _ = try seedDraftTurns(count: 3)
         let viewModel = InterpreterViewModel(environment: environment)
         await viewModel.reload()
@@ -553,7 +553,7 @@ final class InterpreterCounterViewModelTests: XCTestCase {
     }
 
     // 办事上下文：有 case 时建立；无 case 时不显示（不造空占位）。
-    func testErrandContextAttachAndSceneInheritance() throws {
+    func testErrandContextAttachAndSceneInheritance() async throws {
         let errandCase = try repository.startErrandCaseDraft(
             scene: .dorm, title: "宿舍入住登记"
         )
@@ -589,7 +589,7 @@ final class InterpreterCounterViewModelTests: XCTestCase {
     }
 
     // 文件 chip 移除：只清除页面选择，不删除文件。
-    func testClearDocumentContextSelectionKeepsDocuments() throws {
+    func testClearDocumentContextSelectionKeepsDocuments() async throws {
         let draft = try seedDraftTurns(count: 1)
         let viewModel = InterpreterViewModel(environment: environment)
         await viewModel.reload()
