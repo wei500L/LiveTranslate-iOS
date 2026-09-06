@@ -140,7 +140,7 @@ final class InterpreterFormDraftTests: XCTestCase {
             chinese: "我在莫斯科国立大学学习"
         )
         let updated = model.field(with: field.id)
-        XCTAssertEqual(updated?.userValue, "Учёба в МГУ")
+        XCTAssertEqual(updated?.userValue, "Учеба в МГУ")
         XCTAssertFalse(updated?.userValue.contains(RussianStressValidator.combiningAcute) ?? true)
         XCTAssertEqual(updated?.chineseSourceText, "我在莫斯科国立大学学习")
         XCTAssertEqual(updated?.status, .needsConfirmation)
