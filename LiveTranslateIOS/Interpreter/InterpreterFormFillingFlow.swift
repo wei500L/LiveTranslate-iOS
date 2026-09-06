@@ -18,6 +18,8 @@ struct InterpreterFormFillingFlow: View {
     /// 逐项填写的当前字段（返回同一字段定位）。
     @State private var currentFieldID: UUID?
     @State private var showFieldPage = false
+    /// 模板选择 sheet 的目标字段（选完直接带问题进入对话）。
+    @State private var askTemplateTarget: InterpreterFormDraftField?
 
     var body: some View {
         Group {
@@ -31,7 +33,7 @@ struct InterpreterFormFillingFlow: View {
                         showFieldPage = true
                     },
                     onAskStaff: { field in
-                        askStaff(field, prefilled: defaultAskQuestion(for: field))
+                        askTemplateTarget = field
                     }
                 )
             } else {
@@ -56,10 +58,17 @@ struct InterpreterFormFillingFlow: View {
                         set: { newValue in self.currentFieldID = newValue }
                     ),
                     onAskStaff: { field in
-                        askStaff(field, prefilled: defaultAskQuestion(for: field))
+                        askTemplateTarget = field
                     }
                 )
                 .environment(environment)
+            }
+        }
+        .sheet(item: $askTemplateTarget) { field in
+            InterpreterFormFieldAskTemplateSheet(
+                field: field
+            ) { question in
+                askStaff(field, prefilled: question)
             }
         }
     }
@@ -74,15 +83,94 @@ struct InterpreterFormFillingFlow: View {
         "日期应该使用什么格式？",
     ]
 
-    /// 预填的中文问题模板（本地；点击只填输入框 —— 不自动发送）。
-    private func defaultAskQuestion(for field: InterpreterFormDraftField) -> String {
+    private func askStaff(_ field: InterpreterFormDraftField, prefilled: String) {
+        showFieldPage = false
+        onAskStaff(field, prefilled)
+    }
+}
+
+/// 询问工作人员的问题模板 sheet：字段摘要 + 本地模板（含按字段生成的
+/// 默认问题）。选择即带预填问题进入柜台对话 —— 不自动发送。
+struct InterpreterFormFieldAskTemplateSheet: View {
+    let field: InterpreterFormDraftField
+    let onAsk: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    /// 按字段生成的默认问题（第一个选项）。
+    private var defaultQuestion: String {
         let label = field.russianLabel.isEmpty ? field.chineseMeaning : field.russianLabel
         return "请问表格里「\(label)」这一栏应该填写什么？"
     }
 
-    private func askStaff(_ field: InterpreterFormDraftField, prefilled: String) {
-        showFieldPage = false
-        onAskStaff(field, prefilled)
+    private var options: [String] {
+        [defaultQuestion] + InterpreterFormFillingFlow.askTemplates
+    }
+
+    var body: some View {
+        NavigationStack {
+            LTPage {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: LTSpacing.s) {
+                        Label("询问工作人员", systemImage: "person.wave.2")
+                            .font(LTTypography.cardTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                        VStack(alignment: .leading, spacing: LTSpacing.xxs) {
+                            Text("当前字段")
+                                .font(LTTypography.statusChip)
+                                .foregroundStyle(LTColors.textTertiary)
+                            Text(field.russianLabel)
+                                .font(LTTypography.body)
+                                .foregroundStyle(LTColors.textPrimary)
+                                .textSelection(.enabled)
+                            if !field.chineseMeaning.isEmpty {
+                                Text(field.chineseMeaning)
+                                    .font(LTTypography.caption)
+                                    .foregroundStyle(LTColors.textSecondary)
+                            }
+                        }
+                        .ltCard(padding: LTSpacing.s)
+                        Text("选择一个问题带入对话（只预填输入框 —— 你可以编辑后再发送；对话中可用连续听、朗读与给对方看）")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textTertiary)
+                        ForEach(options, id: \.self) { question in
+                            Button {
+                                dismiss()
+                                onAsk(question)
+                            } label: {
+                                HStack(spacing: LTSpacing.s) {
+                                    Image(systemName: "text.insert")
+                                        .font(.footnote)
+                                        .foregroundStyle(LTColors.accentCyan)
+                                    Text(question)
+                                        .font(LTTypography.body)
+                                        .foregroundStyle(LTColors.textPrimary)
+                                        .multilineTextAlignment(.leading)
+                                    Spacer()
+                                }
+                                .padding(LTSpacing.s)
+                                .background(
+                                    RoundedRectangle(cornerRadius: LTRadius.medium)
+                                        .fill(LTColors.surfaceElevated.opacity(0.4))
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("询问：\(question)")
+                        }
+                    }
+                    .padding(.horizontal, LTSpacing.screenPadding)
+                    .padding(.vertical, LTSpacing.m)
+                }
+            }
+            .navigationTitle("询问工作人员")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
