@@ -51,7 +51,11 @@ struct ErrandCaseListView: View {
             }
             .navigationDestination(item: Binding(
                 get: { pushingDetail.map { ErrandCaseRoute(caseID: $0.id) } },
-                set: { pushingDetail = $0?.caseID.flatMap(environment.repository.errandCase(id:)) }
+                set: { newValue in
+                    pushingDetail = newValue.flatMap {
+                        environment.repository.errandCase(id: $0.caseID)
+                    }
+                }
             )) { (route: ErrandCaseRoute) in
                 ErrandCaseDetailView(caseID: route.caseID)
                     .environment(environment)
@@ -72,7 +76,7 @@ struct ErrandCaseListView: View {
         }
     }
 
-    private struct ErrandCaseRoute: Identifiable {
+    private struct ErrandCaseRoute: Identifiable, Hashable {
         var caseID: UUID
         var id: UUID { caseID }
     }
