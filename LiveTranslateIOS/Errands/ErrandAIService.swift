@@ -222,7 +222,7 @@ struct ErrandAIService: Sendable {
             .map(\.count).reduce(0, +) + userContext.count
         let disclosure = AIRequestDisclosure(
             feature: .errandOrganizing,
-            host: nil,
+            host: "",
             textCategory: .mixed,
             characterCount: characterCount,
             imageCount: 0,

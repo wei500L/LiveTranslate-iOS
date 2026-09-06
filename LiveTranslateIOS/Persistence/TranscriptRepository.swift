@@ -841,6 +841,19 @@ extension ClassroomRepositoryProtocol {
     ) throws {
         try setInterpreterDocumentStatus(document, status: status, errorSummary: nil)
     }
+
+    /// Same shim for the errand meta update (partial-field calls like
+    /// 记录办理结果 only set expectedResultAt/pinned).
+    func updateErrandCaseMeta(
+        _ errandCase: ErrandCase, expectedResultAt: Date?, pinned: Bool?
+    ) throws {
+        try updateErrandCaseMeta(
+            errandCase,
+            title: nil, purpose: nil, userNote: nil, timezoneID: nil,
+            location: nil, contact: nil,
+            expectedResultAt: expectedResultAt, pinned: pinned, scene: nil
+        )
+    }
 }
 
 /// A new exam (title + date required). AI candidates pass

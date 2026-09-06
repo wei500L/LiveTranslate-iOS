@@ -437,7 +437,7 @@ final class ErrandViewModel {
         }
         let disclosure = AIRequestDisclosure(
             feature: .errandOrganizing,
-            host: nil,
+            host: "",
             textCategory: .mixed,
             characterCount: (input.turnLines + input.sourceLines).map(\.count).reduce(0, +)
                 + input.userContext.count,
