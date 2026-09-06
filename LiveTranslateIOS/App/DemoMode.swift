@@ -1817,7 +1817,125 @@ extension DemoSeed {
         case "longtext": seedLongTextOnly()
         default: seedFullConversation()
         }
+
+        // 表单逐项填写 demo（第二十一轮 `--demo-interpreter-state
+        // form-filling`）：同一份虚拟宿舍登记表 + form-draft sidecar
+        // （姓名已填、出生日期待确认、地址未填、来访目的待翻译、签名
+        // 位置不适用 —— 全部虚构数据，写入 demo 临时目录）。真实页面
+        // + 真实草稿模型 —— 仅种子数据是虚构的。
+        if state == "form-filling" {
+            seedFormFillingDemo(context: context)
+        }
         try? context.save()
+    }
+
+    /// 表单填写 demo 种子：虚拟宿舍登记表文档 + 五个指定状态的字段
+    /// 草稿（写入 demoInterpreterDocStore 临时目录，绝不触碰真实账号
+    /// 存储）。
+    private static func seedFormFillingDemo(context: ModelContext) {
+        let draft = InterpreterConversation(
+            title: "宿舍登记表填写 · 演示草稿",
+            sceneRaw: InterpreterScene.dorm.rawValue,
+            contextNote: "演示：我是莫斯科国立大学留学生（虚构）",
+            statusRaw: InterpreterConversationStatus.draft.rawValue,
+            startedAt: Date()
+        )
+        context.insert(draft)
+        let demoDocument = InterpreterDocument(
+            conversationID: draft.id,
+            sourceRaw: InterpreterDocumentSource.scan.rawValue,
+            originalFileName: "Анкета вселяющегося（演示）.pdf",
+            formatRaw: InterpreterDocumentFormat.pdf.rawValue,
+            mimeType: "application/pdf",
+            fileSize: 0,
+            contentHash: "",
+            pageCount: 1,
+            statusRaw: InterpreterDocumentStatus.ready.rawValue,
+            originalRelativePath: "",
+            extractionRelativePath: "",
+            keepOriginalFile: false
+        )
+        context.insert(demoDocument)
+        let fakeText = """
+        АНКЕТА ВСЕЛЯЮЩЕГОСЯ (демо, все данные вымышлены)
+        Фамилия Имя Отчество (латиницей): ______
+        Дата рождения: ______
+        Адрес проживания в России: ______
+        Цель приезда: ______
+        Подпись: ______
+        """
+        guard let store = InterpreterDocumentStoreShared.store else { return }
+        try? store.writeExtraction(
+            InterpreterDocumentExtraction(
+                pages: [InterpreterDocumentPageText(
+                    pageNumber: 1,
+                    extractedText: fakeText,
+                    ocrText: fakeText,
+                    ocrConfidence: 0.94,
+                    ocrStatusRaw: InterpreterPageOCRStatus.done.rawValue
+                )],
+                extractionVersion: "1"
+            ),
+            documentID: demoDocument.id
+        )
+        demoDocument.extractionRelativePath = "\(demoDocument.id.uuidString)/extraction.json"
+
+        // 虚构字段草稿（五状态齐备 —— 姓名已填/出生日期待确认/地址
+        // 未填/来访目的中文待翻译/签名位置不适用输入）。
+        var formDraft = InterpreterFormDraft(documentID: demoDocument.id)
+        formDraft.fields = [
+            InterpreterFormDraftField(
+                russianLabel: "Фамилия Имя Отчество (латиницей)",
+                chineseMeaning: "姓名（姓、名、父称，用拉丁字母）",
+                pageNumber: 1,
+                sourceSnippet: "Фамилия Имя Отчество (латиницей): ______",
+                type: .singleLine,
+                requirement: .required,
+                formatHint: "如护照拼写一致：Ivanov Ivan Ivanovich（格式示例）",
+                userValue: "Wang Xiaoming（演示虚构值）",
+                status: .filled
+            ),
+            InterpreterFormDraftField(
+                russianLabel: "Дата рождения",
+                chineseMeaning: "出生日期",
+                pageNumber: 1,
+                sourceSnippet: "Дата рождения: ______",
+                type: .date,
+                requirement: .required,
+                formatHint: "DD.MM.YYYY（格式示例）",
+                userValue: "2004.03.15（演示虚构值）",
+                status: .needsConfirmation
+            ),
+            InterpreterFormDraftField(
+                russianLabel: "Адрес проживания в России",
+                chineseMeaning: "在俄居住地址",
+                pageNumber: 1,
+                sourceSnippet: "Адрес проживания в России: ______",
+                type: .singleLine,
+                requirement: .required,
+                status: .empty
+            ),
+            InterpreterFormDraftField(
+                russianLabel: "Цель приезда",
+                chineseMeaning: "来访目的（自由文本，可翻译为俄语）",
+                pageNumber: 1,
+                sourceSnippet: "Цель приезда: ______",
+                type: .multiline,
+                requirement: .required,
+                userValue: "我是莫斯科国立大学的留学生，来办理宿舍入住登记。（演示虚构文本）",
+                status: .empty
+            ),
+            InterpreterFormDraftField(
+                russianLabel: "Подпись",
+                chineseMeaning: "签名位置（需要手写签名或填写姓名/日期）",
+                pageNumber: 1,
+                sourceSnippet: "Подпись: ______",
+                type: .signature,
+                requirement: .required,
+                status: .notApplicable
+            )
+        ]
+        try? store.writeFormDraft(formDraft, documentID: demoDocument.id)
     }
 }
 #endif

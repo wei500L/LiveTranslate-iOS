@@ -309,6 +309,8 @@ jobs:
           shot interpreter-counter-facing --demo-screen interpreter-counter --demo-interpreter-state facing
           shot interpreter-counter-sheet --demo-screen interpreter-counter --demo-interpreter-state sheet
           shot interpreter-counter-longtext --demo-screen interpreter-counter --demo-interpreter-state longtext
+          # 第二十一轮：俄语表单逐项填写 demo（字段总览 sheet 打开状态）。
+          shot interpreter-counter-formfilling --demo-screen interpreter-counter --demo-interpreter-state form-filling
 
           # State-application gate: the seven states are visually distinct
           # by design; identical pixels mean a stale snapshot leaked in.
@@ -319,10 +321,11 @@ jobs:
             build/screenshots/interpreter-counter-showmode.png \
             build/screenshots/interpreter-counter-facing.png \
             build/screenshots/interpreter-counter-sheet.png \
-            build/screenshots/interpreter-counter-longtext.png)
+            build/screenshots/interpreter-counter-longtext.png \
+            build/screenshots/interpreter-counter-formfilling.png)
           unique=$(echo "$md5s" | sort -u | wc -l | tr -d ' ')
-          echo "distinct state screenshots: $unique/7"
-          test "$unique" -eq 7 || {
+          echo "distinct state screenshots: $unique/8"
+          test "$unique" -eq 8 || {
             echo "state screenshots are not pairwise distinct — a demo state failed to apply (stale snapshot)"
             exit 1
           }
@@ -369,7 +372,7 @@ jobs:
           ls -la build/screenshots
           count=$(ls build/screenshots | wc -l | tr -d ' ')
           echo "screenshot count: $count"
-          test "$count" -ge 7 || { echo "expected at least 7 screenshots"; exit 1; }
+          test "$count" -ge 8 || { echo "expected at least 8 screenshots"; exit 1; }
 
       - name: Upload UI screenshots
         if: always()
