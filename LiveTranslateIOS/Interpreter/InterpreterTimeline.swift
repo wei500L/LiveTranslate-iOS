@@ -165,7 +165,7 @@ struct InterpreterTimeline: View {
         LTEmptyState(
             symbol: "person.2.wave.2",
             title: "开始你们的对话",
-            message: "点击下方\"听对方说\"收录对方的俄语，或直接输入中文回复。"
+            message: "点击下方\"连续听\"持续收录对方的俄语，\"听一句\"只收一句，或直接输入中文回复。"
         )
         .padding(.top, LTSpacing.xl)
     }
