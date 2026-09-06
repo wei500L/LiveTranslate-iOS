@@ -1207,5 +1207,9 @@ final class AppFlow {
     var demoDetailSessionID: UUID?
     /// Demo prefill for the new-classroom name field (Debug builds only).
     var demoPrefilledSessionName: String?
+    /// UI-demo: the seeded errand case the interpreter-counter demo
+    /// attaches as counter context (Debug builds only; consumed once by
+    /// HomeScreen when it pushes InterpreterScreen).
+    var demoInterpreterCaseID: UUID?
     #endif
 }

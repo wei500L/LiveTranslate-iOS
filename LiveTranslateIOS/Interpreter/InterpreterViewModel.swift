@@ -101,10 +101,17 @@ final class InterpreterViewModel {
 
     /// 展开的回合卡片（展开状态属于 UI 状态，不上传）。
     var expandedTurnIDs: Set<UUID> = []
-    /// 给对方看模式正在展示的回合。
+    /// 给对方看模式正在展示的回合（锁定 —— 新回合不得替换展示内容）。
     var presentedTurnID: UUID?
-    /// 滚动跟随（用户靠近底部时新回合自动跟随）。
-    var shouldAutoFollow = true
+    /// 滚动跟随状态机（底部跟随 / 回看暂停 + 未读计数 / 回到最新）。
+    var follow = InterpreterFollowState()
+    /// 编程式滚动进行中（时间线在自动跟随滚动时抑制"远离底部"信号，
+    /// 防止内容增长被误判为用户回看）。
+    var isProgrammaticScrollActive = false
+    /// 关联的办事事项（从 ErrandCase 进入时建立；nil = 普通进入）。
+    private(set) var errandCaseID: UUID?
+    /// 办事上下文条数据（轻量派生模型；仅在有 case 时存在）。
+    private(set) var counterContext: InterpreterCounterContext?
 
     // MARK: - Init
 
@@ -125,6 +132,12 @@ final class InterpreterViewModel {
     /// 进入页面：加载设置默认值、恢复草稿提示、检查资源。
     func reload() async {
         scene = environment.settings.interpreterDefaultScene
+        // 事项场景优先于全局默认（从 ErrandCase 进入的现场沟通）；
+        // 草稿连续性仍最优先（既有语义：未结束的对话原样恢复）。
+        if let errandCaseID,
+           let errandCase = repository.errandCase(id: errandCaseID) {
+            scene = errandCase.scene
+        }
         asrModelInstalled = await environment.engineManager.isInstalled(
             environment.settings.preferredBackend
         )
@@ -149,6 +162,48 @@ final class InterpreterViewModel {
             )
         }
         documentContext?.reload(conversationID: conversation?.id)
+        refreshCounterContext()
+    }
+
+    /// 关联办事事项（从 ErrandCase 的"开始现场沟通"进入时调用；普通
+    /// 进入传 nil）。只建立只读上下文与场景 —— 绝不自动开麦、自动
+    /// 发送或把对话写回事项。
+    func attachErrandContext(caseID: UUID?) {
+        errandCaseID = caseID
+        refreshCounterContext()
+    }
+
+    /// 重算办事上下文条数据（进入、事项清单变化、文件上下文变化后）。
+    func refreshCounterContext() {
+        guard let errandCaseID,
+              let errandCase = repository.errandCase(id: errandCaseID) else {
+            counterContext = nil
+            return
+        }
+        let items = (try? repository.errandCaseItems(caseID: errandCaseID)) ?? []
+        counterContext = InterpreterCounterContext.make(
+            errandCase: errandCase,
+            items: items,
+            hasLocalDocuments: documentContext?.hasContext ?? false,
+            surfacePrivacy: environment.settings.systemSurfacePrivacy
+        )
+    }
+
+    /// 移除文件上下文 chip：只清除页面选择（之后按文件提问/分析的 AI
+    /// 请求不再自动携带文件内容）；原文件与提取文本保留在本机，需要
+    /// 时在文件面板重新选用。绝不删除文件本身。
+    func clearDocumentContextSelection() {
+        guard let documentContext else { return }
+        for document in documentContext.documents {
+            documentContext.selectedPages[document.id] = []
+        }
+    }
+
+    /// 翻译服务是否已配置（状态栏如实显示；未配置时翻译不可用，
+    /// 本地 ASR 与文本输入不受影响）。
+    var isModelConfigured: Bool {
+        guard let service = resolveModelService() else { return false }
+        return service.isConfiguredNow
     }
 
     /// 是否存在可恢复的草稿（进入页面时的"继续上次翻译"提示）。
@@ -343,6 +398,9 @@ final class InterpreterViewModel {
     func stopListening() async {
         processingTask?.cancel()
         processingTask = nil
+        #if DEBUG
+        debugDemoLevelTask?.cancel()
+        #endif
         // 发出分句器中的尾段（诚实收尾）。
         if let segmenter {
             let segments = segmenter.flush()
@@ -794,11 +852,14 @@ final class InterpreterViewModel {
 
     // MARK: - 回合操作
 
-    /// 删除一个回合（草稿或已保存均可）。
+    /// 删除一个回合（草稿或已保存均可）。删除聚焦（最新）回合后聚焦
+    /// 邻近回合（聚焦 = 最新回合的派生值，自动跟随；不触发跳底滚动）。
     func deleteTurn(_ turn: InterpreterTurn) {
         do {
             try repository.deleteInterpreterTurn(turn)
             reloadTurns()
+            expandedTurnIDs.remove(turn.id)
+            if presentedTurnID == turn.id { presentedTurnID = nil }
         } catch {
             Self.logger.error("delete turn failed: \(error)")
         }
@@ -819,6 +880,60 @@ final class InterpreterViewModel {
         replyDraft = text
     }
 
+    // MARK: - 时间线跟随（纯 UI 状态机）
+
+    /// 滚动位置探测（时间线视图带滞回调用；编程式滚动期间抑制）。
+    func userScrolledTimeline(nearBottom: Bool) {
+        guard !isProgrammaticScrollActive else { return }
+        follow.userScrolled(nearBottom: nearBottom)
+    }
+
+    /// 新回合落定（turns 增长）：跟随中由视图滚到底；回看中计未读。
+    func noteNewTurnLanded() {
+        follow.turnLanded()
+    }
+
+    /// 用户点击"回到最新"。
+    func resumeFollowing() {
+        follow.resumeFollowing()
+    }
+
+    /// 当前聚焦回合（最新回合；Apple-Music 式聚焦由数据决定，
+    /// 不依赖几何测量）。
+    var focusedTurnID: UUID? {
+        turns.last?.id
+    }
+
+    /// 一个回合的排版决策（纯函数派生 —— 视图不自行猜测主次语言）。
+    func presentation(
+        for turn: InterpreterTurn, isTranslating: Bool
+    ) -> InterpreterTurnPresentation {
+        InterpreterTurnPresentation.make(
+            turn: turn,
+            isTranslating: isTranslating,
+            showStress: environment.settings.interpreterShowStress
+        )
+    }
+
+    /// 我的回复翻译是否进行中（含逐条重试标记）—— 供时间线渲染。
+    func isTranslating(turn: InterpreterTurn) -> Bool {
+        if translatingTurnIDs.contains(turn.id) {
+            return true
+        }
+        guard turn.direction == .zh2ru, isTranslatingReply else { return false }
+        return turns.last?.id == turn.id
+    }
+
+    /// 快捷回复建议（本地静态短语 + 最近对方回合的 AI 建议合并）。
+    func quickReplies() -> [InterpreterQuickReply] {
+        let aiSuggestions = turns
+            .last(where: { $0.speaker == .counterpart })?
+            .details?.suggestedReplies ?? []
+        return InterpreterQuickReplyCatalog.merged(
+            aiSuggestions: aiSuggestions, scene: scene
+        )
+    }
+
     // MARK: - 朗读（给对方听）
 
     func speakTurn(_ turn: InterpreterTurn) {
@@ -830,6 +945,13 @@ final class InterpreterViewModel {
 
     func stopSpeaking() {
         speech.stop()
+    }
+
+    /// 进入"给对方看"：锁定该回合并停止正在播放的旧句（展示期间新
+    /// 回合、同步或后台翻译完成都不得替换锁定内容）。
+    func presentTurn(_ turn: InterpreterTurn) {
+        speech.stop()
+        presentedTurnID = turn.id
     }
 
     // MARK: - 结束会话
@@ -989,4 +1111,31 @@ final class InterpreterViewModel {
             )
         }
     }
+
+    // MARK: - Demo 注入点（Debug 构建；Release 无此路径）
+
+    #if DEBUG
+    /// UI-demo（--demo-interpreter-state listening）：把收音状态置为
+    /// 真实状态机的 listening，并用确定性脚本驱动真实电平显示
+    /// （无麦克风、无音频 —— 状态机本身与真实路径完全一致）。
+    func debugApplyDemoListeningState() {
+        guard listeningPhase == .idle else { return }
+        listeningPhase = .listening
+        debugDemoLevelTask?.cancel()
+        let base = Date()
+        debugDemoLevelTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(base)
+                // 确定性低频电平（与课堂 demo 的脚本惯例一致）。
+                let level = Float(
+                    0.28 + 0.14 * sin(elapsed / 1.7) + 0.05 * sin(elapsed / 0.6)
+                )
+                self?.audioLevel = max(0.05, min(0.6, level))
+                try? await Task.sleep(for: .milliseconds(220))
+            }
+        }
+    }
+
+    private var debugDemoLevelTask: Task<Void, Never>?
+    #endif
 }

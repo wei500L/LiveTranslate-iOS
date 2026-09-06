@@ -22,6 +22,11 @@ struct DemoLaunchOptions {
         /// 随身翻译现场文件 demo：一份虚构的宿舍登记表 + canned OCR/AI
         /// 驱动真实 ViewModel 状态机（绝不打开相机/相册/App Group）。
         case interpreterDocument = "interpreter-document"
+        /// 柜台办理 demo（第十九轮）：虚构的宿舍入住登记草稿对话 ——
+        /// 多状态回合（成功/等待/失败/长文本）+ 办事事项上下文条 +
+        /// canned 翻译链（绝不打开麦克风；`--demo-interpreter-state`
+        /// 可选注入 listening/showmode/facing/sheet 视觉状态）。
+        case interpreterCounter = "interpreter-counter"
         /// 办事事项 demo：完全虚构的宿舍登记案例（候选材料/已确认预约/
         /// 现场问题/不确定费用/跟进 + 本地来源两种状态），fake 通知与
         /// 日历（绝不触真实 UNUserNotificationCenter / EventKit）。
@@ -29,6 +34,10 @@ struct DemoLaunchOptions {
     }
 
     let screen: Screen
+    /// `--demo-interpreter-state <state>`：interpreter-counter demo 的
+    /// 确定性视觉状态（conversation/failure/listening/showmode/facing/
+    /// sheet/longtext）。
+    let interpreterState: String?
 
     static func parse(
         arguments: [String] = ProcessInfo.processInfo.arguments,
@@ -45,7 +54,14 @@ struct DemoLaunchOptions {
         } else if let raw = env["DEMO_SCREEN"], let parsed = Screen(rawValue: raw) {
             screen = parsed
         }
-        return DemoLaunchOptions(screen: screen)
+        var interpreterState: String? = nil
+        if let index = arguments.firstIndex(of: "--demo-interpreter-state"),
+           index + 1 < arguments.count {
+            interpreterState = arguments[index + 1]
+        }
+        return DemoLaunchOptions(
+            screen: screen, interpreterState: interpreterState
+        )
     }
 }
 
@@ -207,6 +223,13 @@ extension AppEnvironment {
         // The errand demo seeds its fictional dorm-registration case into
         // the same in-memory container (real repository, fake surfaces).
         DemoSeed.populateErrandDemo(container: container)
+        // 柜台办理 demo：虚构的宿舍入住登记草稿对话（多状态回合）。
+        if options.screen == .interpreterCounter {
+            DemoSeed.populateInterpreterCounterDemo(
+                container: container, state: options.interpreterState
+            )
+            environment.flow.demoInterpreterCaseID = DemoSeed.errandDemoCaseID
+        }
         environment.flow.pendingDemoScreen = options.screen
         return environment
     }
@@ -252,6 +275,13 @@ extension AppEnvironment {
             // Same route as interpreter (the seeded demo conversation
             // carries a document context row; the panel is one tap away —
             // the demo never opens camera/photos/real App Group).
+            flow.selectedTab = .home
+            flow.requestInterpreterScreen()
+        case .interpreterCounter:
+            // 柜台办理 demo：HomeScreen pushes InterpreterScreen with the
+            // seeded errand case attached（上下文条/待问问题来自种子数据；
+            // 绝不自动开麦 —— listening 状态由 --demo-interpreter-state
+            // 注入真实状态机）。
             flow.selectedTab = .home
             flow.requestInterpreterScreen()
         case .administrativeCase:
@@ -1470,6 +1500,10 @@ final class DemoErrandEventStore: ErrandEventStoring {
 }
 
 extension DemoSeed {
+    /// The seeded errand demo case's ID (for the interpreter-counter demo
+    /// to attach as counter context; Debug builds only).
+    @MainActor static var errandDemoCaseID: UUID?
+
     /// The fictional 宿舍登记 case: two pending materials, one confirmed
     /// appointment, two questions to ask, one uncertain fee, one follow-up,
     /// local sources in both states (present + origin-deleted), and the
@@ -1569,6 +1603,218 @@ extension DemoSeed {
             sequence: 7, status: .unconfirmed, origin: .ai
         )
 
+        try? context.save()
+        errandDemoCaseID = errandCase.id
+    }
+
+    // MARK: - 柜台办理 demo（第十九轮：多状态草稿对话）
+
+    /// 虚构的宿舍入住登记草稿对话 —— 驱动真实 InterpreterScreen /
+    /// InterpreterViewModel（reload 恢复草稿；种子直接 context.insert，
+    /// 不经 repository → 不进 outbox，生产代码没有任何硬编码翻译
+    /// 结果）。全部为虚构数据：不使用真实护照、地址、电话或对话。
+    ///
+    /// state 选择确定性视觉状态：
+    /// - conversation / listening / showmode / facing / sheet：完整对话；
+    /// - failure：仅失败 + 等待回合（首屏即见失败重试）；
+    /// - longtext：仅超长中俄文本回合。
+    @MainActor
+    static func populateInterpreterCounterDemo(
+        container: ModelContainer, state: String?
+    ) {
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+
+        let draft = InterpreterConversation(
+            title: "宿舍入住登记 · 演示草稿",
+            sceneRaw: InterpreterScene.dorm.rawValue,
+            contextNote: "演示：我是莫斯科国立大学留学生（虚构）",
+            statusRaw: InterpreterConversationStatus.draft.rawValue,
+            startedAt: today.addingTimeInterval(10 * 3600)
+        )
+        context.insert(draft)
+
+        func details(
+            intent: String? = nil,
+            keywords: [String]? = nil,
+            suggestedReplies: [String]? = nil,
+            polite: String? = nil,
+            simple: String? = nil,
+            uncertainties: [String]? = nil
+        ) -> String {
+            var value = InterpreterTurnDetails()
+            value.intentSummary = intent
+            value.keywords = keywords
+            value.suggestedReplies = suggestedReplies
+            value.politeAlternative = polite
+            value.simpleAlternative = simple
+            value.uncertainties = uncertainties
+            let data = try? JSONEncoder().encode(value)
+            return data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        }
+
+        func counterpartTurn(
+            _ sequence: Int, russian: String, stressed: String,
+            chinese: String, status: InterpreterTurnTranslationStatus,
+            detailsJSON: String = ""
+        ) {
+            context.insert(InterpreterTurn(
+                conversationID: draft.id,
+                speakerRaw: InterpreterSpeaker.counterpart.rawValue,
+                directionRaw: InterpreterDirection.ru2zh.rawValue,
+                inputMethodRaw: InterpreterInputMethod.audio.rawValue,
+                sequence: sequence,
+                sourceText: russian,
+                plainRussian: russian,
+                stressedRussian: status == .completed ? stressed : "",
+                chineseText: status == .completed ? chinese : "",
+                detailsJSON: detailsJSON,
+                translationStatusRaw: status.rawValue
+            ))
+        }
+
+        func userTurn(
+            _ sequence: Int, chinese: String, russian: String,
+            stressed: String, backTranslation: String,
+            detailsJSON: String = ""
+        ) {
+            context.insert(InterpreterTurn(
+                conversationID: draft.id,
+                speakerRaw: InterpreterSpeaker.user.rawValue,
+                directionRaw: InterpreterDirection.zh2ru.rawValue,
+                inputMethodRaw: InterpreterInputMethod.text.rawValue,
+                sequence: sequence,
+                sourceText: chinese,
+                plainRussian: russian,
+                stressedRussian: stressed,
+                chineseText: chinese,
+                backTranslation: backTranslation,
+                detailsJSON: detailsJSON,
+                translationStatusRaw: InterpreterTurnTranslationStatus.completed.rawValue
+            ))
+        }
+
+        // 完整对话（conversation/listening/showmode/facing/sheet 共用）。
+        func seedFullConversation() {
+            counterpartTurn(
+                1,
+                russian: "Здравствуйте! Вы приехали оформлять заселение в общежитие?",
+                stressed: "Здра́вствуйте! Вы прие́хали оформля́ть заселе́ние в общежи́тие?",
+                chinese: "您好！您是来办理宿舍入住登记的吗？",
+                status: .completed,
+                detailsJSON: details(
+                    intent: "确认来意",
+                    keywords: ["заселение 入住", "общежитие 宿舍"],
+                    suggestedReplies: ["是的，我预约了今天上午办理", "请问需要哪些材料？"]
+                )
+            )
+            userTurn(
+                2,
+                chinese: "是的，我预约了今天上午办理。请问需要哪些材料？",
+                russian: "Да, я записан на сегодня на утро. Скажите, пожалуйста, какие документы нужны?",
+                stressed: "Да, я запи́сан на сего́дня на у́тро. Скажи́те, пожа́луйста, каки́е докуме́нты ну́жны?",
+                backTranslation: "是的，我预约了今天上午。请问需要哪些文件？",
+                detailsJSON: details(
+                    polite: "Не могли бы вы подсказать, какие документы необходимы для оформления?",
+                    simple: "Какие документы нужны?"
+                )
+            )
+            counterpartTurn(
+                3,
+                russian: "Нужны паспорт, миграционная карта и справка из университета. Копию паспорта можно сделать здесь.",
+                stressed: "Ну́жны па́спорт, миграцио́нная ка́рта и спра́вка из университе́та. Ко́пию па́спорта мо́жно сде́лать здесь.",
+                chinese: "需要护照、移民卡和学校证明。护照复印件可以在这里复印。",
+                status: .completed,
+                detailsJSON: details(
+                    intent: "说明所需材料",
+                    keywords: ["паспорт 护照", "миграционная карта 移民卡", "копия 复印件"]
+                )
+            )
+            // 等待翻译（pending：俄语已落位，翻译未到）。
+            counterpartTurn(
+                4,
+                russian: "Заполните, пожалуйста, анкету и подпишите договор.",
+                stressed: "",
+                chinese: "",
+                status: .pending
+            )
+            // 翻译失败（失败重试直接可见）。
+            counterpartTurn(
+                5,
+                russian: "Оформление займёт примерно десять минут, подождите здесь.",
+                stressed: "",
+                chinese: "",
+                status: .failed
+            )
+            userTurn(
+                6,
+                chinese: "好的，我明白了。请问登记完成后多久能拿到门禁卡？",
+                russian: "Хорошо, я понял. Подскажите, пожалуйста, как быстро выдадут ключ-карту после регистрации?",
+                stressed: "Хорошо́, я по́нял. Подскажи́те, пожа́луйста, как бы́стро вы́дадут ключ-ка́рту по́сле регистра́ции?",
+                backTranslation: "好的，我明白了。请问登记后多久能发门禁卡？"
+            )
+            // 超长文本（验证长文排版与滚动）。
+            counterpartTurn(
+                7,
+                russian: "Обратите внимание: в договоре указано, что вы обязаны соблюдать правила проживания в общежитии, своевременно оплачивать проживание до пятого числа каждого месяца, не передавать ключ-карту третьим лицам и сообщать администрации о любых изменениях в личных данных в течение трёх рабочих дней.",
+                stressed: "Обрати́те внима́ние: в догово́ре ука́зано, что вы обяза́ны соблюда́ть пра́вила прожива́ния в общежи́тии…",
+                chinese: "请注意：合同中写明，您必须遵守宿舍的居住规定，在每月 5 日前及时缴纳住宿费，不得将门禁卡转交他人，并在个人资料发生任何变更后的三个工作日内告知管理处。",
+                status: .completed,
+                detailsJSON: details(
+                    intent: "说明合同义务",
+                    keywords: ["договор 合同", "оплата 缴费", "ключ-карта 门禁卡"],
+                    uncertainties: ["数字与期限建议核对原文"]
+                )
+            )
+        }
+
+        func seedFailureOnly() {
+            counterpartTurn(
+                1,
+                russian: "Заполните, пожалуйста, анкету и подпишите договор.",
+                stressed: "",
+                chinese: "",
+                status: .pending
+            )
+            counterpartTurn(
+                2,
+                russian: "Оформление займёт примерно десять минут, подождите здесь.",
+                stressed: "",
+                chinese: "",
+                status: .failed
+            )
+            counterpartTurn(
+                3,
+                russian: "Справку из университета нужно принести до пятницы.",
+                stressed: "",
+                chinese: "",
+                status: .failed
+            )
+        }
+
+        func seedLongTextOnly() {
+            counterpartTurn(
+                1,
+                russian: "Обратите внимание: в договоре указано, что вы обязаны соблюдать правила проживания в общежитии, своевременно оплачивать проживание до пятого числа каждого месяца, не передавать ключ-карту третьим лицам и сообщать администрации о любых изменениях в личных данных в течение трёх рабочих дней.",
+                stressed: "Обрати́те внима́ние: в догово́ре ука́зано, что вы обяза́ны соблюда́ть пра́вила прожива́ния в общежи́тии…",
+                chinese: "请注意：合同中写明，您必须遵守宿舍的居住规定，在每月 5 日前及时缴纳住宿费，不得将门禁卡转交他人，并在个人资料发生任何变更后的三个工作日内告知管理处。",
+                status: .completed
+            )
+            userTurn(
+                2,
+                chinese: "请问缴费可以用现金吗，还是必须用银行卡？另外我想确认一下，如果我在假期回国，房间可以保留吗？需要提前多久向管理处提交申请？",
+                russian: "Подскажите, пожалуйста, можно ли оплатить наличными, или обязательно картой? И ещё я хотел бы уточнить: если я уеду домой на каникулы, сохранится ли за мной комната? За сколько дней нужно подать заявление в администрацию?",
+                stressed: "Подскажи́те, пожа́луйста, мо́жно ли оплати́ть нали́чными, и́ли обяза́тельно ка́ртой?",
+                backTranslation: "请问可以用现金支付还是必须刷卡？另外想确认：假期回国房间保留吗？需要提前多少天向管理处提交申请？"
+            )
+        }
+
+        switch state {
+        case "failure": seedFailureOnly()
+        case "longtext": seedLongTextOnly()
+        default: seedFullConversation()
+        }
         try? context.save()
     }
 }

@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// 已保存的随身翻译对话详情（搜索结果/最近记录点击打开）：回合列表
-/// + 导出。只读展示 —— 编辑发生在新的随身翻译会话中。
+/// + 导出。只读展示 —— 编辑发生在新的随身翻译会话中；展开详情、复制
+/// 与朗读可用（走共享 TTS 服务，朗读前自动停止上一句）。
 struct InterpreterConversationDetailView: View {
     let conversationID: UUID
     let environment: AppEnvironment
@@ -12,6 +13,8 @@ struct InterpreterConversationDetailView: View {
     @State private var shareURL: URL?
     /// 整理为办事事项（草稿编辑器）。
     @State private var showErrandEditor = false
+    /// 展开的回合（UI 状态）。
+    @State private var expandedTurnIDs: Set<UUID> = []
 
     private var conversation: InterpreterConversation? {
         environment.repository.interpreterConversation(id: conversationID)
@@ -23,13 +26,34 @@ struct InterpreterConversationDetailView: View {
                 LazyVStack(spacing: LTSpacing.s) {
                     if let conversation {
                         header(conversation)
-                        ForEach(turns, id: \.id) { turn in
-                            InterpreterTurnCard(
+                        ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                            InterpreterTurnRow(
                                 turn: turn,
-                                isExpanded: false,
-                                showStress: environment.settings.interpreterShowStress,
-                                isTranslating: false,
-                                availableDocumentIDs: availableDocumentIDs
+                                presentation: InterpreterTurnPresentation.make(
+                                    turn: turn,
+                                    isTranslating: false,
+                                    showStress: environment.settings.interpreterShowStress
+                                ),
+                                emphasis: InterpreterTimelineLayout.emphasis(
+                                    forTurnAt: index, totalCount: turns.count
+                                ),
+                                isExpanded: expandedTurnIDs.contains(turn.id),
+                                availableDocumentIDs: availableDocumentIDs,
+                                actions: InterpreterTurnActions(
+                                    onSpeak: {
+                                        environment.interpreterSpeech.speak(turn.plainRussian)
+                                    },
+                                    onCopy: { text in
+                                        ClipboardService.shared.copySensitive(text)
+                                    },
+                                    onToggleExpanded: {
+                                        if expandedTurnIDs.contains(turn.id) {
+                                            expandedTurnIDs.remove(turn.id)
+                                        } else {
+                                            expandedTurnIDs.insert(turn.id)
+                                        }
+                                    }
+                                )
                             )
                         }
                     } else {

@@ -8,6 +8,9 @@ struct HomeScreen: View {
     @State private var showNewSessionSheet = false
     @State private var showModelManagement = false
     @State private var pushingInterpreter = false
+    /// 随身翻译入口携带的办事事项（UI-demo 注入的上下文；正常入口为
+    /// nil —— ErrandCaseDetailView 的推送有自己的 navigationDestination）。
+    @State private var interpreterErrandCaseID: UUID?
     /// 办事事项列表 push（有需要行动的事项时显示入口卡）。
     @State private var pushingErrands = false
     @State private var errandViewModel = ErrandViewModel()
@@ -71,7 +74,7 @@ struct HomeScreen: View {
                 ModelManagementScreen()
             }
             .navigationDestination(isPresented: $pushingInterpreter) {
-                InterpreterScreen()
+                InterpreterScreen(errandCaseID: interpreterErrandCaseID)
             }
             .navigationDestination(isPresented: $pushingErrands) {
                 ErrandCaseListView()
@@ -133,6 +136,13 @@ struct HomeScreen: View {
             // push the page (the route never starts the microphone).
             if environment.flow.pendingInterpreterScreen {
                 environment.flow.consumeInterpreterScreen()
+                #if DEBUG
+                // UI-demo: attach the seeded errand case as counter context
+                // (one-shot; consumed at push time so the pushed screen
+                // keeps a stable value).
+                interpreterErrandCaseID = environment.flow.demoInterpreterCaseID
+                environment.flow.demoInterpreterCaseID = nil
+                #endif
                 pushingInterpreter = true
             }
             // 系统面（Intent/Spotlight/通知）要求打开办事事项列表或某个

@@ -1,18 +1,16 @@
 import SwiftUI
 
-/// 随身翻译主页面 —— 面对面办事口译。
+/// 随身翻译主页面 —— 面对面办事口译（第十九轮柜台重构）。
 ///
-/// 信息架构（站在柜台前单手操作）：
-/// - 顶部：场景 + 语言方向（俄 ⇄ 中）；
-/// - 主体：全宽阅读卡片形式的对话历史（非社交聊天气泡），中文理解
-///   结果占视觉主体（字号大于俄语原文）；
-/// - 底部：显眼的"听对方说"大按钮 + "我要回复"输入区（系统键盘/
-///   系统听写/粘贴，TextEditor 原生组件）；
-/// - 对话历史自然向上滚动；手动上滚不强制跳回底部，用户靠近底部时
-///   新回合完成才自动跟随。
+/// 四个稳定区域（站在柜台前单手操作）：
+/// - 紧凑状态栏：场景、收音、ASR 资源、翻译可用性、朗读；
+/// - 可折叠办事上下文条：ErrandCase 轻量上下文 + 文件 chip（一到两行）；
+/// - 聚焦式双语时间线：当前回合最清晰，历史逐级降权（非聊天气泡）；
+/// - 固定底部操作区：听对方说大按钮 + 中文输入 + 快捷回复 + 附件入口。
 ///
 /// 状态不只靠颜色（文字标签 + SF Symbol）；Dynamic Type / VoiceOver /
-/// Reduce Motion 全部走系统（LT 设计系统）。
+/// Reduce Motion 全部走系统（LT 设计系统）。草稿永不上传（同步只发生在
+/// 保存后 —— 既有语义，本轮不改）。
 struct InterpreterScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var viewModel: InterpreterViewModel?
@@ -21,6 +19,8 @@ struct InterpreterScreen: View {
     @State private var showEndConfirmation = false
     /// 文件上下文面板。
     @State private var showDocumentPanel = false
+    /// 办事上下文 sheet（待问问题/材料/已确认信息）。
+    @State private var showErrandContextSheet = false
     /// 结束保存时的文件处理选择。
     @State private var endFileDisposition: InterpreterViewModel.EndFileDisposition = .discardDocuments
     /// 整理为办事事项（当前对话 → 事项草稿的本地来源链接）。
@@ -28,6 +28,9 @@ struct InterpreterScreen: View {
     /// 办事事项带入的现场问题（只填入输入框 —— 不自动翻译、不自动
     /// 朗读、不自动开麦；nil = 普通进入）。
     var prefilledQuestion: String? = nil
+    /// 关联的办事事项（从 ErrandCase 的"开始现场沟通"进入；nil = 普通
+    /// 进入 —— 不显示空占位上下文条）。
+    var errandCaseID: UUID? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -70,6 +73,7 @@ struct InterpreterScreen: View {
         .task {
             if viewModel == nil {
                 viewModel = InterpreterViewModel(environment: environment)
+                viewModel?.attachErrandContext(caseID: errandCaseID)
                 // 办事事项带入的问题只填入输入框（applySuggestion 的
                 // 语义：不自动翻译、不自动朗读）。
                 if let prefilledQuestion, !prefilledQuestion.isEmpty {
@@ -77,6 +81,9 @@ struct InterpreterScreen: View {
                 }
             }
             await viewModel?.reload()
+            #if DEBUG
+            applyDemoStateIfNeeded()
+            #endif
         }
         .sheet(isPresented: $showScenePicker) {
             if let viewModel {
@@ -154,6 +161,23 @@ struct InterpreterScreen: View {
                     isPresented: $showDocumentPanel
                 )
                 .environment(environment)
+                .onDisappear {
+                    // 文件上下文变化后刷新上下文条（就绪数/选中状态）。
+                    viewModel.refreshCounterContext()
+                }
+            }
+        }
+        .sheet(isPresented: $showErrandContextSheet) {
+            if let viewModel {
+                InterpreterErrandContextSheet(
+                    caseID: errandCaseID ?? viewModel.counterContext?.caseID,
+                    onPrefillQuestion: { question in
+                        // 只填入输入框 —— 不自动翻译、不自动发送、不自动朗读。
+                        viewModel.applySuggestion(question)
+                    },
+                    onOpenDocuments: { showDocumentPanel = true }
+                )
+                .environment(environment)
             }
         }
         .onDisappear {
@@ -162,284 +186,54 @@ struct InterpreterScreen: View {
         }
     }
 
-    // MARK: - Main content
+    // MARK: - Main content（四个稳定区域）
 
     @ViewBuilder
     private func mainContent(_ viewModel: InterpreterViewModel) -> some View {
         VStack(spacing: 0) {
-            headerBar(viewModel)
-            documentContextBar(viewModel)
-            turnList(viewModel)
-            replyComposer(viewModel)
-        }
-        .safeAreaInset(edge: .bottom) {
-            listeningControls(viewModel)
-        }
-    }
-
-    /// 文件上下文紧凑状态条：已加载文档数与状态（点击进入面板）。
-    @ViewBuilder
-    private func documentContextBar(_ viewModel: InterpreterViewModel) -> some View {
-        if let documentModel = viewModel.documentContext {
-            let ready = documentModel.readyDocumentCount
-            let total = documentModel.documents.count
-            let extracting = documentModel.documents.contains {
-                documentModel.extractionProgress(for: $0.id) != nil
+            InterpreterStatusBar(
+                viewModel: viewModel,
+                onOpenScenePicker: { showScenePicker = true }
+            )
+            InterpreterContextBar(
+                counterContext: viewModel.counterContext,
+                documentSummary: documentSummary(viewModel),
+                onOpenSheet: { showErrandContextSheet = true },
+                onOpenDocuments: { showDocumentPanel = true },
+                onRemoveDocumentContext: { viewModel.clearDocumentContextSelection() }
+            )
+            InterpreterTimeline(viewModel: viewModel) { turn in
+                turnActions(viewModel, turn)
             }
-            Button {
-                showDocumentPanel = true
-            } label: {
-                HStack(spacing: LTSpacing.s) {
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(total > 0 ? LTColors.accentCyan : LTColors.textTertiary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        if total > 0 {
-                            Text("文件上下文：\(ready > 0 ? "\(ready) 份就绪" : "提取中")\(ready < total ? " · 共 \(total) 份" : "")")
-                                .font(LTTypography.caption)
-                                .foregroundStyle(LTColors.textSecondary)
-                        } else {
-                            Text("添加现场文件（表格、通知、回执）")
-                                .font(LTTypography.caption)
-                                .foregroundStyle(LTColors.textTertiary)
-                        }
+            InterpreterComposer(
+                viewModel: viewModel,
+                onSubmitReply: {
+                    Task { await viewModel.submitReply() }
+                },
+                onToggleListening: {
+                    if viewModel.listeningPhase == .listening
+                        || viewModel.listeningPhase == .transcribing {
+                        Task { await viewModel.stopListening() }
+                    } else {
+                        Task { await viewModel.startListening() }
                     }
-                    Spacer()
-                    if extracting {
-                        ProgressView()
-                            .controlSize(.mini)
+                },
+                onOpenDocuments: { showDocumentPanel = true },
+                onOpenQuestions: { showErrandContextSheet = true },
+                onEndRequested: {
+                    if environment.settings.interpreterAskToSave {
+                        showEndConfirmation = true
+                    } else {
+                        Task { await endConversation(save: true) }
                     }
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(LTColors.textTertiary)
-                }
-                .padding(.horizontal, LTSpacing.m)
-                .padding(.vertical, LTSpacing.xs + 2)
-                .background(
-                    RoundedRectangle(cornerRadius: LTRadius.medium)
-                        .fill(LTColors.surfaceElevated.opacity(0.5))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: LTRadius.medium)
-                        .strokeBorder(LTColors.border, lineWidth: 0.5)
-                )
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, LTSpacing.screenPadding)
-            .padding(.top, LTSpacing.xs)
-            .accessibilityLabel(
-                total > 0
-                    ? "文件上下文，\(total) 份文件，\(ready) 份就绪，点击管理"
-                    : "添加现场文件，点击打开"
+                },
+                pendingQuestionCount: viewModel.counterContext?.pendingQuestionCount ?? 0
             )
         }
-    }
-
-    /// 顶部：场景与语言方向。
-    private func headerBar(_ viewModel: InterpreterViewModel) -> some View {
-        Button {
-            showScenePicker = true
-        } label: {
-            HStack(spacing: LTSpacing.s) {
-                Image(systemName: viewModel.scene.symbol)
-                    .foregroundStyle(LTColors.accentCyan)
-                Text(viewModel.scene.displayName)
-                    .font(LTTypography.cardTitle)
-                    .foregroundStyle(LTColors.textPrimary)
-                if !viewModel.contextNote.isEmpty {
-                    Image(systemName: "note.text")
-                        .foregroundStyle(LTColors.textSecondary)
-                }
-                Spacer()
-                Text("俄 ⇄ 中")
-                    .font(LTTypography.statusChip)
-                    .foregroundStyle(LTColors.textSecondary)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(LTColors.textTertiary)
-            }
-            .ltCard(padding: LTSpacing.m)
+        .onChange(of: viewModel.documentContext?.documents.count) { _, _ in
+            // 文件导入/删除后刷新上下文条。
+            viewModel.refreshCounterContext()
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, LTSpacing.screenPadding)
-        .padding(.top, LTSpacing.s)
-        .accessibilityLabel("当前场景 \(viewModel.scene.displayName)，点击切换")
-    }
-
-    // MARK: - Turn list
-
-    @ViewBuilder
-    private func turnList(_ viewModel: InterpreterViewModel) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: LTSpacing.s) {
-                    if viewModel.turns.isEmpty {
-                        emptyState
-                    }
-                    ForEach(viewModel.turns, id: \.id) { turn in
-                        // Decomposed into small statements — the inline
-                        // compound expression (several @Observable reads
-                        // chained with &&/||) exceeded the type-checker's
-                        // budget.
-                        let isExpanded = viewModel.expandedTurnIDs.contains(turn.id)
-                        let isTranslating: Bool = {
-                            if viewModel.translatingTurnIDs.contains(turn.id) {
-                                return true
-                            }
-                            guard turn.direction == .zh2ru,
-                                  viewModel.isTranslatingReply else {
-                                return false
-                            }
-                            return viewModel.turns.last?.id == turn.id
-                        }()
-                        InterpreterTurnCard(
-                            turn: turn,
-                            isExpanded: isExpanded,
-                            showStress: environment.settings.interpreterShowStress,
-                            isTranslating: isTranslating,
-                            availableDocumentIDs: viewModel.availableDocumentIDs,
-                            onToggleExpanded: {
-                                if viewModel.expandedTurnIDs.contains(turn.id) {
-                                    viewModel.expandedTurnIDs.remove(turn.id)
-                                } else {
-                                    viewModel.expandedTurnIDs.insert(turn.id)
-                                }
-                            },
-                            onRetry: {
-                                if turn.direction == .ru2zh {
-                                    viewModel.translateCounterpartTurn(turn)
-                                } else {
-                                    Task { await viewModel.retryUserTurn(turn) }
-                                }
-                            },
-                            onSpeak: { viewModel.speakTurn(turn) },
-                            onPresent: { viewModel.presentedTurnID = turn.id },
-                            onDelete: { viewModel.deleteTurn(turn) },
-                            onUpdateSource: { text in
-                                viewModel.updateTurnSource(turn, text: text)
-                            }
-                        )
-                        .id(turn.id)
-                    }
-                }
-                .padding(.horizontal, LTSpacing.screenPadding)
-                .padding(.vertical, LTSpacing.s)
-            }
-            .onChange(of: viewModel.turns.count) { _, _ in
-                // 新回合完成且用户靠近底部时才自动跟随。
-                guard viewModel.shouldAutoFollow,
-                      let last = viewModel.turns.last else { return }
-                withAnimation(LTMotion.quick) {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
-            }
-            .onTapGesture {
-                dismissKeyboard()
-            }
-            .scrollDismissesKeyboard(.interactively)
-        }
-        if let error = viewModel.lastTranslationError {
-            Text(error)
-                .font(LTTypography.caption)
-                .foregroundStyle(LTColors.warning)
-                .padding(.horizontal, LTSpacing.screenPadding)
-                .padding(.bottom, LTSpacing.xs)
-        }
-    }
-
-    private var emptyState: some View {
-        LTEmptyState(
-            symbol: "person.2.wave.2",
-            title: "开始你们的对话",
-            message: "点击下方\"听对方说\"收录对方的俄语，或直接输入中文回复。"
-        )
-    }
-
-    // MARK: - Reply composer (我要回复)
-
-    private func replyComposer(_ viewModel: InterpreterViewModel) -> some View {
-        VStack(spacing: LTSpacing.xs) {
-            // 快捷回复建议（对方回合翻译完成后最多 3 个，中文显示，
-            // 点击只填入输入框，不自动翻译不自动朗读）。
-            let suggestions = quickReplySuggestions(viewModel)
-            if !suggestions.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: LTSpacing.s) {
-                        ForEach(suggestions, id: \.self) { suggestion in
-                            Button {
-                                viewModel.applySuggestion(suggestion)
-                            } label: {
-                                Text(suggestion)
-                                    .font(LTTypography.caption)
-                                    .foregroundStyle(LTColors.accentCyan)
-                                    .padding(.horizontal, LTSpacing.m)
-                                    .padding(.vertical, LTSpacing.xs + 2)
-                                    .background(
-                                        Capsule().fill(LTColors.accentCyan.opacity(0.12))
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            HStack(alignment: .bottom, spacing: LTSpacing.s) {
-                // 语气选择（影响中→俄生成的礼貌层级）。
-                Menu {
-                    ForEach(InterpreterTone.allCases) { tone in
-                        Button(tone.displayName) {
-                            viewModel.tone = tone
-                        }
-                    }
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "text.bubble")
-                        Text(viewModel.tone.displayName)
-                            .font(LTTypography.timestamp)
-                    }
-                    .foregroundStyle(LTColors.textSecondary)
-                    .frame(minWidth: 56)
-                }
-
-                TextField("我要回复（中文）", text: Binding(
-                    get: { viewModel.replyDraft },
-                    set: { viewModel.replyDraft = $0 }
-                ), axis: .vertical)
-                .lineLimit(1...4)
-                .textFieldStyle(.plain)
-                .font(LTTypography.body)
-                .padding(LTSpacing.s)
-                .background(
-                    RoundedRectangle(cornerRadius: LTRadius.medium)
-                        .fill(LTColors.surfaceElevated.opacity(0.6))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: LTRadius.medium)
-                        .strokeBorder(LTColors.border, lineWidth: 0.5)
-                )
-
-                Button {
-                    Task { await viewModel.submitReply() }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(
-                            viewModel.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || viewModel.isTranslatingReply
-                                ? LTColors.textTertiary
-                                : LTColors.accentGreen
-                        )
-                }
-                .disabled(viewModel.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || viewModel.isTranslatingReply)
-                .accessibilityLabel("生成俄语回复")
-            }
-        }
-        .padding(.horizontal, LTSpacing.screenPadding)
-        .padding(.vertical, LTSpacing.s)
-        .background(LTColors.backgroundPrimary.opacity(0.85))
         .fullScreenCover(item: Binding(
             get: {
                 viewModel.presentedTurnID.flatMap { id in
@@ -460,173 +254,98 @@ struct InterpreterScreen: View {
         }
     }
 
-    // MARK: - Listening controls (听对方说)
+    // MARK: - 回合动作接线
 
-    @ViewBuilder
-    private func listeningControls(_ viewModel: InterpreterViewModel) -> some View {
-        VStack(spacing: LTSpacing.xs) {
-            if viewModel.listeningPhase == .listening {
-                // 真实电平指示（仅真实音量数据；无数据不显示波形）。
-                ListeningIndicator(level: viewModel.audioLevel) {
-                    Task { await viewModel.finishCurrentUtteranceManually() }
+    private func turnActions(
+        _ viewModel: InterpreterViewModel, _ turn: InterpreterTurn
+    ) -> InterpreterTurnActions {
+        InterpreterTurnActions(
+            onSpeak: { viewModel.speakTurn(turn) },
+            onCopy: { text in
+                ClipboardService.shared.copySensitive(text)
+            },
+            onPresent: { viewModel.presentTurn(turn) },
+            onRetry: {
+                if turn.direction == .ru2zh {
+                    viewModel.translateCounterpartTurn(turn)
+                } else {
+                    Task { await viewModel.retryUserTurn(turn) }
                 }
-            } else if case .failed(let message) = viewModel.listeningPhase {
-                Text(message)
-                    .font(LTTypography.caption)
-                    .foregroundStyle(LTColors.warning)
-            }
-            HStack(spacing: LTSpacing.m) {
-                Button {
-                    if viewModel.listeningPhase == .listening
-                        || viewModel.listeningPhase == .transcribing {
-                        Task { await viewModel.stopListening() }
-                    } else {
-                        Task { await viewModel.startListening() }
-                    }
-                } label: {
-                    HStack(spacing: LTSpacing.s) {
-                        Image(systemName: isListening(viewModel)
-                            ? "stop.circle.fill" : "ear.fill")
-                            .font(.system(size: 22, weight: .semibold))
-                        Text(listeningButtonLabel(viewModel))
-                            .font(LTTypography.button)
-                    }
-                    .foregroundStyle(Color.black.opacity(0.85))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, LTSpacing.m)
-                    .background(
-                        Capsule().fill(
-                            LinearGradient(
-                                colors: isListening(viewModel)
-                                    ? [LTColors.warning.opacity(0.9), LTColors.warning]
-                                    : [LTColors.accentCyan.opacity(0.9), LTColors.accentCyan],
-                                startPoint: .leading, endPoint: .trailing
-                            )
-                        )
-                    )
-                }
-                .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentCyan))
-                .accessibilityLabel(listeningButtonLabel(viewModel))
-
-                if viewModel.turns.contains(where: { !$0.sourceText.isEmpty }) {
-                    Button {
-                        if environment.settings.interpreterAskToSave {
-                            showEndConfirmation = true
-                        } else {
-                            Task { await endConversation(save: true) }
-                        }
-                    } label: {
-                        Text("结束")
-                            .font(LTTypography.cardTitle)
-                            .foregroundStyle(LTColors.textSecondary)
-                            .padding(.horizontal, LTSpacing.l)
-                            .padding(.vertical, LTSpacing.m)
-                            .background(Capsule().fill(LTColors.textSecondary.opacity(0.12)))
-                    }
-                    .accessibilityLabel("结束本次翻译")
+            },
+            onEditSource: { text in
+                viewModel.updateTurnSource(turn, text: text)
+            },
+            onDelete: { viewModel.deleteTurn(turn) },
+            onToggleExpanded: {
+                if viewModel.expandedTurnIDs.contains(turn.id) {
+                    viewModel.expandedTurnIDs.remove(turn.id)
+                } else {
+                    viewModel.expandedTurnIDs.insert(turn.id)
                 }
             }
-            if viewModel.micPermissionDenied {
-                micPermissionHint
+        )
+    }
+
+    // MARK: - 文件上下文
+
+    private func documentSummary(
+        _ viewModel: InterpreterViewModel
+    ) -> InterpreterContextBar.DocumentSummary? {
+        guard let documentModel = viewModel.documentContext,
+              !documentModel.documents.isEmpty else { return nil }
+        let selectedPages = documentModel.selectedPages
+        let hasSelection = documentModel.documents.contains { document in
+            guard document.allowsModelUse else { return false }
+            if let pages = selectedPages[document.id] {
+                return !pages.isEmpty
             }
+            return true
         }
-        .padding(.horizontal, LTSpacing.screenPadding)
-        .padding(.top, LTSpacing.s)
-        .padding(.bottom, LTSpacing.s)
-        .background(LTColors.backgroundPrimary.opacity(0.92))
+        return InterpreterContextBar.DocumentSummary(
+            readyCount: documentModel.readyDocumentCount,
+            totalCount: documentModel.documents.count,
+            extracting: documentModel.documents.contains {
+                documentModel.extractionProgress(for: $0.id) != nil
+            },
+            hasSelection: hasSelection
+        )
     }
 
-    private var micPermissionHint: some View {
-        HStack(spacing: LTSpacing.s) {
-            Image(systemName: "mic.slash")
-                .foregroundStyle(LTColors.warning)
-            Text("麦克风未授权，文本输入翻译仍可用")
-                .font(LTTypography.caption)
-                .foregroundStyle(LTColors.textSecondary)
-            Spacer()
-            Button("去设置") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-            }
-            .font(LTTypography.caption)
-            .foregroundStyle(LTColors.accentBlue)
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func isListening(_ viewModel: InterpreterViewModel) -> Bool {
-        viewModel.listeningPhase == .listening || viewModel.listeningPhase == .transcribing
-    }
-
-    private func listeningButtonLabel(_ viewModel: InterpreterViewModel) -> String {
-        switch viewModel.listeningPhase {
-        case .requestingPermission: return "请求权限…"
-        case .listening: return "正在听对方说…"
-        case .transcribing: return "识别中…"
-        case .failed: return "重试收音"
-        case .idle: return "听对方说"
-        }
-    }
-
-    /// 快捷回复：本地静态通用短语 + 最近对方回合的 AI 建议合并，最多 3 个。
-    private func quickReplySuggestions(_ viewModel: InterpreterViewModel) -> [String] {
-        var result: [String] = []
-        // 与当前话题相关的建议来自同一次 AI 结果（对方最近回合的 details）。
-        if let lastCounterpart = viewModel.turns.last(where: { $0.speaker == .counterpart }),
-           let suggestions = lastCounterpart.details?.suggestedReplies {
-            result.append(contentsOf: suggestions.prefix(3))
-        }
-        // 通用短语补充（本地静态模板）。
-        let universal = ["好的，我明白了", "请您再说慢一点", "您可以写下来吗？"]
-        for phrase in universal where result.count < 3 {
-            if !result.contains(phrase) {
-                result.append(phrase)
-            }
-        }
-        return Array(result.prefix(3))
-    }
+    // MARK: - 结束会话
 
     private func endConversation(save: Bool) async {
         await viewModel?.endConversation(save: save, fileDisposition: endFileDisposition)
         dismiss()
     }
-}
 
-// MARK: - Listening indicator
+    // MARK: - Demo 注入点（Debug 构建；Release 无此路径）
 
-/// 收音中的真实电平指示（LinearGradient 高度由真实 RMS 驱动；无数据
-/// 时整条不显示 —— 绝不做假声波动画）。
-private struct ListeningIndicator: View {
-    var level: Float
-    var onManualFinish: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: LTSpacing.s) {
-            Image(systemName: "waveform")
-                .foregroundStyle(LTColors.accentCyan)
-            // 电平条：真实 RMS → 高度（10 pt 基线 + 0–20 pt 动态）。
-            Capsule()
-                .fill(LTColors.accentCyan.opacity(0.7))
-                .frame(width: 120, height: 4 + CGFloat(min(0.3, max(0, level))) * 60)
-                .animation(reduceMotion ? nil : LTMotion.quick, value: level)
-            Spacer()
-            Button("结束这句", action: onManualFinish)
-                .font(LTTypography.caption)
-                .foregroundStyle(LTColors.accentBlue)
+    #if DEBUG
+    /// `--ui-demo --demo-screen interpreter-counter --demo-interpreter-state X`
+    /// 的确定性视觉状态（截图验收用）：真实页面 + 真实状态机，仅注入
+    /// UI 状态。
+    private func applyDemoStateIfNeeded() {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "--demo-interpreter-state"),
+              index + 1 < args.count,
+              let viewModel else { return }
+        switch args[index + 1] {
+        case "listening":
+            viewModel.debugApplyDemoListeningState()
+        case "showmode":
+            if let turn = viewModel.turns.last(where: { !$0.plainRussian.isEmpty }) {
+                viewModel.presentedTurnID = turn.id
+            }
+        case "facing":
+            // 对向展示初始态由 ShowModeView 内部解析（Debug-only）。
+            if let turn = viewModel.turns.last(where: { !$0.plainRussian.isEmpty }) {
+                viewModel.presentedTurnID = turn.id
+            }
+        case "sheet":
+            showErrandContextSheet = true
+        default:
+            break
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("正在收音，电平 \(Int(min(1, max(0, level)) * 100))%")
     }
-}
-
-// MARK: - Keyboard dismissal
-
-@MainActor
-private func dismissKeyboard() {
-    UIApplication.shared.sendAction(
-        #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
-    )
+    #endif
 }

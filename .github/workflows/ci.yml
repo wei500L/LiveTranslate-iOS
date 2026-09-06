@@ -257,6 +257,100 @@ jobs:
           echo "Demo smoke OK: process alive after 25s"
           xcrun simctl shutdown "$udid" || true
 
+      # Round 19: deterministic UI screenshots of the counter-interpreter
+      # demo (Debug Demo path only — no production data). Screenshot
+      # generation failure FAILS this step; nothing is silently skipped.
+      # If the runner cannot set content size / has no narrow device, the
+      # affected shot is reported as a warning and excluded from the count.
+      - name: UI demo screenshots (counter interpreter)
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices -j | python3 -c "
+          import json,sys
+          data=json.load(sys.stdin)['devices']
+          for runtime, devices in data.items():
+              for d in devices:
+                  if d['isAvailable'] and d['name'].startswith('iPhone'):
+                      print(d['udid']); sys.exit(0)
+          ")
+          [ -n "$udid" ] || { echo "no iPhone simulator available"; exit 1; }
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
+          app="build/DerivedData/Build/Products/Debug-iphonesimulator/LiveTranslateIOS.app"
+          xcrun simctl install "$udid" "$app"
+          mkdir -p build/screenshots
+
+          shot() {
+            local name="$1"; shift
+            xcrun simctl terminate "$udid" com.livetranslate.ios >/dev/null 2>&1 || true
+            sleep 1
+            xcrun simctl launch "$udid" com.livetranslate.ios --ui-demo "$@"
+            sleep 12
+            xcrun simctl io "$udid" screenshot "build/screenshots/$name.png"
+            test -s "build/screenshots/$name.png" || { echo "screenshot $name missing/empty"; exit 1; }
+            echo "captured $name.png"
+          }
+
+          shot interpreter-counter-conversation --demo-screen interpreter-counter
+          shot interpreter-counter-failure --demo-screen interpreter-counter --demo-interpreter-state failure
+          shot interpreter-counter-listening --demo-screen interpreter-counter --demo-interpreter-state listening
+          shot interpreter-counter-showmode --demo-screen interpreter-counter --demo-interpreter-state showmode
+          shot interpreter-counter-facing --demo-screen interpreter-counter --demo-interpreter-state facing
+          shot interpreter-counter-sheet --demo-screen interpreter-counter --demo-interpreter-state sheet
+          shot interpreter-counter-longtext --demo-screen interpreter-counter --demo-interpreter-state longtext
+
+          # Large Dynamic Type: set content size if the runner supports it;
+          # otherwise report honestly and do not fake the shot.
+          if xcrun simctl ui "$udid" content_size accessibility-extra-large 2>/dev/null; then
+            sleep 2
+            shot interpreter-counter-largetype --demo-screen interpreter-counter
+            xcrun simctl ui "$udid" content_size medium >/dev/null 2>&1 || true
+            echo "LARGETYPE_STATUS=captured" >> "$GITHUB_ENV"
+          else
+            echo "::warning::simctl content_size unsupported — large-type screenshot NOT captured (unverified)"
+            echo "LARGETYPE_STATUS=unavailable" >> "$GITHUB_ENV"
+          fi
+
+          # Narrow-screen device (any physically smaller iPhone, if present).
+          narrow_udid=$(xcrun simctl list devices -j | python3 -c "
+          import json,sys
+          data=json.load(sys.stdin)['devices']
+          prefs=['iPhone SE','iPhone 16e','iPhone 13 mini','iPhone 12 mini']
+          for pref in prefs:
+              for runtime, devices in data.items():
+                  for d in devices:
+                      if d['isAvailable'] and d['name'].startswith(pref):
+                          print(d['udid']); sys.exit(0)
+          ")
+          if [ -n "$narrow_udid" ] && [ "$narrow_udid" != "$udid" ]; then
+            xcrun simctl boot "$narrow_udid" || true
+            xcrun simctl bootstatus "$narrow_udid" -b
+            xcrun simctl install "$narrow_udid" "$app"
+            xcrun simctl launch "$narrow_udid" com.livetranslate.ios --ui-demo --demo-screen interpreter-counter
+            sleep 12
+            xcrun simctl io "$narrow_udid" screenshot build/screenshots/interpreter-counter-narrow.png
+            test -s build/screenshots/interpreter-counter-narrow.png
+            xcrun simctl shutdown "$narrow_udid" || true
+            echo "NARROW_STATUS=captured" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no smaller iPhone simulator available — narrow screenshot NOT captured (unverified)"
+            echo "NARROW_STATUS=unavailable" >> "$GITHUB_ENV"
+          fi
+
+          xcrun simctl shutdown "$udid" || true
+          ls -la build/screenshots
+          count=$(ls build/screenshots | wc -l | tr -d ' ')
+          echo "screenshot count: $count"
+          test "$count" -ge 7 || { echo "expected at least 7 screenshots"; exit 1; }
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-screenshots
+          retention-days: 7
+          path: build/screenshots/
+
       - name: No model files committed
         run: |
           set -euo pipefail

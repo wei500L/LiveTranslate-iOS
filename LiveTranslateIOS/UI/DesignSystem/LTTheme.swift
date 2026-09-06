@@ -72,6 +72,28 @@ enum LTTypography {
     static let button = Font.headline
 }
 
+// MARK: - Interpreter typography（随身翻译 · 第十九轮柜台重构）
+
+/// 随身翻译页专用排版 ramp：主次语言由回合角色决定（对方回合中文
+/// 优先、我的回合俄语优先），当前聚焦回合最大、最近回合次之、历史
+/// 回合更紧凑 —— 全部随 Dynamic Type 缩放，不在此固定字号。
+extension LTTypography {
+    /// 第一视觉层级 —— 当前聚焦回合的主文本（对方=中文翻译 / 我=俄语译文）。
+    static let interpreterPrimaryCurrent = Font.title2.weight(.semibold)
+    /// 最近回合的主文本。
+    static let interpreterPrimaryRecent = Font.title3.weight(.medium)
+    /// 历史回合的主文本（保持可读，只用颜色与字号降级，不用低透明度）。
+    static let interpreterPrimaryHistory = Font.callout
+    /// 核对层 —— 当前回合的次文本（对方=俄语原文 / 我=中文原意）。
+    static let interpreterSecondaryCurrent = Font.callout
+    /// 最近回合的次文本。
+    static let interpreterSecondaryRecent = Font.subheadline
+    /// 历史回合的次文本。
+    static let interpreterSecondaryHistory = Font.footnote
+    /// 状态行（等待/翻译中/失败）—— 高度稳定，减少完成时跳动。
+    static let interpreterStatus = Font.footnote
+}
+
 // MARK: - Spacing / radius
 
 enum LTSpacing {

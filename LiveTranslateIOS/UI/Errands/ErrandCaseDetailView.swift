@@ -239,8 +239,12 @@ struct ErrandCaseDetailView: View {
         .ltCard(padding: LTSpacing.l)
         .navigationDestination(isPresented: $showingStartInterpreter) {
             // 只导航 —— 场景与背景由随身翻译界面自行展示；绝不自动
-            // 请求麦克风、自动开始收音或自动朗读。
-            InterpreterScreen(prefilledQuestion: pendingQuestionText)
+            // 请求麦克风、自动开始收音或自动朗读。携带事项 ID 建立
+            // 轻量上下文条（待问问题/材料；隐私档位门控标题）。
+            InterpreterScreen(
+                prefilledQuestion: pendingQuestionText,
+                errandCaseID: caseID
+            )
         }
     }
 
