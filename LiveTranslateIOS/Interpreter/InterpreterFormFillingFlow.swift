@@ -22,19 +22,18 @@ struct InterpreterFormFillingFlow: View {
     var body: some View {
         Group {
             if let model {
-                NavigationStack {
-                    InterpreterFormOverviewSheet(
-                        model: model,
-                        viewModel: viewModel,
-                        onFillField: { fieldID in
-                            currentFieldID = fieldID
-                            showFieldPage = true
-                        },
-                        onAskStaff: { field in
-                            askStaff(field, prefilled: defaultAskQuestion(for: field))
-                        }
-                    )
-                }
+                // Overview 自带 NavigationStack（toolbar/标题归它）。
+                InterpreterFormOverviewSheet(
+                    model: model,
+                    viewModel: viewModel,
+                    onFillField: { fieldID in
+                        currentFieldID = fieldID
+                        showFieldPage = true
+                    },
+                    onAskStaff: { field in
+                        askStaff(field, prefilled: defaultAskQuestion(for: field))
+                    }
+                )
             } else {
                 Color.clear
             }
