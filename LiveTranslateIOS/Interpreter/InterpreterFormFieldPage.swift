@@ -550,7 +550,7 @@ struct InterpreterFormFieldPage: View {
 
     // MARK: - 底部操作区（上一项/下一项/翻译/询问）
 
-    private func bottomBar(field: InterpreterFormDraftField, _ index: Int) -> some View {
+    private func bottomBar(field: InterpreterFormDraftField, index: Int) -> some View {
         VStack(spacing: LTSpacing.xs) {
             if field.type == .multiline || field.type == .singleLine || field.type == .unknown {
                 // 自由文本字段（来访目的、情况说明…）：显式"翻译为俄语"
