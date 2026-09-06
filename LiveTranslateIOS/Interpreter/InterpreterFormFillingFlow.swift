@@ -64,6 +64,16 @@ struct InterpreterFormFillingFlow: View {
         }
     }
 
+    /// 本地问题模板（点击只填输入框 —— 不自动发送、不自动翻译、不
+    /// 自动开麦）。
+    static let askTemplates: [String] = [
+        "这个字段应该填写什么？",
+        "这里需要填写俄语还是拉丁字母？",
+        "这一项是必填的吗？",
+        "这里需要签字还是填写姓名？",
+        "日期应该使用什么格式？",
+    ]
+
     /// 预填的中文问题模板（本地；点击只填输入框 —— 不自动发送）。
     private func defaultAskQuestion(for field: InterpreterFormDraftField) -> String {
         let label = field.russianLabel.isEmpty ? field.chineseMeaning : field.russianLabel

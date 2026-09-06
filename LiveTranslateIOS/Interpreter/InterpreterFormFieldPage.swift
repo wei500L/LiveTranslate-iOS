@@ -55,7 +55,7 @@ struct InterpreterFormFieldPage: View {
                             .padding(.vertical, LTSpacing.m)
                             .padding(.bottom, LTSpacing.l)
                         }
-                        bottomBar(index)
+                        bottomBar(field: field, index: index)
                     }
                     .screenCaptureMask()
                     .toolbar {
@@ -550,10 +550,9 @@ struct InterpreterFormFieldPage: View {
 
     // MARK: - 底部操作区（上一项/下一项/翻译/询问）
 
-    private func bottomBar(_ index: Int) -> some View {
+    private func bottomBar(field: InterpreterFormDraftField, _ index: Int) -> some View {
         VStack(spacing: LTSpacing.xs) {
-            if let field,
-               field.type == .multiline || field.type == .singleLine || field.type == .unknown {
+            if field.type == .multiline || field.type == .singleLine || field.type == .unknown {
                 // 自由文本字段（来访目的、情况说明…）：显式"翻译为俄语"
                 // —— 先披露将发送的内容，确认后才发起请求。
                 Button {
