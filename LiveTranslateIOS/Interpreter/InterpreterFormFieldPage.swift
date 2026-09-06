@@ -24,7 +24,9 @@ struct InterpreterFormFieldPage: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var valueFieldFocused: Bool
     @State private var showFullPage = false
-    @State private var showTranslationConfirm = false
+    /// 翻译为俄语：先披露将发送的内容（用户确认后才发起请求）。
+    @State private var showTranslationSendPreview = false
+    @State private var showTranslationResult = false
     @State private var pendingTranslation: InterpreterViewModel.FormFieldTranslation?
     @State private var translationInput = ""
 
@@ -88,7 +90,12 @@ struct InterpreterFormFieldPage: View {
                 .environment(environment)
             }
         }
-        .sheet(isPresented: $showTranslationConfirm) {
+        .sheet(isPresented: $showTranslationSendPreview) {
+            if let field {
+                translationSendPreviewSheet(field)
+            }
+        }
+        .sheet(isPresented: $showTranslationResult) {
             if let field, let pendingTranslation {
                 translationConfirmSheet(field, pendingTranslation)
             }
@@ -547,15 +554,10 @@ struct InterpreterFormFieldPage: View {
         VStack(spacing: LTSpacing.xs) {
             if let field,
                field.type == .multiline || field.type == .singleLine || field.type == .unknown {
-                // 自由文本字段（来访目的、情况说明…）：显式"翻译为俄语"。
+                // 自由文本字段（来访目的、情况说明…）：显式"翻译为俄语"
+                // —— 先披露将发送的内容，确认后才发起请求。
                 Button {
-                    translationInput = field.userValue
-                    Task {
-                        if let result = await viewModel.translateFormFieldText(translationInput) {
-                            pendingTranslation = result
-                            showTranslationConfirm = true
-                        }
-                    }
+                    showTranslationSendPreview = true
                 } label: {
                     HStack(spacing: LTSpacing.s) {
                         if viewModel.isTranslatingFormText {
@@ -697,6 +699,118 @@ struct InterpreterFormFieldPage: View {
         formatter.dateFormat = "dd.MM.yyyy"
         let ddMMYYYY = formatter.string(from: date)
         return "俄表常用格式：\(ddMMYYYY)（显式转换 —— 请核对）"
+    }
+
+    // MARK: - 翻译发送前披露（用户确认后才发起请求）
+
+    /// 披露将发送的内容：字段说明（俄文标签 + 中文解释）与用户输入的
+    /// 中文 —— 与 AIRequestDisclosure 同一词汇（feature · host · 内容
+    /// 类别）。确认后发起翻译；取消不标失败。
+    private func translationSendPreviewSheet(_ field: InterpreterFormDraftField) -> some View {
+        NavigationStack {
+            LTPage {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: LTSpacing.s) {
+                        Label("翻译为俄语（发送前确认）", systemImage: "paperplane")
+                            .font(LTTypography.cardTitle)
+                            .foregroundStyle(LTColors.textPrimary)
+                        Text(sendPreviewDisclosure)
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.accentCyan)
+                        VStack(alignment: .leading, spacing: LTSpacing.xxs) {
+                            Text("字段说明")
+                                .font(LTTypography.statusChip)
+                                .foregroundStyle(LTColors.textTertiary)
+                            Text(fieldSummary(field))
+                                .font(LTTypography.body)
+                                .foregroundStyle(LTColors.textSecondary)
+                                .textSelection(.enabled)
+                        }
+                        .ltCard(padding: LTSpacing.s)
+                        VStack(alignment: .leading, spacing: LTSpacing.xxs) {
+                            Text("将发送的中文输入")
+                                .font(LTTypography.statusChip)
+                                .foregroundStyle(LTColors.textTertiary)
+                            Text(field.userValue.isEmpty ? "（无输入）" : field.userValue)
+                                .font(LTTypography.body)
+                                .foregroundStyle(LTColors.textPrimary)
+                                .textSelection(.enabled)
+                        }
+                        .ltCard(padding: LTSpacing.s)
+                        if viewModel.isTranslatingFormText {
+                            HStack(spacing: LTSpacing.xs) {
+                                ProgressView().controlSize(.small)
+                                Text("正在翻译…")
+                                    .font(LTTypography.caption)
+                                    .foregroundStyle(LTColors.textSecondary)
+                            }
+                        }
+                        if let error = viewModel.lastTranslationError {
+                            Text(error)
+                                .font(LTTypography.caption)
+                                .foregroundStyle(LTColors.warning)
+                        }
+                        Text("翻译结果不会自动写入草稿 —— 返回后由你确认。取消不标失败。")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.textTertiary)
+                    }
+                    .padding(.horizontal, LTSpacing.screenPadding)
+                    .padding(.vertical, LTSpacing.m)
+                }
+            }
+            .navigationTitle("发送前确认")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        showTranslationSendPreview = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("发送翻译") {
+                        translationInput = field.userValue
+                        Task {
+                            if let result = await viewModel.translateFormFieldText(translationInput) {
+                                pendingTranslation = result
+                                showTranslationSendPreview = false
+                                showTranslationResult = true
+                            }
+                        }
+                    }
+                    .disabled(
+                        field.userValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || viewModel.isTranslatingFormText
+                    )
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var sendPreviewDisclosure: String {
+        let host = URL(
+            string: OpenAICompatibleTranslator.normalizeAPIBase(
+                viewModel.apiBaseForDisclosure
+            ) ?? ""
+        )?.host ?? ""
+        let disclosure = AIRequestDisclosure(
+            feature: .interpreterFormTextTranslation,
+            host: host,
+            textCategory: .userInput,
+            characterCount: 0,
+            imageCount: 0,
+            masked: false,
+            userTriggered: true
+        )
+        return "请求概要：" + disclosure.previewSummary
+    }
+
+    private func fieldSummary(_ field: InterpreterFormDraftField) -> String {
+        var parts = [field.russianLabel]
+        if !field.chineseMeaning.isEmpty {
+            parts.append(field.chineseMeaning)
+        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - 翻译确认 sheet（用户确认后才写入草稿）
