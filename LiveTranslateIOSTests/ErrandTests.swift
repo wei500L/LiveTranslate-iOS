@@ -750,7 +750,7 @@ final class ErrandCalendarMirrorTests: XCTestCase {
     }
 
     // 外部删除后的真实状态：prune 清掉失效映射。
-    func testPruneStaleMirrorsAfterExternalDelete() async {
+    func testPruneStaleMirrorsAfterExternalDelete() async throws {
         let item = ErrandCaseItem(
             caseID: UUID(), title: "预约",
             kindRaw: ErrandCaseItemKind.appointment.rawValue,
