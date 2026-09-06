@@ -318,7 +318,7 @@ final class InterpreterViewModel {
         do {
             let chunks = try await service.start()
             capture = service
-            startListeningLoop(chunks: chunks)
+            await startListeningLoop(chunks: chunks)
             listeningPhase = .listening
             Self.logger.info("interpreter listening started")
         } catch {
@@ -400,8 +400,8 @@ final class InterpreterViewModel {
             continuousPauseReason = nil
             listeningPhase = .listening
             Self.logger.info("interpreter continuous listening resumed")
-        case .interrupted, .recovering:
-            // 中断未恢复：保持暂停（显示"音频被中断"，用户可稍后再试）。
+        case .interrupted, .recovering, .requestingPermission:
+            // 中断未恢复/权限请求中：保持暂停（用户可稍后再试）。
             continuousPauseReason = .audioInterrupted
         case .failed:
             // 管线已死：结束连续模式，用户从"听一句/连续听"重新开始。
@@ -418,7 +418,7 @@ final class InterpreterViewModel {
 
     /// 收音主循环：VAD → 分句 → ASR（串行）。每个完成回合立即落本地
     /// 并触发翻译。
-    private func startListeningLoop(chunks: AsyncStream<AudioChunk>) {
+    private func startListeningLoop(chunks: AsyncStream<AudioChunk>) async {
         do {
             vad = try SherpaSileroVAD()
         } catch {

@@ -140,7 +140,7 @@ struct InterpreterTurnErrandSheet: View {
     private var caseSection: some View {
         if currentCaseID == nil {
             Section("记到哪里") {
-                if let cases = try? environment.repository.errandCases() {
+                if let cases = try? environment.repository.errandCases(includeArchived: false) {
                     ForEach(cases) { errandCase in
                         Button {
                             selectedCaseID = errandCase.id
