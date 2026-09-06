@@ -14,7 +14,7 @@ import SwiftUI
 
 /// 底部哨兵在滚动坐标系中的 Y（用于"接近底部"判定）。
 private struct TimelineBottomYKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }

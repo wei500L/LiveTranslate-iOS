@@ -58,8 +58,10 @@ struct InterpreterStatusBar: View {
             Image(systemName: symbol)
             Text(text)
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .foregroundStyle(tint)
+        .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("收音状态：\(text)")
     }

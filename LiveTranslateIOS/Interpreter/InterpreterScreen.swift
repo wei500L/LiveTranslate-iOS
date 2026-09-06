@@ -333,12 +333,17 @@ struct InterpreterScreen: View {
         case "listening":
             viewModel.debugApplyDemoListeningState()
         case "showmode":
-            if let turn = viewModel.turns.last(where: { !$0.plainRussian.isEmpty }) {
+            // 锁定最近一条我的回复（给对方看的语义 —— 普通俄语主文本）。
+            if let turn = viewModel.turns.last(where: {
+                $0.direction == .zh2ru && !$0.plainRussian.isEmpty
+            }) {
                 viewModel.presentedTurnID = turn.id
             }
         case "facing":
             // 对向展示初始态由 ShowModeView 内部解析（Debug-only）。
-            if let turn = viewModel.turns.last(where: { !$0.plainRussian.isEmpty }) {
+            if let turn = viewModel.turns.last(where: {
+                $0.direction == .zh2ru && !$0.plainRussian.isEmpty
+            }) {
                 viewModel.presentedTurnID = turn.id
             }
         case "sheet":
