@@ -52,7 +52,7 @@ struct ErrandCaseListView: View {
             .navigationDestination(item: Binding(
                 get: { pushingDetail.map { ErrandCaseRoute(caseID: $0.id) } },
                 set: { pushingDetail = $0?.caseID.flatMap(environment.repository.errandCase(id:)) }
-            )) { route in
+            )) { (route: ErrandCaseRoute) in
                 ErrandCaseDetailView(caseID: route.caseID)
                     .environment(environment)
             }
