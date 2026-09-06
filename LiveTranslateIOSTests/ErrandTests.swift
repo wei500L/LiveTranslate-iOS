@@ -694,7 +694,7 @@ final class ErrandCalendarMirrorTests: XCTestCase {
             kindRaw: ErrandCaseItemKind.appointment.rawValue,
             dueAt: .now.addingTimeInterval(48 * 3600)
         )
-        let calendar = try XCTUnwrap(store.writableCalendars.first)
+        let calendar = try XCTUnwrap(store.writableCalendars().first)
         let ok1 = await mirror.mirror(
             item: item, caseTitle: "宿舍登记",
             location: "203 室", note: "带护照", calendar: calendar
@@ -722,7 +722,7 @@ final class ErrandCalendarMirrorTests: XCTestCase {
             dateText: "也许周五",
             dateUncertain: true
         )
-        let calendar = try XCTUnwrap(store.writableCalendars.first)
+        let calendar = try XCTUnwrap(store.writableCalendars().first)
         let ok = await mirror.mirror(
             item: item, caseTitle: "x", location: "", note: "", calendar: calendar
         )
@@ -750,7 +750,7 @@ final class ErrandCalendarMirrorTests: XCTestCase {
             kindRaw: ErrandCaseItemKind.appointment.rawValue,
             dueAt: .now.addingTimeInterval(48 * 3600)
         )
-        let calendar = try XCTUnwrap(store.writableCalendars.first)
+        let calendar = try XCTUnwrap(store.writableCalendars().first)
         _ = await mirror.mirror(
             item: item, caseTitle: "x", location: "", note: "", calendar: calendar
         )

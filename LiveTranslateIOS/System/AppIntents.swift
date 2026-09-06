@@ -220,11 +220,11 @@ struct OpenNextErrandIntent: AppIntent {
                 }
                 return (SystemRouteRequest.errandCaseList, IntentDialog("当前没有需要处理的办事事项"))
             }
-        if let outcome {
-            await AppIntentHost.open(outcome.route)
-            return .result(dialog: outcome.dialog)
+        guard let outcome else {
+            return .result(dialog: IntentDialog("已打开办事事项"))
         }
-        return .result()
+        await AppIntentHost.open(outcome.route)
+        return .result(dialog: outcome.dialog)
     }
 }
 

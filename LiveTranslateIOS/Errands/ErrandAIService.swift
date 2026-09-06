@@ -90,8 +90,9 @@ struct ErrandAIService: Sendable {
             AICallContext(
                 feature: .errandOrganizing,
                 textCategory: .mixed,
-                masked: input.turnLines.contains(where: { $0.contains("▪") })
-                    || input.sourceLines.contains(where: { $0.contains("▪") })
+                // 遮盖检测：InterpreterSensitiveMasker 的替换字符是 ×。
+                masked: input.turnLines.contains(where: { $0.contains("×") })
+                    || input.sourceLines.contains(where: { $0.contains("×") })
             )
         ) {
             try await model.complete(
