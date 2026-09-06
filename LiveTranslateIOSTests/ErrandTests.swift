@@ -98,7 +98,7 @@ final class ErrandRepositoryTests: XCTestCase {
     private var repository: TranscriptRepository!
     private var recorder = ErrandMutationRecorder()
 
-    override func setUp async throws {
+    override func setUp() async throws {
         let schema = Schema([
             InterpreterConversation.self, InterpreterTurn.self,
             InterpreterDocument.self,
