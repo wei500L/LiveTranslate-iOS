@@ -122,7 +122,12 @@ final class SystemErrandEventStore: ErrandEventStoring {
 
     func remove(identifier: String) -> Bool {
         guard let event = store.event(withIdentifier: identifier) else { return false }
-        return (try? store.remove(event, span: .thisEvent)) ?? false
+        do {
+            try store.remove(event, span: .thisEvent)
+            return true
+        } catch {
+            return false
+        }
     }
 }
 

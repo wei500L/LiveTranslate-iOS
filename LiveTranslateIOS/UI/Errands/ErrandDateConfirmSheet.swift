@@ -235,7 +235,7 @@ struct ErrandDateConfirmSheet: View {
     }
 
     private func confirm() async {
-        guard let repository = environment.repository else { return }
+        let repository = environment.repository
         // 只有用户确认的值落库；不确定标记清除（用户已裁决）。
         var resolved = selectedDate
         if !hasTime {

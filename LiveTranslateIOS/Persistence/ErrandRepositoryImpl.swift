@@ -112,7 +112,10 @@ extension TranscriptRepository {
         let descriptor = FetchDescriptor<ErrandCase>()
         return try context.fetch(descriptor)
             .filter { $0.status != .draft && (includeArchived || $0.status != .archived) }
-            .sorted { ($0.pinned, $0.updatedAt) > ($1.pinned, $1.updatedAt) }
+            .sorted { lhs, rhs in
+                if lhs.pinned != rhs.pinned { return lhs.pinned }
+                return lhs.updatedAt > rhs.updatedAt
+            }
     }
 
     /// One case's item by id.

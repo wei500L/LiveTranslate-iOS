@@ -137,12 +137,21 @@ struct ErrandCaseListView: View {
                 .buttonStyle(.plain)
                 .accessibilityHint(Text("点按查看材料清单与进度"))
             }
-            if archivedCases().isEmpty == false && !showingArchived {
+            archivedToggle
+        }
+    }
+
+    /// 显示已归档入口（拆分子表达式 —— 复杂插值会让类型检查超时）。
+    @ViewBuilder
+    private var archivedToggle: some View {
+        if !showingArchived {
+            let archivedCount = archivedCases().count
+            if archivedCount > 0 {
                 Button {
                     showingArchived = true
                 } label: {
                     Label(
-                        "显示已归档（\(archivedCases().count)）",
+                        "显示已归档（\(archivedCount)）",
                         systemImage: "archivebox"
                     )
                     .font(LTTypography.caption)
