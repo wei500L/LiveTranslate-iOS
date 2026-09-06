@@ -419,9 +419,13 @@ final class InterpreterCounterContextTests: XCTestCase {
         XCTAssertEqual(merged.count, 3)
         XCTAssertEqual(merged[0].origin, .aiSuggestion)
         XCTAssertEqual(merged[0].text, "我明天带来复印件")
-        // "好的，我明白了" 同时在 AI 建议与本地目录 —— 去重。
+        // "好的，我明白了" 同时在 AI 建议与本地目录 —— 去重后只一次。
         XCTAssertEqual(merged.filter { $0.text == "好的，我明白了" }.count, 1)
-        XCTAssertFalse(merged.contains { $0.text == "请您再说慢一点" })
+        // 本地短语补足第 3 位（目录顺序）。
+        XCTAssertEqual(merged[2].text, "请您再说慢一点")
+        XCTAssertEqual(merged[2].origin, .local)
+        // 上限 3：更靠后的办文件追问不进入。
+        XCTAssertFalse(merged.contains { $0.text == "需要原件还是复印件？" })
 
         // 无模型（无 AI 建议）：本地短语完整可用。
         let localOnly = InterpreterQuickReplyCatalog.merged(
