@@ -103,10 +103,9 @@ struct ErrandCaseListView: View {
                     pushingDetail = draft
                 } label: {
                     ErrandCaseRow(
-                        title: draft.title,
+                        errandCase: draft,
                         statusText: "草稿",
                         reason: "未保存 —— 保存后才进入云同步",
-                        symbol: draft.scene.symbol,
                         tint: LTColors.warning,
                         isDraft: true
                     )
@@ -118,47 +117,53 @@ struct ErrandCaseListView: View {
     }
 
     @ViewBuilder
-    private func caseList(_ cases: [ErrandCase]) {
+    private func caseList(_ cases: [ErrandCase]) -> some View {
         VStack(alignment: .leading, spacing: LTSpacing.s) {
             LTSectionHeader(title: "进行中")
             ForEach(cases) { errandCase in
-                Button {
-                    pushingDetail = errandCase
-                } label: {
-                    ErrandCaseRow(
-                        title: errandCase.title,
-                        statusText: errandCase.status.displayName,
-                        reason: rowReason(errandCase),
-                        symbol: errandCase.scene.symbol,
-                        tint: tint(errandCase),
-                        isDraft: false
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint(Text("点按查看材料清单与进度"))
+                formalRow(errandCase)
             }
             archivedToggle
         }
     }
 
-    /// 显示已归档入口（拆分子表达式 —— 复杂插值会让类型检查超时）。
+    private func formalRow(_ errandCase: ErrandCase) -> some View {
+        Button {
+            pushingDetail = errandCase
+        } label: {
+            ErrandCaseRow(
+                errandCase: errandCase,
+                statusText: errandCase.status.displayName,
+                reason: rowReason(errandCase),
+                tint: tint(errandCase),
+                isDraft: false
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text("点按查看材料清单与进度"))
+    }
+
+    /// 显示已归档入口（计数在构建器块外求值 —— ViewBuilder 的 if 块里
+    /// 不能放 let 声明）。
     @ViewBuilder
     private var archivedToggle: some View {
-        if !showingArchived {
-            let archivedCount = archivedCases().count
-            if archivedCount > 0 {
-                Button {
-                    showingArchived = true
-                } label: {
-                    Label(
-                        "显示已归档（\(archivedCount)）",
-                        systemImage: "archivebox"
-                    )
-                    .font(LTTypography.caption)
-                    .foregroundStyle(LTColors.textSecondary)
-                }
+        let archivedCount = archivedCases().count
+        if !showingArchived && archivedCount > 0 {
+            Button {
+                showingArchived = true
+            } label: {
+                Label(
+                    archivedToggleLabel(archivedCount),
+                    systemImage: "archivebox"
+                )
+                .font(LTTypography.caption)
+                .foregroundStyle(LTColors.textSecondary)
             }
         }
+    }
+
+    private func archivedToggleLabel(_ count: Int) -> String {
+        "显示已归档（\(count)）"
     }
 
     private var archivedSection: some View {
@@ -169,10 +174,9 @@ struct ErrandCaseListView: View {
                     pushingDetail = errandCase
                 } label: {
                     ErrandCaseRow(
-                        title: errandCase.title,
+                        errandCase: errandCase,
                         statusText: errandCase.status.displayName,
                         reason: rowReason(errandCase),
-                        symbol: errandCase.scene.symbol,
                         tint: LTColors.textTertiary,
                         isDraft: false
                     )
@@ -217,18 +221,17 @@ struct ErrandCaseListView: View {
 
 /// 一行事项卡片：类型图标、颜色与 VoiceOver 文案区分（不只靠颜色）。
 private struct ErrandCaseRow: View {
-    let title: String
+    let errandCase: ErrandCase
     let statusText: String
     let reason: String
-    let symbol: String
     let tint: Color
     let isDraft: Bool
 
     var body: some View {
         HStack(spacing: LTSpacing.m) {
-            LTIconBadge(symbol: symbol, tint: tint)
+            LTIconBadge(symbol: errandCase.scene.symbol, tint: tint)
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
+                Text(errandCase.title)
                     .font(LTTypography.cardTitle)
                     .foregroundStyle(LTColors.textPrimary)
                     .lineLimit(2)
@@ -247,6 +250,6 @@ private struct ErrandCaseRow: View {
         }
         .ltCard(padding: LTSpacing.l)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("\(title)，\(statusText)，\(reason)"))
+        .accessibilityLabel(Text("\(errandCase.title)，\(statusText)，\(reason)"))
     }
 }

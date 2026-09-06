@@ -339,11 +339,11 @@ struct ErrandCaseEditorView: View {
                 kind: candidate.kind,
                 status: .unconfirmed,
                 detail: candidate.detail,
-                origin: .ai,
-                confirmed: false,
                 dateText: candidate.date?.rawText ?? "",
                 dateIsRelative: candidate.date?.isRelative ?? false,
                 dateUncertain: candidate.date?.uncertain ?? false,
+                origin: .ai,
+                confirmed: false,
                 feeText: candidate.feeText ?? ""
             ))
         }
