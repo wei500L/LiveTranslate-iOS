@@ -809,6 +809,8 @@ struct InterpreterFormReviewSheet: View {
                     .font(LTTypography.body)
                     .foregroundStyle(LTColors.accentGreen)
             } else {
+                // "必填"是提示不是闸门：缺失必填项不阻止标记核对
+                // （上方分组已如实列出；用户自己决定何时核对完成）。
                 Button {
                     model.markChecked()
                     checked = true
@@ -820,7 +822,6 @@ struct InterpreterFormReviewSheet: View {
                         .padding(.vertical, LTSpacing.s)
                         .background(Capsule().fill(LTColors.accentGreen.opacity(0.9)))
                 }
-                .disabled(groups.missingRequired.count > 0 && model.draft.fields.isEmpty)
             }
         }
         .padding(.top, LTSpacing.s)

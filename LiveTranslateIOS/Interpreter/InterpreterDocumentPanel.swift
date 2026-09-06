@@ -289,7 +289,8 @@ struct InterpreterDocumentPanel: View {
                 InterpreterDocumentCard(
                     viewModel: viewModel,
                     documentModel: model,
-                    document: document
+                    document: document,
+                    onOpenFormFilling: { id in fillDraftDocumentID = id }
                 )
             }
             aiActions(model)
@@ -394,6 +395,8 @@ struct InterpreterDocumentCard: View {
     let viewModel: InterpreterViewModel
     let documentModel: InterpreterDocumentContextModel
     let document: InterpreterDocument
+    /// 逐项填写入口：打开该文档的填写清单（Panel 持有路由状态）。
+    var onOpenFormFilling: (UUID) -> Void = { _ in }
 
     @State private var isExpanded = false
     @State private var showText = false
@@ -681,7 +684,7 @@ struct InterpreterDocumentCard: View {
         let ready = document.status == .ready || document.status == .partiallyExtracted
         if ready || draftExists {
             Button {
-                fillDraftDocumentID = document.id
+                onOpenFormFilling(document.id)
             } label: {
                 Label(
                     hasFields || draftExists ? "逐项填写" : "创建填写清单",

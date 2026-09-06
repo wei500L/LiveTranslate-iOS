@@ -631,7 +631,8 @@ struct InterpreterFormFieldPage: View {
         }
     }
 
-    private func navigate(_ delta: Int, from index: Int) {
+    // 键盘工具栏（上一项/下一项/完成）。
+    private func keyboardToolbar(_ index: Int) -> some View {
         HStack(spacing: LTSpacing.m) {
             Button("上一项") { navigate(-1, from: index) }
                 .disabled(index == 0)
@@ -651,9 +652,6 @@ struct InterpreterFormFieldPage: View {
             currentFieldID = field.id
         }
     }
-
-    // 键盘工具栏（上一项/下一项/完成）。
-    private func keyboardToolbar(_ index: Int) -> some View {
 
     // MARK: - 绑定
 
@@ -950,13 +948,18 @@ struct InterpreterFormPagePreview: View {
             image = cached
             return
         }
+        // Swift 6：@Model 对象不跨 actor —— 先在主线程提取 Sendable 值
+        // （InterpreterDocumentService 的同一惯例）。
+        let documentID = document.id
+        let relativePath = document.originalRelativePath
+        let format = document.format
         Task.detached(priority: .utility) {
             guard let store = InterpreterDocumentStoreShared.store,
-                  let url = store.originalURL(forRelativePath: document.originalRelativePath) else {
+                  let url = store.originalURL(forRelativePath: relativePath) else {
                 return
             }
             let rendered: UIImage?
-            switch document.format {
+            switch format {
             case .pdf:
                 guard let pdf = PDFDocument(url: url),
                       page >= 1, page <= pdf.pageCount,

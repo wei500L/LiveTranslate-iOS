@@ -65,7 +65,8 @@ final class InterpreterFormDraftTests: XCTestCase {
             ),
             // 必填未填（进缺失组）。
             InterpreterFormDraftField(
-                russianLabel: "Дата рождения", type: .date,
+                russianLabel: "Дата рождения", chineseMeaning: "出生日期",
+                type: .date,
                 requirement: .required, status: .empty
             ),
             // 待确认（有值 + 用户标记）。

@@ -50,8 +50,8 @@ enum InterpreterFormReferenceExporter {
                     lines.append("  中文原文：\(field.chineseSourceText)")
                 }
             }
-            if let note = field.userNote, !note.isEmpty {
-                lines.append("  备注：\(note)")
+            if !field.userNote.isEmpty {
+                lines.append("  备注：\(field.userNote)")
             }
             if let hint = field.formatHint, !hint.isEmpty {
                 lines.append("  格式提示：\(hint)")
