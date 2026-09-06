@@ -434,20 +434,24 @@ final class ErrandDateParserTests: XCTestCase {
         )
     }
 
-    func testBareWeekdayIsUncertain() {
+    func testBareWeekdayIsUncertain() throws {
         // 无前缀"周四"：取最近未来但标记歧义（可能指本周已过的周四）。
-        // "周四上午" 会生成组合候选（rawText 更长）—— 单独查"周"前缀。
         let candidates = ErrandDateParser.candidates(
             in: "周四上午来", anchor: anchor(2026, 9, 7), calendar: calendar
         ) // 2026-09-07 is a Monday.
-        let weekday = candidates.first { $0.rawText.contains("周") }
-        XCTAssertNotNil(weekday)
-        XCTAssertTrue(weekday!.uncertain, "无前缀星期是歧义的 —— 需用户确认")
-        let nextWeek = ErrandDateParser.candidates(
-            in: "下周四交", anchor: anchor(2026, 9, 7), calendar: calendar
-        ).first { $0.rawText.contains("下周四") }
-        XCTAssertNotNil(nextWeek)
-        XCTAssertFalse(nextWeek!.uncertain, "下周四明确")
+        // 诊断信息带出实际候选（若失败，下一轮日志显示返回了什么）。
+        let weekday = try XCTUnwrap(
+            candidates.first { $0.rawText.contains("周") },
+            "actual candidates: \(candidates.map { "\($0.rawText)|unc=\($0.uncertain)" })"
+        )
+        XCTAssertTrue(weekday.uncertain, "无前缀星期是歧义的 —— 需用户确认")
+        let nextWeek = try XCTUnwrap(
+            ErrandDateParser.candidates(
+                in: "下周四交", anchor: anchor(2026, 9, 7), calendar: calendar
+            ).first { $0.rawText.contains("下周四") },
+            "actual next-week candidates missing"
+        )
+        XCTAssertFalse(nextWeek.uncertain, "下周四明确")
     }
 
     func testTimeCombinesWithDate() {
