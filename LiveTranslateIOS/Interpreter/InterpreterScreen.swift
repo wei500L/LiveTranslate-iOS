@@ -31,6 +31,15 @@ struct InterpreterScreen: View {
     @State private var endFileDisposition: InterpreterViewModel.EndFileDisposition = .discardDocuments
     /// 整理为办事事项（当前对话 → 事项草稿的本地来源链接）。
     @State private var showErrandEditor = false
+    /// 表单字段询问：一键返回填写草稿（定位原字段）。
+    @State private var showFormReturn = false
+    /// 表单字段询问：把工作人员回答记回字段。
+    @State private var showFieldRecordSheet = false
+    /// 记回字段 sheet 的上下文与回答内容。
+    @State private var formRecordContext: InterpreterFormFieldAskContext?
+    @State private var formRecordHeard = ""
+    /// 表单返回路由：文件面板打开后要直接进入填写流的文档 ID。
+    @State private var formReturnDocumentID: UUID?
     /// 办事事项带入的现场问题（只填入输入框 —— 不自动翻译、不自动
     /// 朗读、不自动开麦；nil = 普通进入）。
     var prefilledQuestion: String? = nil
@@ -165,13 +174,15 @@ struct InterpreterScreen: View {
                 InterpreterDocumentPanel(
                     viewModel: viewModel,
                     isPresented: $showDocumentPanel,
-                    pendingQuestion: docPanelPendingQuestion ?? ""
+                    pendingQuestion: docPanelPendingQuestion ?? "",
+                    openFormDraftDocumentID: formReturnDocumentID
                 )
                 .environment(environment)
                 .onDisappear {
                     // 文件上下文变化后刷新上下文条（就绪数/选中状态）。
                     viewModel.refreshCounterContext()
                     docPanelPendingQuestion = nil
+                    formReturnDocumentID = nil
                 }
             }
         }
@@ -220,9 +231,49 @@ struct InterpreterScreen: View {
                 .environment(environment)
             }
         }
+        // 表单字段询问：一键返回填写草稿（定位原字段；文档/字段已删除
+        // 时显示真实状态并回到字段总览，不重建假字段）。
+        .sheet(isPresented: $showFormReturn) {
+            if let viewModel {
+                InterpreterFormReturnSheet(
+                    viewModel: viewModel,
+                    onAskStaffRecord: { fieldContext, heardChinese in
+                        // 从返回页发起"记回字段"（回答写入草稿 —— 用户确认）。
+                        formRecordContext = fieldContext
+                        formRecordHeard = heardChinese
+                        showFormReturn = false
+                        showFieldRecordSheet = true
+                    }
+                )
+                .environment(environment)
+            }
+        }
+        // 记回字段（工作人员回答 → 字段备注 / 当前值；用户确认写入）。
+        .sheet(isPresented: $showFieldRecordSheet) {
+            if let context = formRecordContext {
+                InterpreterFormFieldRecordSheet(
+                    fieldContext: context,
+                    heardChinese: formRecordHeard,
+                    onRecordNote: { note in
+                        recordBackToField(context: context, note: note, asValue: false)
+                    },
+                    onUseAsValue: { value in
+                        recordBackToField(context: context, note: value, asValue: true)
+                    }
+                )
+            }
+        }
         .onDisappear {
             // 切后台/离开页面不打断草稿；只停收音与朗读。
             Task { await viewModel?.suspend() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .interpreterOpenFormDraft)) { note in
+            // 表单字段询问的返回路由（UI-only 内存通知）：打开该文档的
+            // 填写清单。文档已删除时文件面板如实显示（不重建假字段）。
+            if let documentID = note.object as? UUID {
+                showDocumentPanel = true
+                formReturnDocumentID = documentID
+            }
         }
     }
 
@@ -238,6 +289,10 @@ struct InterpreterScreen: View {
             InterpreterContextBar(
                 counterContext: viewModel.counterContext,
                 documentSummary: documentSummary(viewModel),
+                fieldAskChip: viewModel.fieldAskContext?.chipLabel,
+                onEndFieldAsk: {
+                    viewModel.endFieldAsk()
+                },
                 onOpenSheet: { showErrandContextSheet = true },
                 onOpenDocuments: { showDocumentPanel = true },
                 onRemoveDocumentContext: { viewModel.clearDocumentContextSelection() }
@@ -269,6 +324,9 @@ struct InterpreterScreen: View {
                 onOpenDocuments: { showDocumentPanel = true },
                 onOpenQuestions: { showErrandContextSheet = true },
                 onOpenDocumentQuestionTemplates: { showDocumentQuestionTemplates = true },
+                onReturnToForm: viewModel.fieldAskContext != nil ? {
+                    showFormReturn = true
+                } : nil,
                 onEndRequested: {
                     if environment.settings.interpreterAskToSave {
                         showEndConfirmation = true
@@ -385,6 +443,32 @@ struct InterpreterScreen: View {
         dismiss()
     }
 
+    // MARK: - 表单字段询问（返回定位 + 记回字段）
+
+    /// 把工作人员回答记回字段草稿（用户确认后调用；写入仅触碰本机
+    /// sidecar —— 不经 repository、不进 outbox）。文档或字段已被删除
+    /// 时静默返回（记回 sheet 的入口本身已做存在性校验）。
+    private func recordBackToField(
+        context: InterpreterFormFieldAskContext, note: String, asValue: Bool
+    ) {
+        guard let viewModel,
+              let document = environment.repository.interpreterDocument(id: context.documentID) else {
+            viewModel?.endFieldAsk()
+            return
+        }
+        let model = InterpreterFormDraftModel(
+            document: document,
+            store: InterpreterDocumentStoreShared.store
+        )
+        // 字段已被删除：写不进（诚实返回，不重建假字段）。
+        if asValue {
+            model.applyHeardValue(fieldID: context.fieldID, value: note)
+        } else {
+            model.setNote(fieldID: context.fieldID, note: note)
+        }
+        viewModel.endFieldAsk()
+    }
+
     // MARK: - Demo 注入点（Debug 构建；Release 无此路径）
 
     #if DEBUG
@@ -419,6 +503,15 @@ struct InterpreterScreen: View {
             }
         case "sheet":
             showErrandContextSheet = true
+        case "form-filling":
+            // 表单逐项填写 demo：直接打开字段总览 sheet（真实草稿模型
+            // + demo 种子文档；文档面板入口照常可用）。
+            showDocumentPanel = true
+            if let document = viewModel.documentContext?.documents.first(
+                where: { InterpreterDocumentStoreShared.store?.formDraftExists(documentID: $0.id) == true }
+            ) {
+                formReturnDocumentID = document.id
+            }
         default:
             break
         }

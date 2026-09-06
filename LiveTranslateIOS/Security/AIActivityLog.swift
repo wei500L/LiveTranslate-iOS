@@ -50,6 +50,7 @@ enum AIFeature: String, Codable, Sendable, CaseIterable, Equatable {
     case interpreterDocumentAnalysis  // 随身翻译文件分析
     case interpreterDocumentQA    // 随身翻译文件问答
     case interpreterFieldCheck    // 随身翻译字段核对
+    case interpreterFormTextTranslation // 表单自由文本翻译为俄语
     case interpreterPagesAnalysis // 随身翻译页面图像分析
     case studyReview              // 课后复习整理
     case materialDigest           // 资料导读
@@ -69,6 +70,7 @@ enum AIFeature: String, Codable, Sendable, CaseIterable, Equatable {
         case .interpreterDocumentAnalysis: return "文件分析"
         case .interpreterDocumentQA: return "文件问答"
         case .interpreterFieldCheck: return "字段核对"
+        case .interpreterFormTextTranslation: return "表单文本翻译"
         case .interpreterPagesAnalysis: return "页面图像分析"
         case .studyReview: return "复习整理"
         case .materialDigest: return "资料导读"

@@ -16,6 +16,11 @@ struct InterpreterContextBar: View {
     let counterContext: InterpreterCounterContext?
     /// 文件上下文摘要（nil = 无文件）。
     let documentSummary: DocumentSummary?
+    /// 表单字段询问上下文（第二十一轮；nil = 无 —— 从填写页进入对话
+    /// 时显示"当前字段"chip）。
+    var fieldAskChip: String?
+    /// 结束字段询问（chip 的移除操作）。
+    var onEndFieldAsk: (() -> Void)?
     let onOpenSheet: () -> Void
     let onOpenDocuments: () -> Void
     /// 移除文件 chip：清除页面选择（原文件保留；之后的 AI 请求不再
@@ -31,7 +36,9 @@ struct InterpreterContextBar: View {
     }
 
     private var hasAnyContext: Bool {
-        counterContext != nil || (documentSummary?.totalCount ?? 0) > 0
+        counterContext != nil
+            || (documentSummary?.totalCount ?? 0) > 0
+            || fieldAskChip != nil
     }
 
     var body: some View {
@@ -90,10 +97,40 @@ struct InterpreterContextBar: View {
                         .foregroundStyle(LTColors.textSecondary)
                 }
             }
+            if let fieldAskChip {
+                fieldAskChipView(fieldAskChip)
+            }
             if let summary = documentSummary, summary.totalCount > 0 {
                 documentChip(summary)
             }
         }
+    }
+
+    /// 当前字段 chip：简洁（俄文标签），可结束询问。
+    private func fieldAskChipView(_ label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "list.number")
+                .foregroundStyle(LTColors.accentGreen)
+            Text(label)
+                .foregroundStyle(LTColors.textSecondary)
+                .lineLimit(1)
+            if let onEndFieldAsk {
+                Button {
+                    onEndFieldAsk()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(LTColors.textTertiary)
+                        .frame(minWidth: 22, minHeight: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("结束字段询问")
+            }
+        }
+        .padding(.horizontal, LTSpacing.xs + 2)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(LTColors.backgroundPrimary.opacity(0.5)))
     }
 
     /// 文件上下文 chip：紧凑、可移除（点击 xmark 清除页面选择 ——
@@ -134,6 +171,9 @@ struct InterpreterContextBar: View {
             if counterContext.pendingQuestionCount > 0 {
                 parts.append("\(counterContext.pendingQuestionCount) 个待问问题")
             }
+        }
+        if let fieldAskChip {
+            parts.append(fieldAskChip)
         }
         if let summary = documentSummary, summary.totalCount > 0 {
             parts.append(summary.hasSelection

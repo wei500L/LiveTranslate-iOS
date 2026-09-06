@@ -15,6 +15,8 @@ struct InterpreterDocumentPanel: View {
     @Binding var isPresented: Bool
     /// 从问题输入进入时预填的问题（按文件提问流）。
     var pendingQuestion: String = ""
+    /// 表单返回路由：面板打开后直接进入该文档的填写清单（一次性）。
+    var openFormDraftDocumentID: UUID? = nil
 
     @State private var showCamera = false
     @State private var showScanner = false
@@ -26,6 +28,8 @@ struct InterpreterDocumentPanel: View {
     /// 加入办事事项：文件分析结果 → 新建事项草稿（本地来源链接）。
     @State private var showErrandEditor = false
     @State private var errandDocumentID: UUID?
+    /// 逐项填写（第二十一轮）：当前打开填写清单的文档（nil = 未打开）。
+    @State private var fillDraftDocumentID: UUID?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -139,6 +143,31 @@ struct InterpreterDocumentPanel: View {
                 )
                 .environment(environment)
             }
+            .sheet(item: Binding(
+                get: { fillDraftDocumentID.flatMap { id in documentModel?.document(with: id) } },
+                set: { fillDraftDocumentID = $0?.id }
+            )) { document in
+                InterpreterFormFillingFlow(
+                    viewModel: viewModel,
+                    document: document,
+                    onAskStaff: { field, prefilled in
+                        // 带字段上下文进入柜台对话（面板与清单一并收起，
+                        // 对话页接管；返回定位由 InterpreterScreen 路由完成）。
+                        viewModel.beginFieldAsk(
+                            InterpreterFormFieldAskContext(
+                                documentID: document.id,
+                                fieldID: field.id,
+                                russianLabel: field.russianLabel,
+                                chineseMeaning: field.chineseMeaning
+                            ),
+                            prefilledQuestion: prefilled
+                        )
+                        fillDraftDocumentID = nil
+                        isPresented = false
+                    }
+                )
+                .environment(environment)
+            }
         }
         .onAppear {
             documentModel?.reload(conversationID: conversationID)
@@ -146,6 +175,11 @@ struct InterpreterDocumentPanel: View {
             // 输入框 —— 不自动发送、不自动开麦。
             if !pendingQuestion.isEmpty, analysisQuestion.isEmpty {
                 analysisQuestion = pendingQuestion
+            }
+            // 表单返回路由（一次性）：直接打开该文档的填写清单。
+            if let target = openFormDraftDocumentID,
+               documentModel?.document(with: target) != nil {
+                fillDraftDocumentID = target
             }
         }
     }
@@ -588,47 +622,93 @@ struct InterpreterDocumentCard: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: LTSpacing.l) {
-            if document.status == .imported || document.status == .failed {
-                Button {
-                    documentModel.retryExtraction(document)
-                } label: {
-                    Label("提取文字", systemImage: "text.viewfinder")
+        VStack(alignment: .leading, spacing: LTSpacing.xs) {
+            // 逐项填写（第二十一轮）：已识别字段或已提取文字 → 主操作；
+            // 提取未完成时禁用并说明（不展示不可用的假入口）。
+            formFillingEntry
+            HStack(spacing: LTSpacing.l) {
+                if document.status == .imported || document.status == .failed {
+                    Button {
+                        documentModel.retryExtraction(document)
+                    } label: {
+                        Label("提取文字", systemImage: "text.viewfinder")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.accentBlue)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if let extraction = extraction, extraction.pages.contains(where: {
+                    $0.ocrStatusRaw == InterpreterPageOCRStatus.none.rawValue
+                        && $0.extractedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }) {
+                    Button {
+                        documentModel.runOCR(document: document)
+                    } label: {
+                        Label("识别页面文字", systemImage: "character.textbox")
+                            .font(LTTypography.caption)
+                            .foregroundStyle(LTColors.accentBlue)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Toggle(isOn: Binding(
+                    get: { document.allowsModelUse },
+                    set: { documentModel.setAllowsModelUse(document, $0) }
+                )) {
+                    Text("允许用于提问")
                         .font(LTTypography.caption)
-                        .foregroundStyle(LTColors.accentBlue)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                Button(role: .destructive) {
+                    documentModel.deleteDocument(document, conversationID: viewModel.conversation?.id)
+                } label: {
+                    Label("删除", systemImage: "trash")
+                        .font(LTTypography.caption)
+                        .foregroundStyle(LTColors.destructive)
                 }
                 .buttonStyle(.plain)
             }
-            if let extraction = extraction, extraction.pages.contains(where: {
-                $0.ocrStatusRaw == InterpreterPageOCRStatus.none.rawValue
-                    && $0.extractedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }) {
-                Button {
-                    documentModel.runOCR(document: document)
-                } label: {
-                    Label("识别页面文字", systemImage: "character.textbox")
-                        .font(LTTypography.caption)
-                        .foregroundStyle(LTColors.accentBlue)
-                }
-                .buttonStyle(.plain)
-            }
-            Toggle(isOn: Binding(
-                get: { document.allowsModelUse },
-                set: { documentModel.setAllowsModelUse(document, $0) }
-            )) {
-                Text("允许用于提问")
-                    .font(LTTypography.caption)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            Button(role: .destructive) {
-                documentModel.deleteDocument(document, conversationID: viewModel.conversation?.id)
+        }
+    }
+
+    /// 逐项填写入口：字段清单主操作。
+    @ViewBuilder
+    private var formFillingEntry: some View {
+        let hasFields = !(document.analysis?.formFields ?? []).isEmpty
+        let hasText = extraction?.pages.contains { !$0.effectiveText.isEmpty } ?? false
+        let draftExists = InterpreterDocumentStoreShared.store?
+            .formDraftExists(documentID: document.id) ?? false
+        let ready = document.status == .ready || document.status == .partiallyExtracted
+        if ready || draftExists {
+            Button {
+                fillDraftDocumentID = document.id
             } label: {
-                Label("删除", systemImage: "trash")
-                    .font(LTTypography.caption)
-                    .foregroundStyle(LTColors.destructive)
+                Label(
+                    hasFields || draftExists ? "逐项填写" : "创建填写清单",
+                    systemImage: "list.number"
+                )
+                .font(LTTypography.button)
+                .foregroundStyle(Color.black.opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, LTSpacing.s)
+                .background(Capsule().fill(LTColors.accentGreen.opacity(0.85)))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LTPrimaryButtonStyle(tint: LTColors.accentGreen))
+            .disabled(!ready && !draftExists)
+            .accessibilityHint(
+                hasFields || draftExists
+                    ? "打开这份表单的逐项填写清单"
+                    : "从识别文字建立字段清单（AI 未返回字段时也可手动创建）"
+            )
+            if !ready && !draftExists {
+                Text("文件完成文字提取后可以创建填写清单")
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.textTertiary)
+            } else if !hasText && !hasFields && !draftExists {
+                Text("提取尚未完成或无文字 —— 你仍可手动新增字段建立清单")
+                    .font(LTTypography.caption)
+                    .foregroundStyle(LTColors.textTertiary)
+            }
         }
     }
 }

@@ -24,6 +24,9 @@ struct InterpreterComposer: View {
     let onOpenQuestions: () -> Void
     /// 围绕文件提问（模板 sheet；有选中的文件上下文时显示）。
     let onOpenDocumentQuestionTemplates: () -> Void
+    /// 返回表单填写（第二十一轮：字段询问会话中的"返回填写"入口；
+    /// nil = 无字段询问上下文，不显示）。
+    var onReturnToForm: (() -> Void)? = nil
     /// 结束本次翻译（确认对话框由页面持有）。
     let onEndRequested: () -> Void
     /// 待问问题数（无事项上下文时入口隐藏）。
@@ -204,6 +207,20 @@ struct InterpreterComposer: View {
         HStack(spacing: LTSpacing.m) {
             compactMicButton
             documentButton
+            // 字段询问会话中的返回填写入口（醒目 —— 询问的主路径）。
+            if let onReturnToForm {
+                Button {
+                    onReturnToForm()
+                } label: {
+                    Label("返回填写", systemImage: "list.number")
+                        .font(LTTypography.interpreterStatus)
+                        .foregroundStyle(LTColors.accentGreen)
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: LTSpacing.minTouchTarget)
+                .contentShape(Rectangle())
+                .accessibilityLabel("返回表单填写，定位原来的字段")
+            }
             if hasDocumentSelection {
                 Button {
                     onOpenDocumentQuestionTemplates()

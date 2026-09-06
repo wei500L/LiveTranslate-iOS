@@ -1015,6 +1015,91 @@ final class InterpreterViewModel {
         }
     }
 
+    // MARK: - 表单自由文本翻译（第二十一轮：显式按钮、确认后写入草稿）
+
+    /// 一次自由文本翻译请求的结果（调用方展示回译核对，用户确认后才
+    /// 写入草稿 —— 绝不自动写入）。
+    struct FormFieldTranslation: Equatable, Sendable {
+        /// 普通俄语（无 U+0301 重音 —— 正式表单值）。
+        var plainRussian: String
+        /// 中文回译（核对用）。
+        var backTranslation: String?
+        /// 不确定项。
+        var uncertainties: [String]?
+    }
+
+    private(set) var isTranslatingFormText = false
+
+    /// 把用户为自由文本字段输入的中文翻译为俄语。复用既有
+    /// InterpreterTranslationService（同一传输层、同一 key —— 绝不建立
+    /// 第二套翻译服务）。失败/取消不标失败、不写草稿；原中文保留。
+    func translateFormFieldText(_ chinese: String) async -> FormFieldTranslation? {
+        let text = chinese.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isTranslatingFormText else { return nil }
+        guard let modelService = resolveModelService() else {
+            lastTranslationError = "翻译模型未配置，请在设置中填写 API 地址与模型"
+            return nil
+        }
+        isTranslatingFormText = true
+        lastTranslationError = nil
+        defer { isTranslatingFormText = false }
+        let service = InterpreterTranslationService(model: modelService)
+        do {
+            let result = try await service.translateUser(
+                chinese: text, scene: scene, contextNote: contextNote,
+                tone: tone, recentTurns: []
+            )
+            return FormFieldTranslation(
+                plainRussian: RussianStressValidator.stripStress(result.mainText),
+                backTranslation: result.backTranslation,
+                uncertainties: result.details.uncertainties
+            )
+        } catch is CancellationError {
+            return nil // 取消不标失败
+        } catch {
+            lastTranslationError = Self.describeTranslationError(error)
+            return nil
+        }
+    }
+
+    // MARK: - 表单字段询问上下文（第二十一轮，UI-only）
+
+    /// 从填写页带着字段进入柜台对话的上下文（内存状态 —— 绝不入库、
+    /// 不进 outbox、不写进任何 turn wire；只驱动上下文条的字段 chip、
+    /// 预填问题与返回定位）。
+    private(set) var fieldAskContext: InterpreterFormFieldAskContext?
+    /// 进入对话时预填的中文问题（applySuggestion 语义 —— 不自动发送）。
+    private(set) var fieldAskPrefilledQuestion: String?
+    /// 询问完成后一键返回填写草稿的定位引用（一次性消费）。
+    private(set) var pendingFormReturn: InterpreterFormFieldRef?
+
+    /// 带字段进入柜台对话：建立上下文 chip + 预填中文问题（不自动发送、
+    /// 不自动开麦）。文档或字段被删除后返回时由 UI 校验并回到总览。
+    func beginFieldAsk(
+        _ context: InterpreterFormFieldAskContext, prefilledQuestion: String?
+    ) {
+        fieldAskContext = context
+        fieldAskPrefilledQuestion = prefilledQuestion
+        pendingFormReturn = InterpreterFormFieldRef(
+            documentID: context.documentID, fieldID: context.fieldID
+        )
+        if let prefilledQuestion, !prefilledQuestion.isEmpty {
+            applySuggestion(prefilledQuestion)
+        }
+    }
+
+    /// 消费返回定位（打开字段页后调用）。
+    func consumeFormReturn() -> InterpreterFormFieldRef? {
+        defer { pendingFormReturn = nil }
+        return pendingFormReturn
+    }
+
+    /// 结束字段询问（用户离开对话或返回填写流时清除 chip）。
+    func endFieldAsk() {
+        fieldAskContext = nil
+        fieldAskPrefilledQuestion = nil
+    }
+
     // MARK: - 回合操作
 
     /// 删除一个回合（草稿或已保存均可）。删除聚焦（最新）回合后聚焦
@@ -1117,6 +1202,16 @@ final class InterpreterViewModel {
 
     func stopSpeaking() {
         speech.stop()
+    }
+
+    /// 朗读任意普通俄语文本（字段名、字段值 —— 第二十一轮表单填写）。
+    /// 朗读前暂停连续收听（与 speakTurn 同一互斥协议）。
+    func speakRussianText(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if isContinuousListening, continuousPauseReason == nil {
+            pauseContinuousListening(reason: .speaking)
+        }
+        speech.speak(text)
     }
 
     /// 进入"给对方看"：锁定该回合并停止正在播放的旧句（展示期间新
