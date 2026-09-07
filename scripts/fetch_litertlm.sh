@@ -12,7 +12,11 @@
 # Requirements: git, Xcode. Reuses a clone under downloads/.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Resolve the repo root ONCE to an absolute path — the script cds into
+# the clone below, and a relative "../ThirdParty" from there would point
+# one level too deep (caught by CI on first run).
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 
 LITERTLM_SWIFT_COMMIT="0e63b19c21ba562d6824fbfc409fba0916acea18"
 REPO="https://github.com/mylovelycodes/LiteRTLM-Swift"
@@ -35,7 +39,7 @@ git checkout -q "$LITERTLM_SWIFT_COMMIT"
 
 # The package vendors the xcframework in-repo (framework binary built from
 # google-ai-edge/LiteRT-LM; module CLiteRTLM with engine.h).
-rm -rf "../$DEST"
-cp -R Frameworks/LiteRTLM.xcframework "../$DEST"
-test -d "../$DEST/ios-arm64"
+rm -rf "$REPO_ROOT/$DEST"
+cp -R Frameworks/LiteRTLM.xcframework "$REPO_ROOT/$DEST"
+test -d "$REPO_ROOT/$DEST/ios-arm64"
 echo "Fetched $DEST"

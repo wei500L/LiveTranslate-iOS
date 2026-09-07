@@ -170,5 +170,64 @@
       "bytes": 643854,
       "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
     }
+  },
+  "aiModels": {
+    "hy-mt2-1.8b-q4km": {
+      "id": "hy-mt2-1.8b-q4km",
+      "kind": "hy-mt2-1.8b-q4km",
+      "repo": "tencent/Hy-MT2-1.8B-GGUF",
+      "revision": "1cd5208700acedef4ef93019b6cfc148b8522d45",
+      "files": [
+        {
+          "path": "Hy-MT2-1.8B-Q4_K_M.gguf",
+          "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf",
+          "bytes": 1133080448,
+          "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699"
+        }
+      ],
+      "totalDownloadBytes": 1133080448,
+      "installedBytes": 1133080448,
+      "stagingBytes": 1133080448,
+      "minimumFreeDiskBytes": 1400000000,
+      "license": "Apache-2.0"
+    },
+    "milmmt-46-1b-q4km": {
+      "id": "milmmt-46-1b-q4km",
+      "kind": "milmmt-46-1b-q4km",
+      "repo": "mradermacher/MiLMMT-46-1B-v1.0-GGUF",
+      "revision": "34df5efbe6592773ec168cc7b307728c08623472",
+      "files": [
+        {
+          "path": "MiLMMT-46-1B-v1.0.Q4_K_M.gguf",
+          "url": "https://huggingface.co/mradermacher/MiLMMT-46-1B-v1.0-GGUF/resolve/34df5efbe6592773ec168cc7b307728c08623472/MiLMMT-46-1B-v1.0.Q4_K_M.gguf",
+          "bytes": 806057408,
+          "sha256": "74d38ba75108d455326e9deeaf9ab01bb266dfa665eae9c4aa84e84485d4fdf9"
+        }
+      ],
+      "totalDownloadBytes": 806057408,
+      "installedBytes": 806057408,
+      "stagingBytes": 806057408,
+      "minimumFreeDiskBytes": 1000000000,
+      "license": "gemma"
+    },
+    "gemma-4-e2b-it": {
+      "id": "gemma-4-e2b-it",
+      "kind": "gemma-4-e2b-it",
+      "repo": "litert-community/gemma-4-E2B-it-litert-lm",
+      "revision": "b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1",
+      "files": [
+        {
+          "path": "gemma-4-E2B-it.litertlm",
+          "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1/gemma-4-E2B-it.litertlm",
+          "bytes": 2588147712,
+          "sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
+        }
+      ],
+      "totalDownloadBytes": 2588147712,
+      "installedBytes": 2588147712,
+      "stagingBytes": 2588147712,
+      "minimumFreeDiskBytes": 3100000000,
+      "license": "Apache-2.0"
+    }
   }
 }

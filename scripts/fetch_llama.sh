@@ -14,7 +14,10 @@
 # Reuses a shallow clone under downloads/ so repeat runs are fast.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Absolute repo root (see fetch_litertlm.sh): the script cds into the
+# clone, so destination paths must not be relative.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 
 LLAMA_CPP_COMMIT="465e49b9cea78a68b9c244ffb48d0ee24a82873d"
 DEST="ThirdParty/llama.xcframework"
@@ -28,16 +31,19 @@ fi
 mkdir -p downloads ThirdParty
 
 if [ ! -d "$SRC" ]; then
-  git clone --filter=blob:none "$SRC" 2>/dev/null || true
   git clone https://github.com/ggml-org/llama.cpp "$SRC"
 fi
 cd "$SRC"
 git checkout -q "$LLAMA_CPP_COMMIT"
 
-echo "Building llama.cpp ${LLAMA_CPP_COMMIT:0:8} for iOS (device + simulator)..."
-./build-xcframework.sh ios-sim ios-device
+# A previously built xcframework under the clone is reused (the build
+# takes ~10 min; rerunning the script must not redo it).
+if [ ! -d build-apple/llama.xcframework ]; then
+  echo "Building llama.cpp ${LLAMA_CPP_COMMIT:0:8} for iOS (device + simulator)..."
+  ./build-xcframework.sh ios-sim ios-device
+fi
 
-rm -rf "../$DEST"
-mv build-apple/llama.xcframework "../$DEST"
-test -d "../$DEST/ios-arm64"
+rm -rf "$REPO_ROOT/$DEST"
+cp -R build-apple/llama.xcframework "$REPO_ROOT/$DEST"
+test -d "$REPO_ROOT/$DEST/ios-arm64"
 echo "Built $DEST"
