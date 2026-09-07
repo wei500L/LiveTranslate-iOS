@@ -20,22 +20,23 @@ final class LocalAIModelTests: XCTestCase {
 
     // MARK: - Prompt builders (byte-exact contracts)
 
-    func testHyMT2PromptMatchesModelCardRecipe() {
+    func testHyMT2PromptMatchesHunyuanTemplateAndCardRecipe() {
         let prompt = LlamaChatPromptBuilder.hyMT2Prompt(
             source: "Привет, как дела?",
             sourceLanguage: "ru",
             targetLanguage: "zh-CN",
             history: []
         )
-        // Hy-MT2 card: no system prompt; instruction with FULL language
-        // names; only the translation is output. History is deliberately
-        // NOT included (documented in the builder).
+        // Byte-exact against the GGUF's embedded hunyuan chat template:
+        // BOS marker + user turn + assistant generation marker; the card's
+        // instruction with FULL language names; no system prompt; history
+        // deliberately not included (no documented multi-turn recipe).
         XCTAssertEqual(
             prompt,
-            """
-            Translate the following text into Simplified Chinese. Translate the text as is, without adding any explanation. Only output the translated result without any additional explanation.
-            Привет, как дела?
-            """
+            "<｜hy_begin▁of▁sentence｜><｜hy_User｜>"
+            + "Translate the following text into Simplified Chinese. Translate the text as is, without adding any explanation. Only output the translated result without any additional explanation.\n"
+            + "Привет, как дела?"
+            + "<｜hy_Assistant｜>"
         )
         XCTAssertFalse(prompt.contains("Russian"), "source language never appears in the Hy-MT2 instruction")
     }
@@ -56,39 +57,49 @@ final class LocalAIModelTests: XCTestCase {
         XCTAssertEqual(withHistory, withoutHistory)
     }
 
-    func testMilMMTPromptUsesGemmaTurnTemplate() {
+    func testMilMMTPromptMatchesModelCardTemplate() {
         let prompt = LlamaChatPromptBuilder.milmmtPrompt(
             source: "Привет",
             sourceLanguage: "ru",
             targetLanguage: "zh-CN",
             history: []
         )
-        XCTAssertTrue(prompt.hasPrefix("<start_of_turn>user\n"))
-        XCTAssertTrue(prompt.contains("Translate the following text into Simplified Chinese."))
-        XCTAssertTrue(prompt.contains("Привет"))
-        XCTAssertTrue(prompt.hasSuffix("<end_of_turn>\n<start_of_turn>model\n"))
+        // Byte-exact against the model card's documented template with
+        // the card's language names ("Russian", "Chinese (Simplified)").
+        // The GGUF carries NO chat template — plain text, no turn markers,
+        // no history (the card documents single-source translation only).
+        XCTAssertEqual(
+            prompt,
+            "Translate this from Russian to Chinese (Simplified):\n"
+            + "Russian: Привет\n"
+            + "Chinese (Simplified):"
+        )
     }
 
-    func testMilMMTPromptIncludesCappedHistory() {
-        let history = (0..<5).map { (source: "строка\($0)", translation: "行\($0)") }
-        let prompt = LlamaChatPromptBuilder.milmmtPrompt(
-            source: "Текст",
-            sourceLanguage: "ru",
-            targetLanguage: "zh-CN",
-            history: history
+    func testMilMMTPromptIgnoresHistory() {
+        // The card documents no multi-turn recipe: history must not leak
+        // into the prompt.
+        let withHistory = LlamaChatPromptBuilder.milmmtPrompt(
+            source: "Текст", sourceLanguage: "ru", targetLanguage: "zh-CN",
+            history: [("старый", "旧的")]
         )
-        // Only the LAST 2 context turns ride (2048-token budget).
-        XCTAssertFalse(prompt.contains("строка0"))
-        XCTAssertFalse(prompt.contains("строка2"))
-        XCTAssertTrue(prompt.contains("строка3"))
-        XCTAssertTrue(prompt.contains("строка4"))
+        let withoutHistory = LlamaChatPromptBuilder.milmmtPrompt(
+            source: "Текст", sourceLanguage: "ru", targetLanguage: "zh-CN",
+            history: []
+        )
+        XCTAssertEqual(withHistory, withoutHistory)
     }
 
     func testLanguageDisplayNames() {
+        // Hy-MT2 names.
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "zh-CN"), "Simplified Chinese")
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "ru"), "Russian")
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "en"), "English")
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "zh-Hant"), "Traditional Chinese")
+        // MiLMMT names (card-specified forms differ from Hy-MT2's!).
+        XCTAssertEqual(LlamaChatPromptBuilder.milmmtLanguageName("zh-CN"), "Chinese (Simplified)")
+        XCTAssertEqual(LlamaChatPromptBuilder.milmmtLanguageName("ru"), "Russian")
+        XCTAssertEqual(LlamaChatPromptBuilder.milmmtLanguageName("zh-Hant"), "Chinese (Traditional)")
         // Unknown codes pass through unchanged (never a crash, never a
         // silent wrong language).
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "fr-CA"), "fr-CA")

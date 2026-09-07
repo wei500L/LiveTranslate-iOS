@@ -126,6 +126,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: false
         ENABLE_PREVIEWS: "YES"
+        # LiteRTLM.xcframework ships arm64-only simulator slices; the app
+        # targets arm64 iPhones anyway, so Intel-simulator builds are
+        # excluded rather than failing to link.
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
       configs:
         # Debug points at the local development server (run uvicorn on
         # 127.0.0.1:8000); plain HTTP is allowed for local networking via

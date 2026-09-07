@@ -148,24 +148,32 @@ actor LlamaContext {
             throw ContextError.notLoaded
         }
 
-        // Tokenize (add_special=true adds BOS per the model's template
-        // config; parse_special=false — the prompt carries no special
-        // markers that need parsing).
+        // Tokenize flags (both models verified against their cards):
+        // add_special=false — the hunyuan template carries its own BOS
+        // marker in the prompt text, and MiLMMT's card mandates
+        // add_special_tokens=False; parse_special=true — the hunyuan
+        // turn markers must become single special tokens, not literal
+        // text. Sizing contract (llama.h): with a null buffer the call
+        // returns -(required token count).
         let promptBytes = Array(prompt.utf8)
         let sizing = llama_tokenize(
-            vocab, promptBytes, Int32(promptBytes.count), nil, 0, true, false
+            vocab, promptBytes, Int32(promptBytes.count), nil, 0, false, true
         )
-        guard sizing >= 0 else {
+        // >0 would mean tokens were written into a null buffer (impossible
+        // without memory corruption); 0 = empty prompt.
+        guard sizing <= 0 else {
             throw ContextError.backendFailure(underlying: "llama_tokenize sizing returned \(sizing)")
         }
-        var tokens = [llama_token](repeating: 0, count: Int(sizing))
+        let tokenCount = Int(-sizing)
+        guard tokenCount > 0 else { return "" }
+        var tokens = [llama_token](repeating: 0, count: tokenCount)
         let written = llama_tokenize(
-            vocab, promptBytes, Int32(promptBytes.count), &tokens, sizing, true, false
+            vocab, promptBytes, Int32(promptBytes.count), &tokens, Int32(tokenCount), false, true
         )
-        guard written == sizing else {
-            throw ContextError.backendFailure(underlying: "llama_tokenize wrote \(written) of \(sizing)")
+        guard written == Int32(tokenCount) else {
+            throw ContextError.backendFailure(underlying: "llama_tokenize wrote \(written) of \(tokenCount)")
         }
-        guard Int(sizing) < Int(Self.contextLength) - Self.maxGenerationTokens else {
+        guard tokenCount < Int(Self.contextLength) - Self.maxGenerationTokens else {
             throw ContextError.contextFull
         }
 
@@ -173,14 +181,22 @@ actor LlamaContext {
         // utterance is standalone — no cross-request KV reuse).
         llama_memory_seq_rm(llama_get_memory(context), 0, -1, -1)
 
-        var inputTokens = tokens
         var generated: [llama_token] = []
+        // Sequence position bookkeeping: the KV cache is position-based —
+        // every token must be eval'd at ITS OWN position (prompt at
+        // 0..<n, each generated token at n, n+1, …). All-zero positions
+        // are an invalid batch (llama_decode rc=-1).
+        var nPast = 0
 
-        var batch = llama_batch_init(Int32(inputTokens.count), 0, 1)
+        var batch = llama_batch_init(Int32(tokens.count), 0, 1)
         defer { llama_batch_free(batch) }
 
         // Prompt eval.
-        try Self.eval(tokens: inputTokens, context: context, batch: &batch)
+        try Self.eval(tokens: tokens, startPos: 0, context: context, batch: &batch)
+        nPast = tokens.count
+        // `llama_get_logits_ith` indexes into the LAST decode's batch
+        // (i ∈ [0, batch.n_tokens)) — not the absolute sequence position.
+        var lastBatchCount = tokens.count
 
         // EOS/EOT for stop detection (both checked: models differ).
         let eos = llama_vocab_eos(vocab)
@@ -189,8 +205,7 @@ actor LlamaContext {
         // Greedy decode loop.
         for _ in 0..<Self.maxGenerationTokens {
             if isCancelled() { break }
-            let position = Int32(inputTokens.count - 1)
-            guard let logitsPtr = llama_get_logits_ith(context, position) else {
+            guard let logitsPtr = llama_get_logits_ith(context, Int32(lastBatchCount - 1)) else {
                 throw ContextError.backendFailure(underlying: "llama_get_logits_ith returned nil")
             }
             let nVocab = Int(llama_vocab_n_tokens(vocab))
@@ -201,7 +216,7 @@ actor LlamaContext {
             // by the penalty. The argmax over ~150k vocab entries runs on
             // a scratch buffer via vDSP (one divide + one max index) —
             // pure-Swift per-token loops would burn the token budget.
-            var seen = Set(inputTokens)
+            var seen = Set(tokens)
             for t in generated { seen.insert(t) }
             if seen.isEmpty {
                 // Fast path: plain argmax over the logits.
@@ -226,10 +241,14 @@ actor LlamaContext {
             if bestToken == eos || bestToken == eot { break }
             generated.append(bestToken)
 
-            // Feed the chosen token back.
-            try Self.eval(tokens: [bestToken], context: context, batch: &batch)
-            inputTokens.append(bestToken)
-            if inputTokens.count + generated.count >= Int(Self.contextLength) {
+            // Feed the chosen token back at its own position.
+            try Self.eval(
+                tokens: [bestToken], startPos: nPast,
+                context: context, batch: &batch
+            )
+            nPast += 1
+            lastBatchCount = 1
+            if nPast >= Int(Self.contextLength) {
                 break
             }
         }
@@ -248,9 +267,12 @@ actor LlamaContext {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    /// Evaluate a token batch through the context.
+    /// Evaluate a token batch through the context. `startPos` is the
+    /// absolute sequence position of the FIRST token; token i sits at
+    /// startPos + i (the KV cache is position-keyed).
     private static func eval(
-        tokens: [llama_token], context: OpaquePointer, batch: inout llama_batch
+        tokens: [llama_token], startPos: Int,
+        context: OpaquePointer, batch: inout llama_batch
     ) throws {
         // Rebuild the batch when the current allocation is too small.
         if batch.n_tokens < Int32(tokens.count) {
@@ -259,7 +281,7 @@ actor LlamaContext {
         }
         for (i, token) in tokens.enumerated() {
             batch.token[i] = token
-            batch.pos[i] = 0
+            batch.pos[i] = Int32(startPos + i)
             batch.n_seq_id[i] = 1
             batch.seq_id[i]!.pointee = 0
             batch.logits[i] = 0
