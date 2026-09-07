@@ -43,11 +43,15 @@ final class ModelInstaller {
         }
     }
 
-    private(set) var isInstalling = false
-    private(set) var isPaused = false
-    private(set) var progress = Progress()
-    private(set) var currentFile: String?
-    private(set) var isCompiling = false
+    // Mutable install progress state: read by the UI through the
+    // managers, written by `install(...)` and the AI-model extension
+    // (Translation/AIModelInstaller.swift) which drives the same flow
+    // for a different install root.
+    var isInstalling = false
+    var isPaused = false
+    var progress = Progress()
+    var currentFile: String?
+    var isCompiling = false
 
     private var activeTask: Task<Void, any Error>?
     private let session: URLSession
@@ -159,7 +163,7 @@ final class ModelInstaller {
 
     // MARK: - Internals
 
-    private func preflightDiskSpace(_ backend: ModelManifest.BackendInfo) throws {
+    func preflightDiskSpace(_ backend: ModelManifest.BackendInfo) throws {
         let root = try ModelPaths.modelsRoot()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let values = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
@@ -171,7 +175,7 @@ final class ModelInstaller {
         }
     }
 
-    private func downloadFile(
+    func downloadFile(
         _ file: ModelManifest.BackendInfo.FileInfo,
         to destination: URL,
         onProgress: @escaping @MainActor (Progress) -> Void

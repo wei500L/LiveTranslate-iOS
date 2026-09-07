@@ -80,6 +80,10 @@ final class AppEnvironment {
     let keychain: any KeychainStoring
     let repository: any ClassroomRepositoryProtocol
     let modelManager: any ModelManaging
+    /// On-device AI model manager: the llama.cpp GGUF translation engine
+    /// lifecycle (one resident model, session pinning) + install/download
+    /// state for all three AI models (Hy-MT2, MiLMMT, Gemma).
+    let aiModelManager: LocalAIModelManager
     let benchmarkRunner: ASRBenchmarkRunner
     let coordinator: any LiveTranslationCoordinating
     /// UI navigation state (selected tab, live-classroom presentation).
@@ -236,8 +240,10 @@ final class AppEnvironment {
             return engineManager.sessionActive
                 && engineManager.residentBackendKind == kind
         }
+        // On-device AI models (offline translation GGUFs + image model).
+        let aiModelManager = LocalAIModelManager()
         let service = AppEnvironment.makeTranslationService(
-            settings: settings, keychain: keychain
+            settings: settings, keychain: keychain, aiModelManager: aiModelManager
         )
         let box = TranslationServiceBox()
         box.set(service)
@@ -255,8 +261,17 @@ final class AppEnvironment {
             engineManager: engineManager,
             repository: repository,
             settings: settings,
+            aiModelManager: aiModelManager,
             translationServiceProvider: { box.get() }
         )
+        // AI-model delete protection (same contract as the ASR manager):
+        // the running classroom pins the selected local translation model;
+        // a model being loaded or generating is in use by definition.
+        aiModelManager.isModelInUse = { [weak coordinator, weak aiModelManager] kind in
+            if aiModelManager?.residentModel == kind { return true }
+            guard let coordinator, coordinator.isRunning else { return false }
+            return settings.translationProvider.localModelKind == kind
+        }
         // Cloud sync only when this build carries a server URL (Debug →
         // local/LAN server, Release → the HTTPS production domain). The
         // service observes repository + bookmark mutations from here on.
@@ -322,7 +337,7 @@ final class AppEnvironment {
             serviceProvider: { [weak studyBox] in studyBox?.get() }
         )
         let attachmentService = AppEnvironment.makeAttachmentAnalysisService(
-            settings: settings, keychain: keychain
+            settings: settings, keychain: keychain, aiModelManager: aiModelManager
         )
         let attachmentBox = AttachmentServiceBox()
         attachmentBox.set(attachmentService)
@@ -398,6 +413,7 @@ final class AppEnvironment {
             keychain: keychain,
             repository: repository,
             modelManager: modelManager,
+            aiModelManager: aiModelManager,
             benchmarkRunner: ASRBenchmarkRunner(engineManager: engineManager),
             coordinator: coordinator,
             translationService: service,
@@ -450,6 +466,7 @@ final class AppEnvironment {
         keychain: any KeychainStoring,
         repository: any ClassroomRepositoryProtocol,
         modelManager: any ModelManaging,
+        aiModelManager: LocalAIModelManager = LocalAIModelManager(),
         benchmarkRunner: ASRBenchmarkRunner,
         coordinator: any LiveTranslationCoordinating,
         translationService: any TranslationService,
@@ -497,6 +514,7 @@ final class AppEnvironment {
         self.keychain = keychain
         self.repository = repository
         self.modelManager = modelManager
+        self.aiModelManager = aiModelManager
         self.benchmarkRunner = benchmarkRunner
         self.coordinator = coordinator
         self.translationService = translationService
@@ -687,6 +705,9 @@ final class AppEnvironment {
     /// and the pipeline's dispatch-time triage can never disagree. The
     /// API key itself never leaves the service — views only see this Bool.
     var isTranslationConfigured: Bool {
+        // Cloud selections need their endpoint+model configured; the
+        // offline engines are configured when the model files are
+        // installed; Apple system translation is availability-only.
         translationService.isConfiguredNow
     }
 
@@ -699,8 +720,37 @@ final class AppEnvironment {
     }
 
     /// Build a translator from current settings; the API key comes from the
-    /// Keychain only.
+    /// Keychain only. Provider selection routes to the offline GGUF
+    /// engines (with Apple system translation as the marked fallback when
+    /// the local model fails), the cloud API, or system translation only.
     static func makeTranslationService(
+        settings: SettingsStore,
+        keychain: any KeychainStoring,
+        aiModelManager: LocalAIModelManager = LocalAIModelManager()
+    ) -> any TranslationService {
+        // The system-translation fallback is shared by every local-model
+        // path (built once per service build; it holds no per-request
+        // state).
+        let systemFallback = SystemTranslationFallback()
+        switch settings.translationProvider {
+        case .hyMT2, .milmmt46:
+            let local = LocalLLMTranslationEngine(
+                modelKind: settings.translationProvider.localModelKind!,
+                manager: aiModelManager
+            )
+            return ResolvedTranslationService(
+                primary: local, fallback: systemFallback, primaryIsLocalEngine: true
+            )
+        case .cloud:
+            return Self.makeCloudTranslationService(settings: settings, keychain: keychain)
+        case .apple:
+            return systemFallback
+        }
+    }
+
+    /// The OpenAI-compatible cloud translator (previous default behavior,
+    /// unchanged).
+    private static func makeCloudTranslationService(
         settings: SettingsStore, keychain: any KeychainStoring
     ) -> any TranslationService {
         let apiKey = (try? keychain.get(forKey: apiKeychainKey)) ?? ""
@@ -724,7 +774,7 @@ final class AppEnvironment {
     /// service up through the box on the next request.
     func refreshTranslationService() {
         translationService = AppEnvironment.makeTranslationService(
-            settings: settings, keychain: keychain
+            settings: settings, keychain: keychain, aiModelManager: aiModelManager
         )
         translationServiceBox.set(translationService)
         // The study and image services inherit the API base + key; rebuild
@@ -734,7 +784,7 @@ final class AppEnvironment {
         )
         studyServiceBox.set(studyReviewService)
         attachmentAnalysisService = AppEnvironment.makeAttachmentAnalysisService(
-            settings: settings, keychain: keychain
+            settings: settings, keychain: keychain, aiModelManager: aiModelManager
         )
         attachmentServiceBox.set(attachmentAnalysisService)
     }
@@ -753,14 +803,26 @@ final class AppEnvironment {
         ))
     }
 
-    /// Image-understanding service from current settings: same API base
-    /// and key as translation (the user never re-enters it); the model
-    /// falls back study-review model → translation model. Whether the
-    /// chosen model actually accepts images is the server's call — the
-    /// settings copy never claims support it cannot verify.
+    /// Image-understanding service: the on-device Gemma E2B model when
+    /// its files are installed (offline, load-per-request), otherwise the
+    /// cloud OpenAI-compatible service (same API base and key as
+    /// translation — the user never re-enters it; the model falls back
+    /// study-review model → translation model). Whether the chosen cloud
+    /// model actually accepts images is the server's call — the settings
+    /// copy never claims support it cannot verify.
     static func makeAttachmentAnalysisService(
-        settings: SettingsStore, keychain: any KeychainStoring
+        settings: SettingsStore,
+        keychain: any KeychainStoring,
+        aiModelManager: LocalAIModelManager = LocalAIModelManager()
     ) -> any AttachmentAnalysisModelService {
+        // On-device Gemma first: its mere installation opts the user into
+        // offline image understanding (a deliberate download, never
+        // bundled), and every image path works unchanged through the
+        // same protocol. Not installed → cloud, exactly as before.
+        let localVision = LocalVisionModelService(manager: aiModelManager)
+        if localVision.isConfiguredNow {
+            return localVision
+        }
         let apiKey = (try? keychain.get(forKey: apiKeychainKey)) ?? ""
         let model = settings.attachmentAnalysisModel
             .trimmingCharacters(in: .whitespacesAndNewlines)

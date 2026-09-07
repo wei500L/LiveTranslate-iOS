@@ -58,6 +58,21 @@ jobs:
           mv ThirdParty/SherpaOnnxC.xcframework ThirdParty/sherpa-onnx.xcframework
           test -d ThirdParty/sherpa-onnx.xcframework/ios-arm64
 
+      - name: Fetch LiteRT-LM xcframework (commit-pinned)
+        run: |
+          set -euo pipefail
+          ./scripts/fetch_litertlm.sh
+          test -d ThirdParty/LiteRTLM.xcframework/ios-arm64
+
+      - name: Build llama.cpp xcframework (commit-pinned)
+        run: |
+          set -euo pipefail
+          brew install cmake
+          # ~10 min: cmake + Xcode build of llama.cpp (device + simulator,
+          # Metal). The script reuses a cached clone; on CI it is fresh.
+          ./scripts/fetch_llama.sh
+          test -d ThirdParty/llama.xcframework/ios-arm64
+
       - name: Generate Xcode project (XcodeGen)
         run: |
           set -euo pipefail

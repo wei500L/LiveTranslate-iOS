@@ -43,6 +43,16 @@ targets:
       # xcframework leaves Ort* symbols undefined with no companion lib).
       - framework: ThirdParty/sherpa-onnx.xcframework
         embed: true
+      # llama.cpp C API + ggml (Metal embedded), built from a PINNED commit
+      # by scripts/fetch_llama.sh — the on-device GGUF translation runtime
+      # (Hy-MT2 / MiLMMT). Dynamic framework, self-contained.
+      - framework: ThirdParty/llama.xcframework
+        embed: true
+      # Google LiteRT-LM runtime (C API) — the on-device image-understanding
+      # runtime for the Gemma 4 E2B .litertlm model, fetched pinned by
+      # scripts/fetch_litertlm.sh. Dynamic framework.
+      - framework: ThirdParty/LiteRTLM.xcframework
+        embed: true
       # Share Extension (智能收件箱 receive side) — embedded into the app.
       - target: LiveTranslateShareExtension
       # Widget Extension (锁屏实时课堂 / 灵动岛 / 小组件 / 控制中心).

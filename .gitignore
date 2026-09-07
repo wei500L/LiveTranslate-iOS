@@ -9,6 +9,9 @@ downloads/
 *.mlpackage.zip
 *.zip.partial
 *.tar.bz2
+*.gguf
+*.litertlm
+*.task
 
 # Xcode
 build/
@@ -34,5 +37,9 @@ __pycache__/
 .venv/
 .claude/
 
-# Third-party binary frameworks — fetched hash-pinned by scripts/fetch_third_party.sh
+# Third-party binary frameworks — fetched/built by pinned scripts
+# (fetch_third_party.sh downloads; fetch_llama.sh builds from a pinned
+# llama.cpp commit). Never committed.
 ThirdParty/sherpa-onnx.xcframework/
+ThirdParty/llama.xcframework/
+ThirdParty/LiteRTLM.xcframework/

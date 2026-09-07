@@ -61,6 +61,13 @@ final class LiveTranslationCoordinator {
 
     private let engineManager: ASREngineManager
     private let repository: (any ClassroomRepositoryProtocol)?
+    /// On-device AI model manager — used ONLY for session pinning of the
+    /// local translation model (the translator itself is resolved through
+    /// `translationServiceProvider`). The manager pins the selected local
+    /// model at session start so mid-session switches cannot corrupt the
+    /// session's results, and unpins in `stop()` after the workers have
+    /// drained (in-flight translations finish on the session's model).
+    private let aiModelManager: LocalAIModelManager?
     /// MainActor-isolated provider (the coordinator only resolves it on the
     /// main actor), so it may read MainActor state such as the
     /// live-translation toggle.
@@ -81,6 +88,15 @@ final class LiveTranslationCoordinator {
     private var processingTask: Task<Void, Never>?
     private var asrTask: Task<Void, Never>?
     private var translationWorkers: [Task<Void, Never>] = []
+
+    /// The active translation provider runs entirely on-device (no
+    /// network dependency): the pipeline must never show the offline
+    /// phase or pause translation on network loss for it. Read at each
+    /// phase-transition site (cheap: a settings enum read).
+    private var usesLocalTranslation: Bool {
+        settings.translationProvider.localModelKind != nil
+            || settings.translationProvider == .apple
+    }
     private var elapsedTimer: Task<Void, Never>?
 
     private var segmentContinuation: AsyncStream<SpeechSegment>.Continuation?
@@ -102,11 +118,13 @@ final class LiveTranslationCoordinator {
         engineManager: ASREngineManager,
         repository: (any ClassroomRepositoryProtocol)? = nil,
         settings: SettingsStore,
+        aiModelManager: LocalAIModelManager? = nil,
         translationServiceProvider: @escaping @MainActor () -> (any TranslationService)?
     ) {
         self.engineManager = engineManager
         self.repository = repository
         self.settings = settings
+        self.aiModelManager = aiModelManager
         self.translationServiceProvider = translationServiceProvider
         startNetworkMonitoring()
     }
@@ -301,6 +319,14 @@ final class LiveTranslationCoordinator {
         }
 
         state.phase = .listening
+        // Pin the local translation model for this session: mid-session
+        // model switches are refused, so this session's translations all
+        // come from the model it started with (old tasks never bleed into
+        // a new model's results). Cloud selections are unaffected (no
+        // local model to pin).
+        if settings.translationProvider.localModelKind != nil {
+            aiModelManager?.beginSessionPin()
+        }
         Self.logger.info("Session started on \(self.engineManager.residentBackendKind?.rawValue ?? "?", privacy: .public)")
     }
 
@@ -324,7 +350,7 @@ final class LiveTranslationCoordinator {
         isPaused = false
         pauseFlag.set(false)
         vad?.reset()
-        state.phase = isNetworkAvailable ? .listening : .networkOffline
+        state.phase = usesLocalTranslation || isNetworkAvailable ? .listening : .networkOffline
     }
 
     var isRunning: Bool {
@@ -361,6 +387,10 @@ final class LiveTranslationCoordinator {
         let writer = wavWriter
         wavWriter = nil
         writer?.finish()
+        // Unpin the local translation model only AFTER the translation
+        // workers have drained (above) — in-flight translations finished
+        // on the session's model; the user may now switch or delete it.
+        aiModelManager?.endSessionPin()
         if let session, let writer, let repository,
            let recording = try? repository.recording(sessionID: session.id) {
             // Metadata catches up with the file's real state even when the
@@ -537,7 +567,7 @@ final class LiveTranslationCoordinator {
         // after the classroom is already paused — keep the chip honest.
         state.phase = isPaused
             ? .paused
-            : (isNetworkAvailable ? .transcribing : .networkOffline)
+            : (usesLocalTranslation || isNetworkAvailable ? .transcribing : .networkOffline)
 
         orderedTranslations.register(sequenceID)
         if translationWanted {
@@ -633,7 +663,7 @@ final class LiveTranslationCoordinator {
         if orderedTranslations.depth == 0 {
             switch state.phase {
             case .transcribing, .translating, .speechDetected:
-                state.phase = isNetworkAvailable ? .listening : .networkOffline
+                state.phase = usesLocalTranslation || isNetworkAvailable ? .listening : .networkOffline
             default:
                 break
             }
@@ -666,7 +696,7 @@ final class LiveTranslationCoordinator {
         if orderedTranslations.depth == 0 {
             switch state.phase {
             case .transcribing, .translating, .speechDetected:
-                state.phase = isNetworkAvailable ? .listening : .networkOffline
+                state.phase = usesLocalTranslation || isNetworkAvailable ? .listening : .networkOffline
             default:
                 break
             }
@@ -737,9 +767,12 @@ final class LiveTranslationCoordinator {
                 let wasAvailable = self.isNetworkAvailable
                 self.isNetworkAvailable = available
                 if wasAvailable && !available {
-                    // ASR is local and keeps running; only translation dies.
+                    // ASR is local and keeps running; only CLOUD translation
+                    // dies. A local/offline provider never shows offline.
                     if self.state.phase == .listening || self.state.phase == .speechDetected {
-                        self.state.phase = .networkOffline
+                        if !self.usesLocalTranslation {
+                            self.state.phase = .networkOffline
+                        }
                     }
                 } else if !wasAvailable && available {
                     if self.state.phase == .networkOffline {

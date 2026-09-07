@@ -41,6 +41,7 @@ struct SettingsScreen: View {
         }
         // Keep the live translator in sync with edited settings.
         .onChange(of: environment.settings.apiBase) { _, _ in environment.refreshTranslationService() }
+        .onChange(of: environment.settings.translationProvider) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.translationModel) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.streaming) { _, _ in environment.refreshTranslationService() }
         .onChange(of: environment.settings.contextTurns) { _, _ in environment.refreshTranslationService() }
@@ -272,63 +273,97 @@ struct SettingsScreen: View {
 
     private var translationSection: some View {
         Section {
-            TextField(String(localized: "API Base (e.g. https://api.deepseek.com)"), text: apiBaseBinding)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            TextField(String(localized: "Model name"), text: modelBinding)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            SecureField(String(localized: "API Key (stored in Keychain)"), text: $apiKeyInput, onCommit: saveAPIKey)
-                .textInputAutocapitalization(.never)
-            Toggle(String(localized: "Streaming (SSE)"), isOn: streamBinding)
-            Stepper(value: contextBinding, in: 0...10) {
-                LabeledRow(label: String(localized: "Context turns"), value: "\(environment.settings.contextTurns)")
-            }
-            HStack {
-                LabeledRow(label: "Temperature", value: String(format: "%.1f", environment.settings.temperature))
-                Spacer()
-                Slider(value: tempBinding, in: 0...1, step: 0.1)
-                    .frame(maxWidth: 180)
-            }
-            Stepper(value: maxTokensBinding, in: 64...1024, step: 64) {
-                LabeledRow(label: String(localized: "Max tokens"), value: "\(environment.settings.maxTokens)")
-            }
-            Stepper(value: timeoutBinding, in: 10...120, step: 5) {
-                LabeledRow(label: String(localized: "Timeout"), value: "\(Int(environment.settings.timeout)) s")
-            }
-            Picker(String(localized: "Disable thinking"), selection: thinkingBinding) {
-                ForEach(ThinkingStyle.allCases) { style in
-                    Text(style.displayName).tag(style.rawValue)
+            Picker(String(localized: "翻译方式"), selection: providerBinding) {
+                ForEach(TranslationProviderKind.allCases) { kind in
+                    Text(kind.userTitle).tag(kind)
                 }
             }
-            VStack(alignment: .leading) {
-                Text(String(localized: "Custom system prompt (optional)"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextEditor(text: promptBinding)
-                    .frame(minHeight: 70)
-                    .font(.caption)
-            }
-            Button {
-                Task { await testConnection() }
-            } label: {
-                if isTestingConnection {
-                    HStack { ProgressView().padding(.trailing, 6); Text(String(localized: "Testing…")) }
-                } else {
-                    Text(String(localized: "Test connection"))
+            .pickerStyle(.inline)
+
+            if environment.settings.translationProvider == .cloud {
+                TextField(String(localized: "API Base (e.g. https://api.deepseek.com)"), text: apiBaseBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField(String(localized: "Model name"), text: modelBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField(String(localized: "API Key (stored in Keychain)"), text: $apiKeyInput, onCommit: saveAPIKey)
+                    .textInputAutocapitalization(.never)
+                Toggle(String(localized: "Streaming (SSE)"), isOn: streamBinding)
+                Stepper(value: contextBinding, in: 0...10) {
+                    LabeledRow(label: String(localized: "Context turns"), value: "\(environment.settings.contextTurns)")
                 }
-            }
-            .disabled(isTestingConnection || environment.settings.apiBase.isEmpty)
-            if let result = connectionTestResult {
-                Text(result)
-                    .font(.caption)
-                    .foregroundStyle(result.hasPrefix("✓") ? Color.green : Color.red)
+                HStack {
+                    LabeledRow(label: "Temperature", value: String(format: "%.1f", environment.settings.temperature))
+                    Spacer()
+                    Slider(value: tempBinding, in: 0...1, step: 0.1)
+                        .frame(maxWidth: 180)
+                }
+                Stepper(value: maxTokensBinding, in: 64...1024, step: 64) {
+                    LabeledRow(label: String(localized: "Max tokens"), value: "\(environment.settings.maxTokens)")
+                }
+                Stepper(value: timeoutBinding, in: 10...120, step: 5) {
+                    LabeledRow(label: String(localized: "Timeout"), value: "\(Int(environment.settings.timeout)) s")
+                }
+                Picker(String(localized: "Disable thinking"), selection: thinkingBinding) {
+                    ForEach(ThinkingStyle.allCases) { style in
+                        Text(style.displayName).tag(style.rawValue)
+                    }
+                }
+                VStack(alignment: .leading) {
+                    Text(String(localized: "Custom system prompt (optional)"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: promptBinding)
+                        .frame(minHeight: 70)
+                        .font(.caption)
+                }
+                Button {
+                    Task { await testConnection() }
+                } label: {
+                    if isTestingConnection {
+                        HStack { ProgressView().padding(.trailing, 6); Text(String(localized: "Testing…")) }
+                    } else {
+                        Text(String(localized: "Test connection"))
+                    }
+                }
+                .disabled(isTestingConnection || environment.settings.apiBase.isEmpty)
+                if let result = connectionTestResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("✓") ? Color.green : Color.red)
+                }
+            } else if let localKind = environment.settings.translationProvider.localModelKind {
+                // Local model rows: install status + entry to management.
+                NavigationLink {
+                    AIModelManagementScreen()
+                } label: {
+                    LabeledRow(
+                        label: String(localized: "本地模型"),
+                        value: environment.aiModelManager.state(localKind).isInstalled
+                            ? String(localized: "已下载")
+                            : String(localized: "未下载")
+                    )
+                }
             }
         } header: {
             Text(String(localized: "Translation API"))
         } footer: {
-            Text("Only recognized Russian text is sent to this endpoint. API keys stay in the Keychain.")
+            if environment.settings.translationProvider == .cloud {
+                Text("Only recognized Russian text is sent to this endpoint. API keys stay in the Keychain.")
+            } else if environment.settings.translationProvider.localModelKind != nil {
+                Text(String(localized: "离线翻译在本机运行，无需网络。首次使用需先下载模型（翻译模型管理）。"))
+            } else {
+                Text(String(localized: "系统翻译由 Apple 提供（iOS 26+）。"))
+            }
         }
+    }
+
+    private var providerBinding: Binding<TranslationProviderKind> {
+        Binding(
+            get: { environment.settings.translationProvider },
+            set: { environment.settings.translationProvider = $0 }
+        )
     }
 
     /// 课后整理 uses the translation API's base + key; only the model can

@@ -63,6 +63,12 @@ struct ModelManifest: Codable, Sendable, Equatable {
     let model: ModelInfo
     let backends: [String: BackendInfo]
     let runtime: RuntimeInfo
+    /// Downloadable on-device AI models (offline translation GGUFs + the
+    /// image-understanding model). Same `BackendInfo` schema as the ASR
+    /// backends — pinned revision, measured SHA256 per file, disk budgets.
+    /// Optional so older manifests (and every existing test fixture)
+    /// decode unchanged.
+    var aiModels: [String: BackendInfo]?
 
     func backend(_ kind: ASRBackendKind) -> BackendInfo? {
         backends[kind.manifestKey]
@@ -103,6 +109,9 @@ extension ASRBackendKind {
 ///       Compiled/{*.mlmodelc}
 ///     sherpa-onnx-int8/{encoder.int8.onnx, decoder.onnx, joiner.onnx, tokens.txt}
 ///   vad/silero_vad.onnx
+///   hy-mt2-1.8b/Hy-MT2-1.8B-Q4_K_M.gguf
+///   milmmt-46-1b/MiLMMT-46-1B-v1.0.Q4_K_M.gguf
+///   gemma-4-e2b/gemma-4-E2B-it.litertlm
 /// ```
 enum ModelPaths {
     static func modelsRoot() throws -> URL {

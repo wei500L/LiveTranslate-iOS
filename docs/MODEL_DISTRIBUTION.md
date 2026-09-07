@@ -73,3 +73,33 @@ Compiled/v{N}/*.mlmodelc/             (首次使用时编译生成)
 ```
 
 App 的模型管理页展示：安装状态、下载/本地占用、版本（revision 前 8 位）、SHA256 校验状态、Core ML 编译状态、最近加载时间、最近推理 RTF，以及下载/暂停/继续/删除/重新校验/设为当前后端操作。
+
+---
+
+# 离线 AI 模型（翻译 + 图片理解）
+
+ASR 之外的三台可下载 AI 模型走**同一套**"清单 + 实测 SHA256 + 断点续传 + 暂停/删除/校验"分发体系（`ModelManifest.json` 的 `aiModels` 字典，`LocalAIModelManager`/`AIModelInstaller` 管理），安装到 `Models/<目录名>/`。
+
+| 模型 | manifest key | 文件 | 大小 | 用途 | 上游 | 许可 |
+|---|---|---|---|---|---|---|
+| Hy-MT2-1.8B Q4_K_M | `hy-mt2-1.8b-q4km` | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1.13 GB | **默认**俄→简中离线翻译 | tencent/Hy-MT2-1.8B-GGUF @ `1cd52087` | Apache-2.0 |
+| MiLMMT-46-1B v1.0 Q4_K_M | `milmmt-46-1b-q4km` | `MiLMMT-46-1B-v1.0.Q4_K_M.gguf` | 806 MB | **可选省电**离线翻译 | mradermacher/MiLMMT-46-1B-v1.0-GGUF @ `34df5efb`（原始：xiaomi-research/MiLMMT-46-1B-v1.0） | gemma |
+| Gemma 4 E2B it | `gemma-4-e2b-it` | `gemma-4-E2B-it.litertlm` | 2.59 GB | 独立图片理解/翻译 | litert-community/gemma-4-E2B-it-litert-lm @ `b3ca0d2f` | Apache-2.0 |
+
+## 运行时
+
+- **llama.cpp**（固定 commit `465e49b9`，`scripts/fetch_llama.sh` 构建 iOS XCFramework，Metal 加速，含 Hy-MT2 所需 STQ kernel）：两台 GGUF 翻译模型的推理引擎。同一时刻最多**一台**翻译模型常驻（`LlamaContext` actor），课堂会话把所选模型**锁**到会话结束（`LocalAIModelManager.beginSessionPin`），结束后才允许切换/删除。
+- **LiteRT-LM**（`scripts/fetch_litertlm.sh` 获取 Google C API XCFramework）：Gemma 图片理解模型的推理引擎。**仅在图片请求进行期间加载，用完即释放**——与常驻的翻译模型互不挤占内存。
+- **Apple Translation**（系统框架，iOS 26+ 可编程会话）：本地模型加载/推理失败时按请求兜底，绝不替代默认本地模型；iOS 17–25 上诚实报 notConfigured。
+
+## 磁盘预算（下载前检查）
+
+- Hy-MT2 ≥ 1.4 GB 可用
+- MiLMMT ≥ 1.0 GB 可用
+- Gemma ≥ 3.1 GB 可用
+
+## 离线语义
+
+- 模型下载完成后，翻译与图片理解**完全离线**工作（无任何网络调用；`isConfiguredNow` 只做文件存在性检查）。
+- 翻译失败绝不丢俄语原文（原文在 ASR 完成时即已落库）；失败条目可手动/网络恢复重试。
+- 模型文件不进 Git（`.gitignore` 含 `*.gguf`、`*.litertlm`），也不打进初始 App 包——全部按需下载。

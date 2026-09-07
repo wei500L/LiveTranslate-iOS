@@ -11,8 +11,10 @@ iPhone 原生俄语课堂实时翻译 App，面向莫斯科大学课堂、说明
   - `GigaAM-v3 e2e_rnnt · sherpa-onnx INT8`（体积优先，CPU 推理，约 216MB）
   - 两个后端是**同一个 ASR 模型**的两种运行时，不是两个模型
 - 断网时俄语识别照常可用，网络恢复后补充翻译
+- **离线翻译（默认）**：Hy-MT2-1.8B（标准画质，约 1.13GB）/ MiLMMT-46-1B（省电模式，约 806MB）本地生成简体中文译文，完全断网可用；课堂失败时 Apple 系统翻译兜底（iOS 26+）
+- **离线图片理解**：Gemma 4 E2B（约 2.59GB，可选）在本地完成课堂照片理解与视觉问答，仅按需加载
 - 带标点、大小写、数字规范化的俄语原文（模型原生输出）
-- OpenAI 兼容翻译 API（OpenAI / DeepSeek / Qwen / Grok / Ollama / vLLM / LM Studio / 自建 HY-MT 服务）
+- OpenAI 兼容云端翻译 API（OpenAI / DeepSeek / Qwen / Grok / Ollama / vLLM / LM Studio / 自建 HY-MT 服务，可在设置中改选）
 - 课堂记录：搜索、改标题、重试翻译、删除、导出（Markdown / TXT×3 / JSON / SRT）
 - 双后端对比测试（CER/WER、RTF、内存），可导出报告
 
@@ -20,22 +22,26 @@ iPhone 原生俄语课堂实时翻译 App，面向莫斯科大学课堂、说明
 
 - 麦克风音频由 GigaAM 在 iPhone 本地识别，不上传
 - 默认不保存原始音频，只保存文字（可在设置中主动开启录音保存）
-- 只有俄语识别文本发送给你配置的翻译 API
+- **默认翻译方式为离线模型（Hy-MT2）**：译文在设备本地生成，零网络依赖；选择云端 API 时才将俄语识别文本发送给你配置的端点
+- 图片理解可在本地运行（Gemma 4 E2B，下载后自动启用）
 - API Key 仅存 Keychain
-- 详见 [docs/PRIVACY.md](docs/PRIVACY.md)
+- 详见 [docs/PRIVACY.md](docs/PRIVACY.md)、[docs/OFFLINE_MODELS.md](docs/OFFLINE_MODELS.md)
 
 ## 重要限制（请先读）
 
 - **系统音频**：普通 iOS App **不能**捕获其他 App 的内部音频。本 App 的输入是 iPhone 麦克风（建议设备靠近讲课者或使用领夹麦）。
-- **模型体积**：首次使用需下载模型（Core ML 约 446MB / INT8 约 216MB），通过 App 内模型管理页下载，Wi-Fi 推荐。
+- **模型体积**：首次使用需下载识别模型（Core ML 约 446MB / INT8 约 216MB）与离线翻译模型（Hy-MT2 约 1.13GB / MiLMMT 约 806MB，二选一；图片理解 Gemma 约 2.59GB 可选），通过 App 内模型管理页下载，Wi-Fi 推荐。
 
 ## 构建
 
 要求：macOS + Xcode 16+（含 iOS 17 SDK）、[xcodegen](https://github.com/yonaskolb/XcodeGen)。
 
 ```bash
-# 1. 获取 sherpa-onnx 静态 XCFramework（不入库，脚本自动下载并校验）
+# 1. 获取第三方运行时框架（不入库；sherpa-onnx 下载校验，llama.cpp 与
+#    LiteRT-LM 从固定 commit 构建/获取）
 ./scripts/fetch_third_party.sh
+./scripts/fetch_llama.sh          # 离线翻译运行时（约 260MB 构建产物，需 cmake）
+./scripts/fetch_litertlm.sh       # 图片理解运行时（约 39MB）
 
 # 2. 生成 Xcode 工程
 xcodegen generate
@@ -68,6 +74,7 @@ xcodebuild -project LiveTranslateIOS.xcodeproj -scheme LiveTranslateIOS \
 | [docs/COREML_ENGINE.md](docs/COREML_ENGINE.md) | Core ML 后端：Log-Mel、RNN-T 解码、黄金测试 |
 | [docs/SHERPA_ENGINE.md](docs/SHERPA_ENGINE.md) | sherpa-onnx 后端配置 |
 | [docs/MODEL_DISTRIBUTION.md](docs/MODEL_DISTRIBUTION.md) | 模型分发、固定 revision、SHA256、编译缓存 |
+| [docs/OFFLINE_MODELS.md](docs/OFFLINE_MODELS.md) | 离线翻译与图片理解：下载、切换、兜底、磁盘与许可 |
 | [docs/BACKEND_COMPARISON.md](docs/BACKEND_COMPARISON.md) | 双后端对比方法与结果 |
 | [docs/PERFORMANCE_TEST.md](docs/PERFORMANCE_TEST.md) | 性能验收流程与结果 |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | 隐私细节 |

@@ -96,6 +96,32 @@ done
 echo "== Silero VAD (shared by both backends) =="
 download "$SILERO_VAD_URL" "$MODELS_DIR/silero_vad.onnx" "$SILERO_VAD_BYTES"
 
+# ---------------------------------------------------------------------------
+# On-device AI models (offline translation + image understanding). Sizes
+# are NOT asserted here (None = measure) — the manifest generator hashes
+# whatever is actually on disk, and HF re-uploads at a pinned commit SHA
+# are immutable, so a size mismatch would mean the wrong revision.
+# ---------------------------------------------------------------------------
+AI_DOWNLOADS=(
+  "hy-mt2-1.8b|tencent/Hy-MT2-1.8B-GGUF|1cd5208700acedef4ef93019b6cfc148b8522d45|Hy-MT2-1.8B-Q4_K_M.gguf"
+  "milmmt-46-1b|mradermacher/MiLMMT-46-1B-v1.0-GGUF|34df5efbe6592773ec168cc7b307728c08623472|MiLMMT-46-1B-v1.0.Q4_K_M.gguf"
+  "gemma-4-e2b|litert-community/gemma-4-E2B-it-litert-lm|b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1|gemma-4-E2B-it.litertlm"
+)
+
+echo "== On-device AI models (translation + image understanding) =="
+for entry in "${AI_DOWNLOADS[@]}"; do
+  IFS='|' read -r dir repo rev file <<< "$entry"
+  url="https://huggingface.co/$repo/resolve/$rev/$file"
+  dest="$MODELS_DIR/$dir/$file"
+  mkdir -p "$MODELS_DIR/$dir"
+  if [[ -f "$dest" ]] && [[ $(stat -f%z "$dest") -gt 1000000 ]]; then
+    echo "  ok (cached) $file"
+    continue
+  fi
+  echo "  ↓ $file (large; resumable)"
+  curl -fSL --retry 4 --retry-delay 3 --retry-all-errors -C - "$url" -o "$dest"
+done
+
 echo "== Generating manifest with measured SHA256 =="
 python3 scripts/generate_manifest.py --models-dir "$MODELS_DIR" --output Resources/ModelManifest.json
 

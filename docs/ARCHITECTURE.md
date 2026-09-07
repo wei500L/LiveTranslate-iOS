@@ -18,7 +18,11 @@ ASREngineManager (单一驻留后端, 串行推理)
    ▼
 俄语原文立即持久化 (SwiftData TranscriptEntry, status=.pending)
    ▼
-翻译并发池 (2–3 并发, OpenAI 兼容 chat/completions, SSE 可选)
+翻译并发池 (2–3 并发, 按设置选择翻译提供方之一)
+   ├── 本地 GGUF 引擎 (llama.cpp, Hy-MT2 默认 / MiLMMT 省电, 会话级模型锁定)
+   │     └── 失败时单请求降级 Apple 系统翻译 (iOS 26+)
+   ├── 云端 OpenAI 兼容 chat/completions (SSE 可选)
+   └── Apple 系统翻译 (Translation 框架)
    ▼
 OrderedResultBuffer (按 sequenceID 乱序恢复)
    ▼
@@ -35,8 +39,8 @@ UI 双语字幕 + 持久化更新 + 导出 (Markdown/TXT×3/JSON/SRT)
 | `ASR/Shared/` | `ASREngine` 协议、`ASREngineManager`（单后端驻留强制点） |
 | `ASR/CoreML/` | Core ML 后端：vDSP Log-Mel、RNN-T 解码循环、token 解码、编译缓存 |
 | `ASR/Sherpa/` | sherpa-onnx 后端与模型配置 |
-| `Models/` | 模型清单、下载安装、SHA256 完整性、Core ML 编译缓存 |
-| `Translation/` | OpenAI 兼容客户端、SSE、课堂提示词、重试策略 |
+| `Models/` | 模型清单（ASR 后端 + AI 模型）、下载安装、SHA256 完整性、Core ML 编译缓存 |
+| `Translation/` | 翻译提供方选择、OpenAI 兼容客户端、SSE、课堂提示词、重试策略、离线 GGUF 引擎（llama.cpp actor）、LiteRT-LM 图片理解引擎、Apple 系统翻译兜底 |
 | `Pipeline/` | `LiveTranslationCoordinator`（管线编排）、顺序恢复缓冲 |
 | `Persistence/` | SwiftData 模型与仓储 |
 | `Export/` | 导出格式与 Share Sheet |
@@ -56,6 +60,9 @@ UI 双语字幕 + 持久化更新 + 导出 (Markdown/TXT×3/JSON/SRT)
 4. **俄语原文不因翻译失败丢失**：识别完成即刻持久化，译文是后续更新。
 5. **音频回调零重活**：tap 回调只拷贝进环形缓冲 + 轻量 RMS；VAD/ASR/网络/DB 全部在下游任务中。
 6. **模型身份统一**：两个后端在 UI/导出/持久化中都表述为同一个 `GigaAM-v3 e2e_rnnt` 模型的两种推理后端。
+7. **单翻译模型驻留**：`LocalAIModelManager` 是唯一能加载/卸载离线翻译模型的地方；切换前完整卸载旧模型（绝不同时两台 GGUF 驻留）。课堂会话把所选模型锁定到会话结束（`beginSessionPin`/`endSessionPin`），结束流程先排干翻译工作器再解锁。
+8. **图片模型即用即释**：Gemma（LiteRT-LM）仅在图片请求期间加载、请求结束立即释放；绝不与常驻翻译模型长期共存。
+9. **本地提供方无离线态**：翻译提供方为本地（GGUF/系统翻译）时，网络丢失不进入 `networkOffline` 阶段、不暂停翻译；云端提供方维持既有离线语义。
 
 ## 并发模型
 

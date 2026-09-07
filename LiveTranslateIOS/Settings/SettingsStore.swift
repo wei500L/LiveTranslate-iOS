@@ -21,6 +21,11 @@ final class SettingsStore {
         static let saveRawAudio = "saveRawAudio"
         static let apiBase = "translation.apiBase"
         static let translationModel = "translation.model"
+        /// Which translation PROVIDER the classroom pipeline uses: the
+        /// offline GGUF engines (Hy-MT2 default / MiLMMT battery-saver),
+        /// the cloud API, or Apple system translation. Model files are
+        /// downloaded from 翻译模型管理; selection alone never downloads.
+        static let translationProvider = "translation.providerKind"
         static let streaming = "translation.streaming"
         static let contextTurns = "translation.contextTurns"
         static let temperature = "translation.temperature"
@@ -168,6 +173,13 @@ final class SettingsStore {
         didSet { defaults.set(translationModel, forKey: Keys.translationModel) }
     }
 
+    /// The active translation provider (default: offline Hy-MT2 — the
+    /// product's default; users who previously used the cloud API are
+    /// migrated by choosing 云端 API once, which keeps their endpoint).
+    var translationProvider: TranslationProviderKind {
+        didSet { defaults.set(translationProvider.rawValue, forKey: Keys.translationProvider) }
+    }
+
     var streaming: Bool {
         didSet { defaults.set(streaming, forKey: Keys.streaming) }
     }
@@ -257,6 +269,19 @@ final class SettingsStore {
         saveRawAudio = defaults.bool(forKey: Keys.saveRawAudio)
         apiBase = defaults.string(forKey: Keys.apiBase) ?? ""
         translationModel = defaults.string(forKey: Keys.translationModel) ?? ""
+        // Default provider: offline Hy-MT2. A user who already configured
+        // a cloud endpoint before this setting existed keeps cloud (their
+        // explicit setup wins over a new default); everything else starts
+        // on the offline default.
+        if let stored = defaults.string(forKey: Keys.translationProvider),
+           let parsed = TranslationProviderKind(rawValue: stored) {
+            translationProvider = parsed
+        } else if (defaults.string(forKey: Keys.apiBase) ?? "").isEmpty == false,
+                  (defaults.string(forKey: Keys.translationModel) ?? "").isEmpty == false {
+            translationProvider = .cloud
+        } else {
+            translationProvider = .hyMT2
+        }
         let stream = defaults.object(forKey: Keys.streaming) as? Bool
         streaming = stream ?? true
         let turns = defaults.object(forKey: Keys.contextTurns) as? Int
