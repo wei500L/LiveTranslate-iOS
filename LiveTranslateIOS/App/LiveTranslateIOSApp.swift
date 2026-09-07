@@ -314,6 +314,27 @@ final class AppEnvironment {
         } else {
             cloudSync = nil
         }
+        // Download-source context: Hugging Face direct (default) or the
+        // user's own server (operator pre-downloads via
+        // `livetranslate-server download-models`). Weak captures — the
+        // manager is owned by this environment. The token is re-read per
+        // install, so rotation between downloads is picked up; a missing
+        // base URL makes every URL resolution fail honestly inside the
+        // installer (never a silent fallback to Hugging Face).
+        aiModelManager.downloadContextProvider = { [weak settings, weak cloudSync] in
+            let source = settings?.aiModelDownloadSource ?? .huggingFace
+            switch source {
+            case .huggingFace:
+                return AIModelDownloadContext(source: .huggingFace, serverBaseURL: nil, authToken: nil)
+            case .server:
+                let token = await cloudSync?.authSession.storedAccessToken()
+                return AIModelDownloadContext(
+                    source: .server,
+                    serverBaseURL: ServerConfiguration.baseURL,
+                    authToken: token
+                )
+            }
+        }
         // Guest-data migration exists only for a signed-in account (the
         // guest profile IS the source; it cannot migrate into itself).
         let guestMigration: GuestDataMigration?

@@ -1,5 +1,12 @@
 # 更新日志
 
+## 2026-09-07（第二十二轮 · 续：服务端模型托管与下载源选择）
+
+- **模型下载源**：翻译模型管理新增「模型下载源」——平台直连（Hugging Face，默认）或**云端服务器**（自建同步服务器预下载后供客户端拉取）。
+- **服务器就绪探测**：选云端服务器时，管理页实时显示每台模型在服务器上的就绪状态（GET /v1/models/ai，Bearer 认证）；未登录/未配置给出明确提示，绝不静默回退另一来源。
+- **一致性**：两种来源下载同一字节，客户端一律按自带 manifest 做 SHA256 + 大小校验；服务器下载走 Range 断点续传与既有暂停/继续体系。
+- **配套服务端（Go 仓库）**：`MODEL_STORAGE_DIR` 配置 + `livetranslate-server download-models` 一次性预下载命令（固定 revision、SHA256 门禁、断点续传、幂等）+ `/v1/models/ai` 目录与文件路由（RequireUser 认证）；compose/.env.example/README/ENVIRONMENTS 文档化。
+
 ## 2026-09-07（第二十二轮）
 
 新增移动端离线翻译模型支持：默认离线翻译（Hy-MT2）、可选省电翻译（MiLMMT）、独立图片理解模型（Gemma 4 E2B）与 Apple 系统翻译兜底。

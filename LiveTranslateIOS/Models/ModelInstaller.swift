@@ -52,6 +52,15 @@ final class ModelInstaller {
     var progress = Progress()
     var currentFile: String?
     var isCompiling = false
+    /// Per-file download URL overrides keyed by manifest file path
+    /// (AI models: server-source download rewrites the HF URL to the
+    /// user's own server). Empty = use each file's manifest URL.
+    var downloadURLOverrides: [String: URL] = [:]
+    /// Bearer token attached to download requests (server source only).
+    /// A snapshot taken when the install starts — a token that expires
+    /// mid-download surfaces as a 401 retryable failure, and the next
+    /// attempt re-reads it. nil = no Authorization header (HF source).
+    var downloadAuthToken: String?
 
     private var activeTask: Task<Void, any Error>?
     private let session: URLSession
@@ -205,7 +214,14 @@ final class ModelInstaller {
             }
         }
 
-        var request = URLRequest(url: URL(string: file.url)!)
+        let resolvedURL = downloadURLOverrides[file.path] ?? URL(string: file.url)
+        guard let requestURL = resolvedURL else {
+            throw InstallerError.unsafePath("unresolvable download URL for \(file.path)")
+        }
+        var request = URLRequest(url: requestURL)
+        if let token = downloadAuthToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         request.timeoutInterval = 60
         if resumeOffset > 0 {
             request.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")

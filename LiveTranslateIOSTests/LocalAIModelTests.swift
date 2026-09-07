@@ -105,6 +105,86 @@ final class LocalAIModelTests: XCTestCase {
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "fr-CA"), "fr-CA")
     }
 
+    // MARK: - Download source (platform vs. own server)
+
+    func testServerURLJoinsBaseWithModelsPath() {
+        let base = URL(string: "https://sync.example.com/v1")!
+        let url = AIModelDownloadSource.serverURL(
+            base: base, modelID: "hy-mt2-1.8b-q4km", filePath: "Hy-MT2-1.8B-Q4_K_M.gguf"
+        )
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://sync.example.com/v1/models/ai/hy-mt2-1.8b-q4km/Hy-MT2-1.8B-Q4_K_M.gguf"
+        )
+        // Trailing-slash bases must not double the slash.
+        let slashed = URL(string: "http://127.0.0.1:8000/v1/")!
+        let url2 = AIModelDownloadSource.serverURL(
+            base: slashed, modelID: "gemma-4-e2b-it", filePath: "gemma-4-E2B-it.litertlm"
+        )
+        XCTAssertEqual(
+            url2?.absoluteString,
+            "http://127.0.0.1:8000/v1/models/ai/gemma-4-e2b-it/gemma-4-E2B-it.litertlm"
+        )
+    }
+
+    func testResolvedURLPerSource() {
+        let hf = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd52087/Hy-MT2-1.8B-Q4_K_M.gguf"
+        // Hugging Face: manifest URL untouched.
+        XCTAssertEqual(
+            AIModelDownloadSource.huggingFace.resolvedURL(
+                manifestURL: hf, modelID: "hy-mt2-1.8b-q4km",
+                filePath: "Hy-MT2-1.8B-Q4_K_M.gguf", serverBaseURL: nil
+            )?.absoluteString,
+            hf
+        )
+        // Server: rewritten to the server route.
+        let base = URL(string: "https://sync.example.com/v1")!
+        XCTAssertEqual(
+            AIModelDownloadSource.server.resolvedURL(
+                manifestURL: hf, modelID: "hy-mt2-1.8b-q4km",
+                filePath: "Hy-MT2-1.8B-Q4_K_M.gguf", serverBaseURL: base
+            )?.absoluteString,
+            "https://sync.example.com/v1/models/ai/hy-mt2-1.8b-q4km/Hy-MT2-1.8B-Q4_K_M.gguf"
+        )
+        // Server without a configured base: nil — the installer turns
+        // that into an honest failure, never a silent HF fallback.
+        XCTAssertNil(AIModelDownloadSource.server.resolvedURL(
+            manifestURL: hf, modelID: "hy-mt2-1.8b-q4km",
+            filePath: "Hy-MT2-1.8B-Q4_K_M.gguf", serverBaseURL: nil
+        ))
+    }
+
+    @MainActor
+    func testDownloadSourceSettingRoundTrips() throws {
+        let suite = UserDefaults(suiteName: "local-ai-tests-\(UUID().uuidString)")!
+        try suite.removeAllKeysInSuite()
+        let settings = SettingsStore(defaults: suite)
+        XCTAssertEqual(settings.aiModelDownloadSource, .huggingFace)
+        settings.aiModelDownloadSource = .server
+        XCTAssertEqual(suite.string(forKey: "aiModels.downloadSource"), "server")
+        // Re-read persists.
+        let reloaded = SettingsStore(defaults: suite)
+        XCTAssertEqual(reloaded.aiModelDownloadSource, .server)
+    }
+
+    func testServerIndexEntryDecodesServerCatalogShape() throws {
+        // The exact JSON shape the Go server's /v1/models/ai returns.
+        let json = """
+        [
+          {"id":"hy-mt2-1.8b-q4km","file":"Hy-MT2-1.8B-Q4_K_M.gguf","bytes":1133080448,"sha256":"dc5f44fc","installed":true},
+          {"id":"gemma-4-e2b-it","file":"gemma-4-E2B-it.litertlm","bytes":2588147712,"sha256":"18193810","installed":false}
+        ]
+        """
+        let entries = try JSONDecoder().decode([AIModelServerIndexEntry].self, from: Data(json.utf8))
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries[0].id, "hy-mt2-1.8b-q4km")
+        XCTAssertTrue(entries[0].installed)
+        XCTAssertFalse(entries[1].installed)
+        // Manifest-key alignment: the index ids ARE the manifest keys.
+        XCTAssertEqual(entries[0].id, LocalAIModelKind.hyMT2.manifestKey)
+        XCTAssertEqual(entries[1].id, LocalAIModelKind.gemmaE2B.manifestKey)
+    }
+
     // MARK: - Bundled manifest decodes (regression: an unparseable
     // aiModels entry used to fail the WHOLE ModelManifest.load())
 

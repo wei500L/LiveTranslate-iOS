@@ -36,14 +36,43 @@ final class AIModelInstaller {
     /// streaming SHA256 verification (pause/resume with HTTP Range),
     /// atomic rename into the install tree. Throws on failure; safe to
     /// retry. `onProgress` fires on the main actor as bytes land.
+    ///
+    /// `context` selects the download source: `.huggingFace` (manifest
+    /// URLs, no auth) or `.server` (the user's own server + Bearer). The
+    /// SHA256 gate is identical either way — the source only decides
+    /// where bytes come from.
     func install(
         _ model: ModelManifest.BackendInfo,
+        context: AIModelDownloadContext?,
         onProgress: @escaping @MainActor (Progress) -> Void = { _ in }
     ) async throws {
         isInstalling = true
         isPaused = false
         progress = Progress(completedBytes: 0, totalBytes: model.totalDownloadBytes)
         defer { isInstalling = false }
+
+        // Resolve the per-file URLs once, before any byte moves (a nil
+        // resolution under the server source is an immediate, honest
+        // failure — never a silent fallback to another source).
+        var overrides: [String: URL] = [:]
+        if let context {
+            for file in model.files {
+                if let url = context.source.resolvedURL(
+                    manifestURL: file.url,
+                    modelID: model.id,
+                    filePath: file.path,
+                    serverBaseURL: context.serverBaseURL
+                ) {
+                    if url.absoluteString != file.url {
+                        overrides[file.path] = url
+                    }
+                } else {
+                    throw TranslationError.fatal(String(localized: "云端服务器下载源不可用：请确认已在设置中配置并登录服务器，或改用平台直连。"))
+                }
+            }
+        }
+        delegate.downloadURLOverrides = overrides
+        delegate.downloadAuthToken = context?.source == .server ? context?.authToken : nil
 
         // Disk-space preflight with AI-model phrasing (the delegate's
         // text mentions the Core ML compiled copy, which does not apply).

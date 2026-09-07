@@ -98,6 +98,10 @@ ASR 之外的三台可下载 AI 模型走**同一套**"清单 + 实测 SHA256 + 
 - MiLMMT ≥ 1.0 GB 可用
 - Gemma ≥ 3.1 GB 可用
 
+## 下载源
+
+manifest 中的 URL 指向 Hugging Face 固定 revision（默认下载源）。设置中可将下载源改为**用户自己的同步服务器**：安装器把 URL 重写为 `<CloudSyncServerURL>/models/ai/<manifest-key>/<file>` 并附 Bearer 令牌（Go 服务端 `MODEL_STORAGE_DIR` + `livetranslate-server download-models` 预下载，见 Go 仓库 README「模型托管」）。SHA256 校验与来源无关——两种来源的字节必须逐字节一致。
+
 ## 离线语义
 
 - 模型下载完成后，翻译与图片理解**完全离线**工作（无任何网络调用；`isConfiguredNow` 只做文件存在性检查）。

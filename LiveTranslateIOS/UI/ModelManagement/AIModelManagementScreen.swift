@@ -7,9 +7,14 @@ struct AIModelManagementScreen: View {
     @Environment(AppEnvironment.self) private var environment
 
     @State private var confirmDelete: LocalAIModelKind?
+    /// Server model-index probe (download source = 云端服务器): id →
+    /// installed. nil = not fetched yet / source not server.
+    @State private var serverIndex: [String: Bool]?
+    @State private var serverIndexError: String?
 
     var body: some View {
         List {
+            downloadSourceSection
             ForEach(LocalAIModelKind.allCases) { kind in
                 AIModelCard(
                     kind: kind,
@@ -27,6 +32,7 @@ struct AIModelManagementScreen: View {
         .navigationTitle(String(localized: "翻译模型管理"))
         .navigationBarTitleDisplayMode(.inline)
         .task { await refreshStates() }
+        .task(id: environment.settings.aiModelDownloadSource) { await refreshServerIndex() }
         .confirmationDialog(
             confirmDelete.map { String(format: String(localized: "删除“%@”？这会从本机移除模型文件。"), $0.userTitle) } ?? "",
             isPresented: Binding(
@@ -44,6 +50,86 @@ struct AIModelManagementScreen: View {
                     confirmDelete = nil
                 }
             }
+        }
+    }
+
+    // MARK: - Download source
+
+    /// Source picker (platform direct vs. the user's own server) + the
+    /// server's per-model readiness probe. Both sources verify SHA256
+    /// identically — the choice is only about where bytes come from.
+    private var downloadSourceSection: some View {
+        Section {
+            Picker(String(localized: "下载源"), selection: sourceBinding) {
+                ForEach(AIModelDownloadSource.allCases) { source in
+                    Text(source.displayName).tag(source)
+                }
+            }
+            .pickerStyle(.inline)
+            .disabled(!AIModelDownloadSource.serverAvailable && environment.settings.aiModelDownloadSource != .server)
+            if environment.settings.aiModelDownloadSource == .server {
+                serverReadinessRows
+            }
+        } header: {
+            Text(String(localized: "模型下载源"))
+        } footer: {
+            Text(AIModelDownloadSource.serverAvailable
+                 ? environment.settings.aiModelDownloadSource.footerText
+                 : String(localized: "当前构建未配置同步服务器，暂只能平台直连。"))
+        }
+    }
+
+    private var sourceBinding: Binding<AIModelDownloadSource> {
+        Binding(
+            get: { environment.settings.aiModelDownloadSource },
+            set: { environment.settings.aiModelDownloadSource = $0 }
+        )
+    }
+
+    /// Per-model 服务器已备/未备 rows (fetched from the server index; a
+    /// failure shows the honest error instead of a wrong claim).
+    @ViewBuilder
+    private var serverReadinessRows: some View {
+        if let serverIndex {
+            ForEach(LocalAIModelKind.allCases) { kind in
+                LabeledRow(
+                    label: kind.userTitle,
+                    value: serverIndex[kind.manifestKey] == true
+                        ? String(localized: "服务器已备")
+                        : String(localized: "服务器未备")
+                )
+            }
+        } else if let serverIndexError {
+            Text(serverIndexError).font(.caption).foregroundStyle(.red)
+        } else {
+            HStack(spacing: 8) {
+                Text(String(localized: "正在查询服务器模型目录…"))
+                    .font(.caption).foregroundStyle(.secondary)
+                ProgressView().controlSize(.small)
+            }
+        }
+    }
+
+    /// Fetch the server index when the server source is active.
+    private func refreshServerIndex() async {
+        guard environment.settings.aiModelDownloadSource == .server,
+              let baseURL = ServerConfiguration.baseURL else {
+            serverIndex = nil
+            serverIndexError = nil
+            return
+        }
+        serverIndex = nil
+        serverIndexError = nil
+        guard let cloudSync = environment.cloudSync,
+              let token = await cloudSync.authSession.storedAccessToken() else {
+            serverIndexError = String(localized: "未登录服务器——登录后才能从云端服务器下载模型。")
+            return
+        }
+        do {
+            let entries = try await AIModelServerIndex.fetch(base: baseURL, accessToken: token)
+            serverIndex = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0.installed) })
+        } catch {
+            serverIndexError = error.localizedDescription
         }
     }
 

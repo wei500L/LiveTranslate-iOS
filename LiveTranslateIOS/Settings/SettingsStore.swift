@@ -71,6 +71,12 @@ final class SettingsStore {
         static let interpreterDefaultScene = "interpreter.defaultScene"
         /// Whether Russian stress marks render by default (U+0301).
         static let interpreterShowStress = "interpreter.showStress"
+        /// Where the on-device AI models download FROM: Hugging Face
+        /// direct (default) or the user's own cloud server (operator
+        /// pre-downloads via `livetranslate-server download-models`).
+        /// Bytes are identical either way — SHA256 verification is
+        /// source-independent.
+        static let aiModelDownloadSource = "aiModels.downloadSource"
         /// Auto-expand turn details after translation completes (off).
         static let interpreterAutoExpand = "interpreter.autoExpandDetails"
         /// Auto-speak a finished user reply (off — never automatic).
@@ -250,6 +256,11 @@ final class SettingsStore {
         didSet { defaults.set(interpreterAskToSave, forKey: Keys.interpreterAskToSave) }
     }
 
+    /// AI-model download source (default: Hugging Face direct).
+    var aiModelDownloadSource: AIModelDownloadSource {
+        didSet { defaults.set(aiModelDownloadSource.rawValue, forKey: Keys.aiModelDownloadSource) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         preferredBackend = ASRBackendKind(
@@ -323,6 +334,9 @@ final class SettingsStore {
         interpreterAutoSpeak = interpreterSpeak ?? false
         let interpreterSave = defaults.object(forKey: Keys.interpreterAskToSave) as? Bool
         interpreterAskToSave = interpreterSave ?? true
+        aiModelDownloadSource = AIModelDownloadSource(
+            rawValue: defaults.string(forKey: Keys.aiModelDownloadSource) ?? ""
+        ) ?? .huggingFace
         // Round 17: derive the unified level from the legacy classroom
         // preference on first run (nothing the user had chosen is lost).
         // NOTE: under @Observable `lockScreenPrivacy` is a computed

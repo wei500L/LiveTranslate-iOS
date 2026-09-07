@@ -112,6 +112,7 @@
 		4AE9439195751ED5A36A0AC4 /* WidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E54415DDB8017E2CD3E14952 /* WidgetIntents.swift */; };
 		4BDF1AA953956E4A65C61144 /* ModelManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11FFFC1DD0FC54F1EDB1F16A /* ModelManagerTests.swift */; };
 		4C8D90D7DCB22CC700319335 /* InterpreterTurnErrandSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6653E092C17CCEEFE291DA8F /* InterpreterTurnErrandSheet.swift */; };
+		4CBA207EC99B382CED618E26 /* AIModelDownloadSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE23C13F87A1117A5061F98 /* AIModelDownloadSource.swift */; };
 		4F9F464C41A6A6BB9AB3D913 /* AttachmentAnalysisParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 165A57CB0EFB49E821B6477C /* AttachmentAnalysisParser.swift */; };
 		5019C3D3FF09687552F4AEBD /* ScheduleScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DC22385985F4C84AF835792 /* ScheduleScreen.swift */; };
 		5218C0E4707D9D0F46C6BC29 /* DeviceManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CD6E39FB85959B4DA7740BE /* DeviceManagementView.swift */; };
@@ -676,6 +677,7 @@
 		8BCFF8C6F897AAA46A0ED36A /* AudioVADTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioVADTests.swift; sourceTree = "<group>"; };
 		8DC22385985F4C84AF835792 /* ScheduleScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleScreen.swift; sourceTree = "<group>"; };
 		8DD4327208A7C042BCFDE7F2 /* StudyPlanDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyPlanDetailView.swift; sourceTree = "<group>"; };
+		8EE23C13F87A1117A5061F98 /* AIModelDownloadSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModelDownloadSource.swift; sourceTree = "<group>"; };
 		8F10BFD5106AC018AED4952C /* SharedInboxStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedInboxStore.swift; sourceTree = "<group>"; };
 		8F5BEF65443AE6A5BBD6BE9A /* AudioInterruptionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioInterruptionHandler.swift; sourceTree = "<group>"; };
 		8FEA85F938DFCFEC9120C5D4 /* CourseAssistantService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseAssistantService.swift; sourceTree = "<group>"; };
@@ -1297,6 +1299,7 @@
 		7F1EC58246E3E8484FDAC07B /* Translation */ = {
 			isa = PBXGroup;
 			children = (
+				8EE23C13F87A1117A5061F98 /* AIModelDownloadSource.swift */,
 				FFB0D7C03966F770B1BA47D5 /* AIModelInstaller.swift */,
 				619A76889A5855B565740475 /* ClassroomTranslationPrompt.swift */,
 				9172CCD6362933F481C49E74 /* LiteRTLMVisionEngine.swift */,
@@ -1936,6 +1939,7 @@
 			files = (
 				61B91FBF9F8E8DDEE437AEED /* AIActivityLog.swift in Sources */,
 				621C2481E8E7FEF47B0B1905 /* AICardGenerationView.swift in Sources */,
+				4CBA207EC99B382CED618E26 /* AIModelDownloadSource.swift in Sources */,
 				6C5CC5BC3DFD5022BC3988BD /* AIModelInstaller.swift in Sources */,
 				FD2975508749FFC8345D8EF2 /* AIModelManagementScreen.swift in Sources */,
 				770D0222164A019869FBC297 /* ASRBackendKind.swift in Sources */,

@@ -75,6 +75,10 @@ final class LocalAIModelManager {
     /// classroom session is running (same contract as
     /// `ModelManager.isBackendInUse`).
     var isModelInUse: @MainActor (_ kind: LocalAIModelKind) -> Bool = { _ in false }
+    /// Resolves the download source context per install (source setting +
+    /// server base URL + a fresh Bearer token). Injected by the
+    /// composition root; nil = manifest URLs, no auth (Hugging Face).
+    var downloadContextProvider: (@MainActor () async -> AIModelDownloadContext?)?
 
     private let installer = AIModelInstaller()
     private let defaults: UserDefaults
@@ -146,7 +150,8 @@ final class LocalAIModelManager {
             guard let self else { return }
             defer { self.installTask = nil; self.pendingInstall = nil }
             do {
-                try await self.installer.install(info) { progress in
+                let context = await self.downloadContextProvider?()
+                try await self.installer.install(info, context: context) { progress in
                     self.states[kind]?.downloadProgress = progress.fraction
                 }
                 self.states[kind]?.downloadProgress = nil

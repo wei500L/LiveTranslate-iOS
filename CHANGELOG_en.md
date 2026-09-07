@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-07 (round 22, cont.: server-hosted models + download-source choice)
+
+- **Model download source**: 翻译模型管理 gains a download-source picker — Hugging Face direct (default) or **your own cloud server** (the operator pre-downloads once; clients fetch from there).
+- **Server readiness probe**: with the server source selected, the management screen shows each model's on-server availability (GET /v1/models/ai, Bearer); missing login/configuration surfaces an explicit message — never a silent fallback to the other source.
+- **Consistency**: both sources serve the same bytes; the client always verifies SHA256 + size against its bundled manifest; server downloads ride HTTP Range pause/resume like platform downloads.
+- **Server side (Go repo)**: `MODEL_STORAGE_DIR` config + `livetranslate-server download-models` one-shot pre-download command (pinned revisions, SHA256 gate, resumable, idempotent) + `/v1/models/ai` index and file routes (RequireUser); compose/.env.example/README/ENVIRONMENTS documented.
+
 ## 2026-09-07 (round 22)
 
 On-device offline translation model support: default offline translation (Hy-MT2), an optional battery-saver model (MiLMMT), a standalone image-understanding model (Gemma 4 E2B), and an Apple system-translation fallback.
