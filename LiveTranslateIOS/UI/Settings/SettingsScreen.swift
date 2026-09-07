@@ -333,17 +333,23 @@ struct SettingsScreen: View {
                         .font(.caption)
                         .foregroundStyle(result.hasPrefix("✓") ? Color.green : Color.red)
                 }
-            } else if let localKind = environment.settings.translationProvider.localModelKind {
-                // Local model rows: install status + entry to management.
-                NavigationLink {
-                    AIModelManagementScreen()
-                } label: {
+            }
+            // Model management is reachable for EVERY provider choice: a
+            // user may want to pre-download an offline model before
+            // switching to it (status shows the CURRENT provider's model
+            // when local, otherwise all three live in the management page).
+            NavigationLink {
+                AIModelManagementScreen()
+            } label: {
+                if let localKind = environment.settings.translationProvider.localModelKind {
                     LabeledRow(
                         label: String(localized: "本地模型"),
                         value: environment.aiModelManager.state(localKind).isInstalled
                             ? String(localized: "已下载")
                             : String(localized: "未下载")
                     )
+                } else {
+                    Text(String(localized: "翻译模型管理…"))
                 }
             }
         } header: {
