@@ -112,10 +112,18 @@ final class LiteRTLMVisionEngine: @unchecked Sendable {
         }
         try unload()
 
+        // GPU (Metal) on device; CPU on the simulator — the same
+        // simulator-Metal caveat as the llama engine (a GPU engine create
+        // fails outright there).
+        #if targetEnvironment(simulator)
+        let backend = "cpu"
+        #else
+        let backend = "gpu"
+        #endif
         try queue.sync {
             litert_lm_set_min_log_level(1)
             guard let settings = litert_lm_engine_settings_create(
-                modelPath, "gpu", "gpu", "gpu"
+                modelPath, backend, backend, backend
             ) else {
                 throw EngineError.engineCreationFailed
             }

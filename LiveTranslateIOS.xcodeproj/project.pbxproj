@@ -310,6 +310,7 @@
 		D183CF4BA6D5EC96769B370A /* VisualAskModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C86FA3717F11503BED3D3BCC /* VisualAskModels.swift */; };
 		D1A3D7772D039735A035CBA0 /* AttachmentAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA457767507B97C3CD5E00AC /* AttachmentAnalysisService.swift */; };
 		D3555E4A1E411C81B58C8BDD /* SessionExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59894E43981879985479413D /* SessionExport.swift */; };
+		D357E45E82FB4B5AD1139438 /* GemmaVisionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 580685198F26EBAF5D7F5066 /* GemmaVisionIntegrationTests.swift */; };
 		D4B1B124C6862898B1B9C497 /* TemporaryExportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 806C1A41FF57DFF94F8C63A6 /* TemporaryExportStore.swift */; };
 		D66B15F85A75CE93D8DC9256 /* InterpreterRepositoryImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA6231492520F8EE78FFE60 /* InterpreterRepositoryImpl.swift */; };
 		D772FCE7BA9BD17F26C3EB18 /* InterpreterDocumentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4214CBACDC714B5288BA2737 /* InterpreterDocumentModels.swift */; };
@@ -584,6 +585,7 @@
 		573CEB1291C1606EFD5A2EC2 /* InterpreterDocumentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterpreterDocumentStore.swift; sourceTree = "<group>"; };
 		577B5519F1D11811FA9FB5F8 /* MaterialReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaterialReaderViewModel.swift; sourceTree = "<group>"; };
 		577E649945FBA65B547D3287 /* AttachmentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentViews.swift; sourceTree = "<group>"; };
+		580685198F26EBAF5D7F5066 /* GemmaVisionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GemmaVisionIntegrationTests.swift; sourceTree = "<group>"; };
 		582110CAE8F861CB4345B2EE /* AttachmentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentModels.swift; sourceTree = "<group>"; };
 		59894E43981879985479413D /* SessionExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionExport.swift; sourceTree = "<group>"; };
 		59BEF65A00DB3A0751456255 /* ScheduleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleModels.swift; sourceTree = "<group>"; };
@@ -968,6 +970,7 @@
 			children = (
 				F524AE402F5DE8802BBA0032 /* BackendSwitchIntegrationTests.swift */,
 				1B56F125075EC2AC9E426F8D /* CoreMLEngineIntegrationTests.swift */,
+				580685198F26EBAF5D7F5066 /* GemmaVisionIntegrationTests.swift */,
 				EB5589D5B80A167601AFD23F /* GoServerE2ETests.swift */,
 				081D4F3D646791B3ADC952EB /* IntegrationSupport.swift */,
 				73DF4C254F22670E8D1B0A33 /* LlamaEngineIntegrationTests.swift */,
@@ -2296,6 +2299,7 @@
 			files = (
 				0E4B62050FDD5A8C925956A7 /* BackendSwitchIntegrationTests.swift in Sources */,
 				AED48CB47D6659921F408E28 /* CoreMLEngineIntegrationTests.swift in Sources */,
+				D357E45E82FB4B5AD1139438 /* GemmaVisionIntegrationTests.swift in Sources */,
 				45520822BFAA806937B20F2F /* GoServerE2ETests.swift in Sources */,
 				3C32E79C3889D0D8571A06F6 /* IntegrationSupport.swift in Sources */,
 				469AEF00DE1E32F927D72D17 /* LlamaEngineIntegrationTests.swift in Sources */,
@@ -2344,6 +2348,7 @@
 				CODE_SIGN_ENTITLEMENTS = LiveTranslateIOS/LiveTranslateIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_PREVIEWS = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\"ThirdParty\"",
@@ -2421,6 +2426,7 @@
 				CODE_SIGN_ENTITLEMENTS = LiveTranslateIOS/LiveTranslateIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_PREVIEWS = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\"ThirdParty\"",
