@@ -321,7 +321,7 @@ final class LocalAIModelTests: XCTestCase {
         let hyPrompt = LocalLLMTranslationEngine.buildPrompt(for: request, modelKind: .hyMT2)
         XCTAssertTrue(hyPrompt.contains("Simplified Chinese"))
         let milPrompt = LocalLLMTranslationEngine.buildPrompt(for: request, modelKind: .milmmt46)
-        XCTAssertTrue(milPrompt.contains("<start_of_turn>user"))
+        XCTAssertTrue(milPrompt.contains("Translate this from Russian to Chinese (Simplified):"))
         // Gemma is not a text-translation model — refuse, never garbage.
         XCTAssertEqual(LocalLLMTranslationEngine.buildPrompt(for: request, modelKind: .gemmaE2B), "")
     }

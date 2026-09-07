@@ -94,9 +94,16 @@ actor LlamaContext {
         }
 
         var modelParams = llama_model_default_params()
-        // Metal offload for every layer on device; the xcframework embeds
-        // the Metal shaders, and the CPU fallback is automatic.
+        // Metal offload for every layer on device (the xcframework embeds
+        // the Metal shaders). The iOS SIMULATOR is the exception: ggml's
+        // Metal kernels there can silently produce zeroed logits (verified
+        // — identical code returns correct logits with the CPU backend on
+        // macOS Metal), so the simulator pins CPU for honest results.
+        #if targetEnvironment(simulator)
+        modelParams.n_gpu_layers = 0
+        #else
         modelParams.n_gpu_layers = 99
+        #endif
 
         let started = Date()
         guard let loaded = llama_model_load_from_file(modelPath, modelParams) else {
