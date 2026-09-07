@@ -85,7 +85,10 @@ final class ModelInstaller {
         // copy + temp files simultaneously — not just the download size.
         try preflightDiskSpace(backend)
 
-        let root = try ModelPaths.backendRoot(backend.kind)
+        guard let kind = backend.kind else {
+            throw InstallerError.unsafePath("manifest backend entry is missing its ASR kind: \(backend.id)")
+        }
+        let root = try ModelPaths.backendRoot(kind)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         // Model files are READ by a classroom that keeps running in the
         // locked background (on-demand Core ML loading) — they must stay
@@ -117,7 +120,7 @@ final class ModelInstaller {
             isCompiling = true
             try await CompiledCoreMLCache.compileAll(cacheVersion: cacheVersion)
         }
-        Self.logger.info("Install complete for \(backend.kind.rawValue, privacy: .public)")
+        Self.logger.info("Install complete for \(backend.id, privacy: .public)")
     }
 
     /// Install the shared Silero VAD runtime model. Both ASR backends need

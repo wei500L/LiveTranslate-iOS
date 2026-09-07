@@ -94,6 +94,49 @@ final class LocalAIModelTests: XCTestCase {
         XCTAssertEqual(LlamaChatPromptBuilder.displayName(for: "fr-CA"), "fr-CA")
     }
 
+    // MARK: - Bundled manifest decodes (regression: an unparseable
+    // aiModels entry used to fail the WHOLE ModelManifest.load())
+
+    func testBundledManifestDecodesWithAIModels() throws {
+        // The app bundle's real manifest must decode: a bad `kind` value
+        // in any aiModels entry would make ModelManifest.load() throw and
+        // silently break ASR model management too (caught by the first
+        // integration run).
+        let manifest = try ModelManifest.load()
+        XCTAssertFalse(manifest.backends.isEmpty, "ASR backends must decode")
+        // aiModels is present in the shipped manifest (generated with the
+        // three models). Each entry decodes and has NO ASR kind.
+        guard let aiModels = manifest.aiModels else {
+            return XCTFail("shipped manifest must carry aiModels")
+        }
+        XCTAssertEqual(Set(aiModels.keys), Set([
+            "hy-mt2-1.8b-q4km", "milmmt-46-1b-q4km", "gemma-4-e2b-it"
+        ]))
+        for (key, info) in aiModels {
+            XCTAssertNil(info.kind, "AI model entry must not claim an ASR kind: \(key)")
+            XCTAssertFalse(info.files.isEmpty)
+            XCTAssertGreaterThan(info.totalDownloadBytes, 0)
+            XCTAssertGreaterThan(info.minimumFreeDiskBytes, 0)
+        }
+        // The ASR backends keep their kinds.
+        XCTAssertEqual(manifest.backend(.coreMLFP16)?.kind, .coreMLFP16)
+        XCTAssertEqual(manifest.backend(.sherpaONNXInt8)?.kind, .sherpaONNXInt8)
+    }
+
+    func testAIModelManifestLookup() throws {
+        let manifest = try ModelManifest.load()
+        let hy = manifest.aiModel(.hyMT2)
+        XCTAssertNotNil(hy)
+        XCTAssertEqual(hy?.revision, "1cd5208700acedef4ef93019b6cfc148b8522d45")
+        XCTAssertEqual(hy?.files.first?.path, "Hy-MT2-1.8B-Q4_K_M.gguf")
+        XCTAssertTrue(hy?.files.first?.url.contains("tencent/Hy-MT2-1.8B-GGUF") == true)
+        // Gemma and MiLMMT entries too.
+        XCTAssertNotNil(manifest.aiModel(.milmmt46))
+        XCTAssertNotNil(manifest.aiModel(.gemmaE2B))
+        XCTAssertEqual(manifest.aiModel(.gemmaE2B)?.license, "Apache-2.0")
+        XCTAssertEqual(manifest.aiModel(.milmmt46)?.license, "gemma")
+    }
+
     // MARK: - Provider kind mapping
 
     func testProviderLocalModelMapping() {
@@ -146,14 +189,19 @@ final class LocalAIModelTests: XCTestCase {
     // MARK: - Local engine configured state (file-presence semantics)
 
     @MainActor
-    func testLocalEngineNotConfiguredWhenFilesMissing() {
+    func testLocalEngineConfiguredMatchesInstallDirectoryState() throws {
         let manager = LocalAIModelManager(defaults: .standard)
         let engine = LocalLLMTranslationEngine(modelKind: .hyMT2, manager: manager)
-        // No manifest entries → no install directory contents → false.
-        // (The unit-test host has no downloaded models.)
-        XCTAssertFalse(engine.isConfiguredNow || FileManager.default.fileExists(
-            atPath: (try? ModelPaths.aiModelRoot(.hyMT2))?.path ?? "/nonexistent"
-        ), "configured only when the model directory actually has files")
+        // Invariant (environment-independent — the integration scheme may
+        // have copied real models into this same sandbox): configured
+        // EXACTLY when the install directory holds at least one file.
+        let root = try ModelPaths.aiModelRoot(.hyMT2)
+        let hasFiles = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
+            .contains { !$0.hasPrefix(".") } ?? false
+        XCTAssertEqual(
+            engine.isConfiguredNow, hasFiles,
+            "isConfiguredNow must mirror the install directory's contents"
+        )
     }
 
     // MARK: - Resolved provider fallback chain

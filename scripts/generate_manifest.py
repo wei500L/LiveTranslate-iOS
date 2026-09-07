@@ -243,9 +243,10 @@ def main() -> None:
         min_free: int, license: str
     ) -> dict:
         total = sum(e["bytes"] for e in files)
+        # NOTE: no "kind" here — BackendInfo.kind is ASRBackendKind
+        # (optional); AI-model entries deliberately omit it.
         return {
             "id": key,
-            "kind": key,
             "repo": repo,
             "revision": revision,
             "files": files,

@@ -174,7 +174,6 @@
   "aiModels": {
     "hy-mt2-1.8b-q4km": {
       "id": "hy-mt2-1.8b-q4km",
-      "kind": "hy-mt2-1.8b-q4km",
       "repo": "tencent/Hy-MT2-1.8B-GGUF",
       "revision": "1cd5208700acedef4ef93019b6cfc148b8522d45",
       "files": [
@@ -193,7 +192,6 @@
     },
     "milmmt-46-1b-q4km": {
       "id": "milmmt-46-1b-q4km",
-      "kind": "milmmt-46-1b-q4km",
       "repo": "mradermacher/MiLMMT-46-1B-v1.0-GGUF",
       "revision": "34df5efbe6592773ec168cc7b307728c08623472",
       "files": [
@@ -212,7 +210,6 @@
     },
     "gemma-4-e2b-it": {
       "id": "gemma-4-e2b-it",
-      "kind": "gemma-4-e2b-it",
       "repo": "litert-community/gemma-4-E2B-it-litert-lm",
       "revision": "b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1",
       "files": [

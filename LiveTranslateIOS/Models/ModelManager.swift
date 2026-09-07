@@ -54,7 +54,9 @@ final class ModelManager {
         self.manifest = try? ModelManifest.load()
         if let manifest {
             for backend in manifest.backends.values {
-                states[backend.kind]?.version = backend.revision
+                if let kind = backend.kind {
+                    states[kind]?.version = backend.revision
+                }
             }
         }
         // Silero VAD is shared by both backends; every backend install

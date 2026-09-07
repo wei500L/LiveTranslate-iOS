@@ -19,7 +19,10 @@ struct ModelManifest: Codable, Sendable, Equatable {
 
     struct BackendInfo: Codable, Sendable, Equatable {
         let id: String
-        let kind: ASRBackendKind
+        /// ASR backends carry their engine kind; AI-model entries omit it
+        /// (there is no ASRBackendKind for them — an optional keeps the
+        /// ONE schema decoding both sections).
+        var kind: ASRBackendKind?
         let repo: String
         /// Immutable commit SHA of the pinned HF revision.
         let revision: String
